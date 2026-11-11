@@ -1,0 +1,66 @@
+{
+  "mode": "readback",
+  "generatedAt": "2026-11-07T03:38:38.243Z",
+  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.qa-userdata",
+  "probe": {
+    "checks": [
+      {
+        "id": "B-29",
+        "name": "关窗 flush 后回启：磁盘日记含未失焦工作感想",
+        "ok": true,
+        "detail": "QA未失焦工作感想"
+      },
+      {
+        "id": "B-30",
+        "name": "关窗 flush 后回启：磁盘日记含未失焦今日一句",
+        "ok": true,
+        "detail": "QA未失焦今日一句"
+      },
+      {
+        "id": "B-31",
+        "name": "关窗 flush 后回启：磁盘日记含当前格正文",
+        "ok": true,
+        "detail": "QA当前格正文"
+      },
+      {
+        "id": "B-32",
+        "name": "落盘键名 morning_diary_<今天> 且记录 date 正确",
+        "ok": true,
+        "detail": "morning_diary_2026-11-07 / date=2026-11-07"
+      }
+    ]
+  },
+  "jsErrors": [],
+  "consoleMessages": [
+    {
+      "level": "1",
+      "message": "[页面运行时] 已落盘页面 JS：index,review,capsule,habit,settings",
+      "line": 267,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」",
+      "line": 283,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}",
+      "line": 62,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html"
+    },
+    {
+      "level": "2",
+      "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+      "line": 2,
+      "source": "node:electron/js2c/renderer_init"
+    },
+    {
+      "level": "1",
+      "message": "[退出 flush] 顺序完成：syncWorkReflection → syncStudyNote → persist → stopTimer（来源：close）",
+      "line": 83,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/flush.js"
+    }
+  ]
+}

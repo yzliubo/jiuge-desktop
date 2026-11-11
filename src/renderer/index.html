@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="theme-root theme-standard">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>今日 · 九格手记</title>
+    <!-- @import "./styles/theme.wxss" 由 app.wxss 注释化，改用有序 <link>：令牌层必须在前 -->
+    <link rel="stylesheet" href="styles/theme.css">
+    <link rel="stylesheet" href="styles/app.css">
+    <link rel="stylesheet" href="styles/index.css">
+    <link rel="stylesheet" href="styles/review.css">
+    <link rel="stylesheet" href="styles/capsule.css">
+    <link rel="stylesheet" href="styles/habit.css">
+    <link rel="stylesheet" href="styles/settings.css">
+    <link rel="stylesheet" href="styles/shell.css">
+</head>
+<body>
+    <!-- 自绘标题栏：随 <html> 的 .theme-* 一起变色；窗口关闭走原生 × → 主进程 close 拦截 -->
+    <div id="titlebar">
+        <span class="tb-app">九格手记</span>
+        <span class="tb-sep">·</span>
+        <span class="tb-page" id="tb-page">今日 · 九格手记</span>
+        <span class="tb-local" id="tb-local">数据只存在本机</span>
+    </div>
+
+    <div id="shell">
+        <!-- 左侧常驻竖栏：5 项，与 app.json tabBar 文案 + 设置页一致 -->
+        <nav id="sidebar" aria-label="主导航">
+            <button class="nav-item is-active" type="button" data-nav="index">今日</button>
+            <button class="nav-item" type="button" data-nav="review">回看</button>
+            <button class="nav-item" type="button" data-nav="capsule">胶囊</button>
+            <button class="nav-item" type="button" data-nav="habit">坚持</button>
+            <button class="nav-item" type="button" data-nav="settings">设置</button>
+            <div class="nav-foot" id="nav-foot">本机 · 离线</div>
+        </nav>
+
+        <main id="content">
+            <section class="page" data-page="index"></section>
+            <section class="page" data-page="review" hidden></section>
+            <section class="page" data-page="capsule" hidden></section>
+            <section class="page" data-page="habit" hidden></section>
+            <section class="page" data-page="settings" hidden></section>
+        </main>
+    </div>
+
+    <div id="jiuge-feedback-root"></div>
+
+    <!-- 顺序硬约束：AppState → 组件映射 → UI 反馈 → wx/window.require → WXML → Page → 外壳 → 生命周期 -->
+    <script src="../app.js"></script>
+    <script src="component-map.js"></script>
+    <script src="ui-feedback.js"></script>
+    <script src="wx-shim.js"></script>
+    <script src="wxml-runtime.js"></script>
+    <script src="page-runtime.js"></script>
+    <script src="nav.js"></script>
+    <script src="theme-css.js"></script>
+    <script src="flush.js"></script>
+    <script src="desktop-features.js"></script>
+    <script>
+        // 5 页 JS 由 bootstrap() 按 sys.listPages() 动态加载（T2/T3/T4 落盘后自动接管）
+        JiugeRuntime.bootstrap().then(function (r) {
+            console.log('[启动] bootstrap 结果：' + JSON.stringify(r));
+        }).catch(function (e) {
+            console.error('[启动] bootstrap 失败：' + String(e && e.stack || e));
+        });
+    </script>
+</body>
+</html>

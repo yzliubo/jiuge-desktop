@@ -1,0 +1,112 @@
+{
+  "utils/diary-store.js": {
+    "sha256": "c13e8244162d6b1be0bb6a1a7651737b91a5486ec0b1c5e3df91c8a06fe2d27c",
+    "targetSha256": "c13e8244162d6b1be0bb6a1a7651737b91a5486ec0b1c5e3df91c8a06fe2d27c",
+    "bytes": 77016,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\diary-store.js"
+  },
+  "utils/work-board.js": {
+    "sha256": "310e049eef71945954d00ddb6c54d0fc16101712229e8c376d4674abcdaf7aff",
+    "targetSha256": "310e049eef71945954d00ddb6c54d0fc16101712229e8c376d4674abcdaf7aff",
+    "bytes": 18717,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\work-board.js"
+  },
+  "utils/money-book.js": {
+    "sha256": "acbce601b063126ed36f17ed0c964d248cb72fd06232dd59ece4d7af93efad6b",
+    "targetSha256": "acbce601b063126ed36f17ed0c964d248cb72fd06232dd59ece4d7af93efad6b",
+    "bytes": 15920,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\money-book.js"
+  },
+  "utils/study-log.js": {
+    "sha256": "60d1aba4d97acbaa9c1183df4852146a76a71f8def08968567bbcac18ad57ec5",
+    "targetSha256": "60d1aba4d97acbaa9c1183df4852146a76a71f8def08968567bbcac18ad57ec5",
+    "bytes": 26190,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\study-log.js"
+  },
+  "utils/cell-insights.js": {
+    "sha256": "48af73f67693c9c1da0230e9d52039ce370f25e207efe2101cf1446022099a46",
+    "targetSha256": "48af73f67693c9c1da0230e9d52039ce370f25e207efe2101cf1446022099a46",
+    "bytes": 19624,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\cell-insights.js"
+  },
+  "utils/greetings.js": {
+    "sha256": "ec179f4916857e748e68ad59b7d99d752fe869b0263fc05828b5665f75bf453c",
+    "targetSha256": "ec179f4916857e748e68ad59b7d99d752fe869b0263fc05828b5665f75bf453c",
+    "bytes": 9170,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\greetings.js"
+  },
+  "utils/quotes.js": {
+    "sha256": "1dce6d5ea0f3dab1dbc75f9bb93fad0dd86f9f3a90a2252f91963971cf51d001",
+    "targetSha256": "1dce6d5ea0f3dab1dbc75f9bb93fad0dd86f9f3a90a2252f91963971cf51d001",
+    "bytes": 88752,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\quotes.js"
+  },
+  "utils/theme.js": {
+    "sha256": "023ac116e4c56096acd71cc79cf004babce1d18d4ffe0e1607d2a3c153525b15",
+    "targetSha256": "023ac116e4c56096acd71cc79cf004babce1d18d4ffe0e1607d2a3c153525b15",
+    "bytes": 8665,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\utils\\theme.js"
+  },
+  "pages/review/review.js": {
+    "sha256": "f6c37769c6a3f6f30104853af17e4046991170acd30b821698a28710f81882d1",
+    "targetSha256": "f6c37769c6a3f6f30104853af17e4046991170acd30b821698a28710f81882d1",
+    "bytes": 19640,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\review\\review.js"
+  },
+  "views/review.wxml": {
+    "sha256": "060eae59193cb8a7573330d94b917b67b81d251014d78a1dba2b3458b66039ca",
+    "targetSha256": "060eae59193cb8a7573330d94b917b67b81d251014d78a1dba2b3458b66039ca",
+    "bytes": 34978,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\review\\review.wxml"
+  },
+  "pages/capsule/capsule.js": {
+    "sha256": "9924acafca2560f8bf152dedfdf54e987e63f55c2f3e57ec9103da70fba6b02a",
+    "targetSha256": "9924acafca2560f8bf152dedfdf54e987e63f55c2f3e57ec9103da70fba6b02a",
+    "bytes": 5229,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\capsule\\capsule.js"
+  },
+  "views/capsule.wxml": {
+    "sha256": "383c7de46a6bde0b97ce50339fb2022fe2011c1b3fc1cc0bd454cd148d0b49fd",
+    "targetSha256": "383c7de46a6bde0b97ce50339fb2022fe2011c1b3fc1cc0bd454cd148d0b49fd",
+    "bytes": 5581,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\capsule\\capsule.wxml"
+  },
+  "pages/habit/habit.js": {
+    "sha256": "8a02373e6d6c41f170439a68ffdd3aaf6feb3d0afaa9a79b4d24b1b80c192229",
+    "targetSha256": "8a02373e6d6c41f170439a68ffdd3aaf6feb3d0afaa9a79b4d24b1b80c192229",
+    "bytes": 9530,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\habit\\habit.js"
+  },
+  "views/habit.wxml": {
+    "sha256": "e161679449c57f8f72b6d233f7272f735258782cd4c43b54810a4d20c5b46997",
+    "targetSha256": "e161679449c57f8f72b6d233f7272f735258782cd4c43b54810a4d20c5b46997",
+    "bytes": 5972,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\habit\\habit.wxml"
+  },
+  "pages/settings/settings.js": {
+    "sha256": "9e39792ab45398942ee167d652f9dee0edca9a6782e92b6c5b4a74d4a10858e0",
+    "targetSha256": "4498293771243248d75ec2587cf1c91d5b5d5acce17169f713cacb718db886d4",
+    "bytes": 9509,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\settings\\settings.js",
+    "adapted": true
+  },
+  "views/settings.wxml": {
+    "sha256": "3408932ea4d66db3bbc0611e0fe3c828e7a9bd5d6283cd8c2ca3188ee83b68ef",
+    "targetSha256": "b724de5e177b3ac22defc9b3a0fbe3eb66ba3437590541452fecbfc3410155eb",
+    "bytes": 9488,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\settings\\settings.wxml",
+    "adapted": true
+  },
+  "pages/index/index.js": {
+    "sha256": "2b59af5a38986956f77539e577f55f088320ff365434e299cb4f14e4098f8fda",
+    "targetSha256": "2b59af5a38986956f77539e577f55f088320ff365434e299cb4f14e4098f8fda",
+    "bytes": 54770,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\index\\index.js"
+  },
+  "views/index.wxml": {
+    "sha256": "db4f13f3c5b516fbdd03bb15fedafbd5463b38c495b3a5373af60c1b2f41f6ab",
+    "targetSha256": "db4f13f3c5b516fbdd03bb15fedafbd5463b38c495b3a5373af60c1b2f41f6ab",
+    "bytes": 43958,
+    "source": "G:\\workbuddy\\2026-10-31-23-19-46\\pages\\index\\index.wxml"
+  }
+}

@@ -1,0 +1,274 @@
+/* ==========================================================================
+ * 九格手记 Windows 桌面版 · 外壳样式（新写）
+ *
+ *  - 自绘标题栏 + 左侧常驻 5 项竖栏（今日 / 回看 / 胶囊 / 坚持 / 设置）；
+ *  - 内容区 max-width:900px 居中留白，沿用单列结构（不做多栏重构，§8 非目标）；
+ *  - 标题栏 / 侧边栏 / 主区全部引用 theme.css 的同一套 --c-* 令牌，
+ *    <html> 上切 .theme-standard|tech|girl|kids 时一起变色（D5 / §6.3）；
+ *  - 桌面只新增 --c-switch（取 THEMES[id].switchColor，由 theme-css.js 写入）。
+ * ========================================================================== */
+
+:root {
+    /* 桌面唯一新增令牌，取 THEMES.standard.switchColor，运行时由 theme-css.js 覆盖 */
+    --c-switch: #2F7357;
+    --shell-titlebar-h: 36px;
+    --shell-sidebar-w: 132px;
+    --shell-content-max: 900px;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    box-sizing: border-box;
+    background: var(--c-bg);
+    color: var(--c-ink-1);
+    font-family: var(--font-sans);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    overflow: hidden;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+/* ---------- 自绘标题栏（保留 Electron 原生窗口框，关闭走原生 × → 触发 close 拦截） ---------- */
+#titlebar {
+    height: var(--shell-titlebar-h);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    background: var(--c-surface);
+    border-bottom: 1px solid var(--c-line);
+    color: var(--c-ink-2);
+    font-size: var(--fs-sm);
+    user-select: none;
+    -webkit-app-region: no-drag;
+}
+
+#titlebar .tb-app {
+    color: var(--c-brand-ink);
+    font-weight: var(--fw-bold);
+    letter-spacing: var(--ls-eyebrow);
+}
+
+#titlebar .tb-sep { color: var(--c-ink-4); }
+#titlebar .tb-page { color: var(--c-ink-3); }
+#titlebar .tb-local {
+    margin-left: auto;
+    color: var(--c-ink-4);
+    font-size: var(--fs-xs);
+}
+
+/* ---------- 整体布局 ---------- */
+#shell {
+    display: flex;
+    height: calc(100% - var(--shell-titlebar-h));
+    min-height: 0;
+}
+
+#sidebar {
+    flex: 0 0 var(--shell-sidebar-w);
+    width: var(--shell-sidebar-w);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 20px 10px;
+    background: var(--c-surface-2);
+    border-right: 1px solid var(--c-line);
+    overflow-y: auto;
+}
+
+#sidebar .nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 8px 6px;
+    border: none;
+    border-radius: var(--radius-l);
+    background: transparent;
+    color: var(--c-ink-3);
+    font-family: inherit;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+    transition: background 120ms linear, color 120ms linear;
+}
+
+#sidebar .nav-item:hover { background: var(--c-brand-soft); color: var(--c-brand-ink); }
+
+#sidebar .nav-item.is-active {
+    background: var(--c-btn-bg);
+    color: var(--c-btn-ink);
+    box-shadow: var(--shadow-1);
+}
+
+#sidebar .nav-foot {
+    margin-top: auto;
+    padding: 8px 4px 0;
+    color: var(--c-ink-4);
+    font-size: var(--fs-xs);
+    text-align: center;
+    line-height: 1.5;
+}
+
+#content {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--c-bg);
+}
+
+#content > section.page {
+    max-width: var(--shell-content-max);
+    margin: 0 auto;
+}
+
+/* ---------- WXML 运行时辅助类 ---------- */
+.j-block, .j-for { display: contents; }
+.j-text { display: inline; }
+.j-scroll { min-height: 0; }
+.j-switch {
+    accent-color: var(--c-switch);
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+}
+.j-button { font-family: inherit; cursor: pointer; }
+.j-swiper { position: relative; }
+.j-swiper-item { width: 100%; }
+.j-placeholder { padding: var(--sp-8) 0; }
+
+/* 表单控件继承主题字色，避免桌面 Chromium 默认黑字在深色皮肤下不可读 */
+input, textarea, select, button {
+    font-family: inherit;
+    color: var(--c-ink-1);
+}
+
+input, textarea, select {
+    background: var(--c-surface);
+    border: 1px solid var(--c-line-2);
+    border-radius: var(--radius-l);
+}
+
+/* ---------- UI 反馈层：toast / modal / actionSheet / 遮罩 ---------- */
+#jiuge-feedback-root { position: fixed; inset: 0; pointer-events: none; z-index: 9000; }
+
+.jiuge-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--c-scrim);
+    pointer-events: auto;
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.jiuge-modal {
+    width: min(420px, 88vw);
+    background: var(--c-surface);
+    color: var(--c-ink-1);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-3);
+    padding: var(--sp-7);
+    pointer-events: auto;
+    z-index: 9100;
+}
+
+.jiuge-modal-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    margin-bottom: var(--sp-3);
+}
+
+.jiuge-modal-content {
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-ink-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-bottom: var(--sp-7);
+}
+
+.jiuge-modal-actions { display: flex; gap: var(--sp-3); justify-content: flex-end; }
+
+.jiuge-btn {
+    min-height: 38px;
+    padding: 0 18px;
+    border: none;
+    border-radius: var(--radius-l);
+    font-family: inherit;
+    font-size: var(--fs-md);
+    cursor: pointer;
+}
+
+.jiuge-btn-ghost { background: var(--c-brand-soft); color: var(--c-brand-ink); }
+.jiuge-btn-primary { background: var(--c-btn-bg); color: var(--c-btn-ink); }
+
+.jiuge-sheet {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    width: min(420px, 88vw);
+    background: var(--c-surface);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-3);
+    padding: var(--sp-3);
+    pointer-events: auto;
+    z-index: 9050;
+}
+
+.jiuge-sheet-item {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 14px;
+    border: none;
+    background: transparent;
+    color: var(--c-ink-1);
+    font-family: inherit;
+    font-size: var(--fs-md);
+    text-align: center;
+    cursor: pointer;
+    border-radius: var(--radius-l);
+}
+
+.jiuge-sheet-item:hover { background: var(--c-brand-soft); color: var(--c-brand-ink); }
+
+.jiuge-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 42px;
+    transform: translateX(-50%);
+    max-width: min(560px, 88vw);
+    padding: 12px 20px;
+    background: var(--c-surface-inverse);
+    color: var(--c-on-inverse-1);
+    border-radius: var(--radius-pill);
+    box-shadow: var(--shadow-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    text-align: center;
+    word-break: break-word;
+    pointer-events: none;
+    z-index: 9200;
+}
+
+/* P1 导入结果面板（只做展示，不改动 importBackup 返回结构） */
+.jiuge-result {
+    margin-top: var(--sp-5);
+    padding: var(--sp-5);
+    background: var(--c-surface-2);
+    border-radius: var(--radius-l);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-2);
+    line-height: 1.8;
+}
+
+.jiuge-result-row { display: flex; justify-content: space-between; gap: var(--sp-4); }

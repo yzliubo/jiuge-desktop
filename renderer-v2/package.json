@@ -1,0 +1,21 @@
+{
+  "name": "jiuge-renderer-v2",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "九格手记 Windows 桌面版 · B 架构 Vue3 + TS + Vite 视图层",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vue-tsc": "^2.1.0"
+  }
+}

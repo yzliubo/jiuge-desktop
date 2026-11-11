@@ -1,0 +1,433 @@
+/* ==========================================================================
+ * 设置页 · 独立模块
+ *
+ * 这一页接管原先散在两处的设置：今日页的设置浮层（皮肤 / 模板 / 模块 / 头七天）
+ * 与坚持页的数据管理、使用小贴士。所有色值、圆角、间距一律走 theme.wxss 的令牌，
+ * 四套皮肤自动跟着换，不需要在这里写任何 .theme-* 分支。
+ * ========================================================================== */
+
+.page-head {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 14px;
+}
+
+/* 非 tabBar 页：底下没有 tabBar 挡着，不该留 80px 的空白 */
+.settings-page {
+    padding-bottom: var(--sp-10);
+}
+
+/* ---------- 通用行块（模板 / 模块 / 头七天） ----------
+   与原先今日页浮层里的 .settings-row 同一套观感：浅底块 + 细边 + 大圆角，
+   让"一行一个可改项"在任何皮肤下都能一眼认出是控件而不是说明文字。 */
+.set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-4);
+    padding: var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-surface-2);
+    border: var(--bw) solid var(--c-line-2);
+}
+
+.set-row-hover {
+    opacity: 0.82;
+}
+
+.set-row-copy {
+    flex: 1;
+    min-width: 0;
+    padding-right: var(--sp-5);
+}
+
+.set-row-label {
+    display: block;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-1);
+}
+
+.set-row-desc {
+    display: block;
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-snug);
+    color: var(--c-ink-4);
+}
+
+.set-row-action {
+    flex-shrink: 0;
+    font-size: var(--fs-md);
+    color: var(--c-brand-ink);
+}
+
+/* 原生 switch 默认尺寸偏大，压到 0.82 后与 15px 的标签同高 */
+.set-switch {
+    transform: scale(0.82);
+    flex-shrink: 0;
+}
+
+.set-note {
+    display: block;
+    margin-top: var(--sp-3);
+    padding-left: var(--sp-1);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+/* ---------- 界面皮肤：2×2 迷你屏 ----------
+   整张卡带 .theme-{{item.id}}，卡内的 --c-surface / --radius-l / --bw / --c-brand-ink
+   全部解析成【目标】主题的值 —— 卡片是那套主题的真实切片，不是"用当前主题画的示意图"。
+   卡片外（组标题、说明文字）仍用【当前】主题的令牌，两套不混用。
+   四套 --c-surface 都是同一个白，所以"儿童版卡片压在标准版白底上"永远不会有脏边。 */
+
+/* 托盘：白卡与浅底之间的边界改由面积对比承担（四套 ΔE 5.17–10.57）。
+   标准版这 5.17 是零余量，所以 padding 与底色都不许再往下调。 */
+.skin-strip {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4);
+    border-radius: var(--radius-l);
+    background: var(--c-bg-tint);
+}
+
+.skin-grid {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+/* 两列用 margin 而不是 gap：flex gap 在老 Android WebView 上不生效，
+   一旦不生效两张 159.5px 的卡加起来会撑出托盘的可视宽，直接把页面顶横。 */
+.skin-cell {
+    position: relative;
+    display: block;
+    box-sizing: border-box;
+    width: calc((100% - var(--sp-4)) / 2);
+    /* 12px 色点比 8px 高 4px，卡高同步 +8 */
+    min-height: 96px;
+    margin: 0 var(--sp-4) var(--sp-4) 0;
+    overflow: hidden;
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-line-2);
+    border-radius: var(--radius-l);
+    /* 阴影在这里的首要职责是"展示四套各自的阴影策略"（柔绿影 / 冷影 / 粉软影 / 实心偏移），
+       四个主题的形态差异是卡片可辨识度的一部分。
+       注意它不承担边界兜底：儿童版 --shadow-1 是 0 3px 0（实心偏移、朝下、无模糊），
+       四边里只有下边有影；科技蓝 0.5px 描边在低 DPR 下取整成 0 时，真正兜住边界的是
+       外面那层 --c-bg-tint 托盘（白卡 vs 托盘 ΔE 5.17–10.57），不是这条影。 */
+    box-shadow: var(--shadow-1);
+}
+
+.skin-cell:nth-child(2n) {
+    margin-right: 0;
+}
+
+/* 选中态三重编码：勾徽标（形状）+ 2px 同色外环 + 0.5px 内描边 + 主题名加粗。
+   外环用 box-shadow 而不是加粗 border —— border 会撑动内部尺寸，让预览区轻微位移。
+   环色 --c-brand-ink（压卡内白 5.66–7.48、压托盘 4.99–6.17，取弱者仍 ≥4.5）；
+   曾经的 --c-brand 方案作废：它压托盘那侧只剩 3.59，因为托盘把 2px 边框的外邻从白纸换成了 --c-bg-tint。
+   0.5px 内描边专为儿童版：kids 的 --bw 本来就是 2px，选中时边框厚度与未选中相同，
+   只剩颜色差异，内线补一条结构信号。只加在选中态，不动 .skin-cell 基类。 */
+.skin-cell-on {
+    border-color: var(--c-brand-ink);
+    box-shadow: var(--shadow-1), 0 0 0 2px var(--c-brand-ink), inset 0 0 0 0.5px var(--c-brand-ink);
+}
+
+.skin-cell-hover {
+    opacity: 0.88;
+}
+
+.skin-preview {
+    height: 50px;
+    overflow: hidden;
+    border-radius: calc(var(--radius-l) - var(--bw)) calc(var(--radius-l) - var(--bw)) 0 0;
+    background: var(--c-bg);
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.skin-hero {
+    height: 18px;
+    background: var(--grad-hero);
+}
+
+/* 三颗点的间隔用 margin 而不是 gap：与 .skin-cell 同一套理由（老 WebView 上 flex gap 不生效），
+   两处写法必须一致 —— 否则 12px 的三颗点会连成一条三色接色带，正好退化成"一排纯色方块"。 */
+.skin-dots {
+    display: flex;
+    align-items: center;
+    padding: 6px 7px;
+}
+
+.skin-dot + .skin-dot {
+    margin-left: 5px;
+}
+
+/* 色点固定顺序：主色 / 提醒色 / 反差底色，让人能横向比同一个维度。
+   12px 是硬下限：≥12px 算"面积块"，可以按 ΔE 判（--c-gold 四套 39.6–73.3 全过）；
+   缩到 8px 就掉进"小尺寸图形"档，--c-gold 的 CR 1.49–1.89 会被拿 3:1 审、直接不合格。
+   缩小色点 = 把金色的可访问性豁免弄丢，不是审美问题。 */
+.skin-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: var(--radius-pill);
+    box-shadow: 0 0 0 0.5px var(--c-line-3);
+}
+
+.skin-dot-brand {
+    background: var(--c-brand);
+}
+
+.skin-dot-gold {
+    background: var(--c-gold);
+}
+
+.skin-dot-inverse {
+    background: var(--c-surface-inverse);
+}
+
+.skin-meta {
+    padding: 6px 7px 8px;
+}
+
+.skin-name {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    line-height: var(--lh-snug);
+    letter-spacing: var(--ls-0);
+    color: var(--c-ink-1);
+}
+
+.skin-cell-on .skin-name {
+    font-weight: var(--fw-bold);
+}
+
+.skin-mood {
+    display: block;
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-reg);
+    line-height: var(--lh-snug);
+    color: var(--c-ink-4);
+}
+
+/* 勾徽标用 CSS 画，不用字符 ✓：字符勾会走字体栈，各机型的字形大小与基线不一致，
+   16px 的圆里能顶出去；它 aria-hidden 之后只是纯装饰，没有语义损失 */
+.skin-check {
+    position: absolute;
+    top: var(--sp-2);
+    right: var(--sp-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-ink);
+    /* 白环不是装饰：徽标压在科技蓝深 hero 上只有 2.40:1，
+       靠「徽标 - 1.5px 白环 - 深底」的三明治结构才可辨（白环 vs 深底 17.97:1） */
+    box-shadow: 0 0 0 1.5px var(--c-surface);
+}
+
+.skin-check::after {
+    content: '';
+    width: 3px;
+    height: 5.5px;
+    margin-top: -2px;
+    border: 1px solid var(--c-on-brand);
+    border-top: 0;
+    border-left: 0;
+    transform: rotate(45deg);
+}
+
+/* ---------- 数据管理 ---------- */
+.data-card {
+    padding: 14px var(--sp-7) var(--sp-4);
+}
+
+.data-lead {
+    display: block;
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.data-btn {
+    display: flex;
+    align-items: center;
+    padding: var(--sp-6) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.data-btn:last-of-type {
+    border-bottom: none;
+}
+
+.data-btn-hover {
+    opacity: 0.72;
+}
+
+.data-btn-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    padding-right: var(--sp-5);
+}
+
+.data-btn-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.data-btn-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.data-btn-arrow {
+    font-size: var(--fs-xl);
+    color: var(--c-ink-4);
+}
+
+.data-warn {
+    display: block;
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+/* ---------- 使用小贴士（默认收起） ---------- */
+.tips-card {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tips-toggle {
+    display: flex;
+    align-items: center;
+    padding: 14px var(--sp-7);
+}
+
+.tips-toggle-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    padding-right: var(--sp-5);
+}
+
+.tips-toggle-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.tips-toggle-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.tips-toggle-arrow {
+    width: 22px;
+    text-align: center;
+    font-size: var(--fs-xl);
+    line-height: var(--lh-tight);
+    color: var(--c-ink-4);
+}
+
+.tips-body {
+    padding: 0 var(--sp-7) var(--sp-6);
+    border-top: var(--bw) solid var(--c-line);
+}
+
+.tips-h {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: var(--sp-7) 0 var(--sp-3);
+}
+
+.tips-h-title {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-deep);
+}
+
+.tips-h-note {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.tip-row {
+    display: flex;
+    align-items: flex-start;
+    padding: var(--sp-4) var(--sp-5);
+    margin-top: var(--sp-3);
+    border-radius: var(--radius-l);
+    background: var(--c-surface-4);
+}
+
+.tip-no {
+    width: 23px;
+    flex-shrink: 0;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-base);
+    color: var(--c-brand-ink);
+}
+
+.tip-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.tip-name {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-1);
+}
+
+.tip-desc {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+/* ---------- 关于 ---------- */
+.about-card {
+    background: var(--c-bg-tint);
+    box-shadow: none;
+}
+
+.about-line {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.about-line:first-child {
+    margin-top: 0;
+}
+
+.about-note {
+    display: block;
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: var(--bw) solid var(--c-line-2);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}

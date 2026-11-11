@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' data:; connect-src 'none'; object-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>九格手记 · 阅读</title>
+<link rel="stylesheet" href="./reader.css">
+<script src="./reader.js" defer></script>
+</head>
+<body>
+<div class="rr-app" id="rrApp" data-theme="paper">
+
+  <header class="rr-top">
+    <span class="rr-book-title" id="rrBookTitle">载入中…</span>
+    <span class="rr-badge" id="rrBadge">—</span>
+    <span class="rr-chapter-title" id="rrChapterTitle">—</span>
+
+    <!-- 续读引导条移到顶栏空白处：不再占用正文上方一行，也不在淡出后留下空档 -->
+    <div class="rr-resume" id="rrResume" hidden>
+      <span class="rr-resume-text" id="rrResumeText"></span>
+      <button class="rr-resume-go" id="rrResumeGo" type="button">接着读</button>
+      <button class="rr-resume-x" id="rrResumeX" type="button" title="关掉">×</button>
+    </div>
+
+    <div class="rr-top-nav">
+      <button class="rr-prev" id="rrPrev" type="button">上一章</button>
+      <span class="rr-pos" id="rrPos">0 / 0</span>
+      <button class="rr-next" id="rrNext" type="button">下一章</button>
+    </div>
+    <div class="rr-top-tools">
+      <button class="rr-font-minus" id="rrFontMinus" type="button" title="缩小字号">A-</button>
+      <button class="rr-font-plus" id="rrFontPlus" type="button" title="放大字号">A+</button>
+      <button class="rr-theme" id="rrTheme" type="button">纸色</button>
+    </div>
+  </header>
+
+  <aside class="rr-left" id="rrLeft">
+    <div class="rr-cover" id="rrCover"><span class="rr-cover-ph">九</span></div>
+    <div class="rr-book-meta" id="rrBookMeta"></div>
+
+    <div class="rr-left-tabs" id="rrLeftTabs" role="tablist">
+      <button class="rr-ltab rr-ltab-on" id="rrTabToc" data-tab="toc" type="button" role="tab">目录</button>
+      <button class="rr-ltab" id="rrTabMark" data-tab="mark" type="button" role="tab">书签</button>
+    </div>
+
+    <div class="rr-pane rr-pane-toc" id="rrPaneToc">
+      <div class="rr-toc" id="rrToc"></div>
+      <p class="rr-toc-tip">目录来自电子书本身；没有目录时按顺序分节</p>
+    </div>
+
+    <div class="rr-pane rr-pane-mark" id="rrPaneMark" style="display:none">
+      <button class="rr-bm-add" id="rrBmAdd" type="button">＋ 在当前位置加书签</button>
+      <div class="rr-bm-list" id="rrBmList"></div>
+      <p class="rr-toc-tip">书签记的是「章 + 章内位置」，换字号也不会跑偏</p>
+    </div>
+  </aside>
+
+  <div class="rr-divider rr-divider-l" id="rrDivLeft" title="拖动调整左栏宽度，双击复位"></div>
+
+  <section class="rr-main">
+    <div class="rr-toolbar">
+      <button class="rr-quote-pick" id="rrQuotePick" type="button">划选问一句</button>
+      <span class="rr-tool-sep" aria-hidden="true"></span>
+      <span class="rr-hl-group" id="rrHlGroup" role="group" aria-label="高亮颜色">
+        <button class="rr-hl rr-hl-yellow" data-color="yellow" type="button" title="黄色高亮">黄</button>
+        <button class="rr-hl rr-hl-green" data-color="green" type="button" title="绿色高亮">绿</button>
+        <button class="rr-hl rr-hl-blue" data-color="blue" type="button" title="蓝色高亮">蓝</button>
+        <button class="rr-hl rr-hl-pink" data-color="pink" type="button" title="粉色高亮">粉</button>
+      </span>
+      <button class="rr-style" id="rrUnderline" data-style="underline" type="button" title="在选中文字上加下划线">下划线</button>
+      <button class="rr-style" id="rrStrike" data-style="strike" type="button" title="在选中文字上加删除线">删除线</button>
+      <span class="rr-spacer"></span>
+      <select class="rr-typeset" id="rrMargin" title="版心宽度与页边距" aria-label="版心">
+        <option value="narrow">版心 窄边</option>
+        <option value="mid">版心 适中</option>
+        <option value="wide">版心 宽边</option>
+      </select>
+      <select class="rr-typeset" id="rrPara" title="段落之间的间距" aria-label="段距">
+        <option value="tight">段距 紧凑</option>
+        <option value="normal">段距 标准</option>
+        <option value="loose">段距 宽松</option>
+      </select>
+      <button class="rr-typeset" id="rrPunct" type="button" title="标点挤压与中西文间距（实验性）">标点挤压</button>
+      <select class="rr-typeface" id="rrTypeface" title="正文与标题的字体方案" aria-label="字体方案">
+        <option value="mixed">混排 · 宋体正文 / 黑体标题</option>
+        <option value="serif">全宋体</option>
+        <option value="sans">全黑体</option>
+        <option value="kai">全楷体</option>
+      </select>
+      <button class="rr-zoom-out" id="rrZoomOut" type="button" title="缩小版面">−</button>
+      <span class="rr-zoom-text" id="rrZoomText">100%</span>
+      <button class="rr-zoom-in" id="rrZoomIn" type="button" title="放大版面">＋</button>
+      <button class="rr-line" id="rrLine" type="button">行距 1.8</button>
+    </div>
+
+    <div class="rr-search">
+      <input class="rr-search-input" id="rrSearchInput" type="text" placeholder="在本书里找一句话…（回车查找）" aria-label="书内搜索">
+      <button class="rr-search-btn" id="rrSearchBtn" type="button">查找</button>
+      <span class="rr-search-count" id="rrSearchCount"></span>
+      <div class="rr-search-hits" id="rrSearchHits" style="display:none"></div>
+    </div>
+
+    <div class="rr-stage" id="rrStage">
+      <iframe class="rr-page" id="rrPage" sandbox="allow-same-origin" title="正文"></iframe>
+      <div class="rr-unsupported" id="rrUnsupported" style="display:none"></div>
+      <div class="rr-selbar" id="rrSelBar" style="display:none">
+        <span class="rr-selbar-tip">已选</span>
+        <button class="rr-selbar-btn" data-color="yellow" type="button" title="黄色高亮">黄</button>
+        <button class="rr-selbar-btn" data-color="green" type="button" title="绿色高亮">绿</button>
+        <button class="rr-selbar-btn" data-color="blue" type="button" title="蓝色高亮">蓝</button>
+        <button class="rr-selbar-btn" data-color="pink" type="button" title="粉色高亮">粉</button>
+        <button class="rr-selbar-btn" data-style="underline" type="button">下划线</button>
+        <button class="rr-selbar-btn" data-style="strike" type="button">删除线</button>
+        <span class="rr-selbar-sep" aria-hidden="true"></span>
+        <button class="rr-selbar-btn rr-selbar-ask" data-ask="0" type="button" title="Q4 这句话在说什么">重述</button>
+        <button class="rr-selbar-btn rr-selbar-ask" data-ask="1" type="button" title="Q5 接得上我的什么">连接</button>
+        <button class="rr-selbar-btn rr-selbar-ask" data-ask="2" type="button" title="Q6 下次什么场景怎么做">行动</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="rr-divider rr-divider-r" id="rrDivRight" title="拖动调整右栏宽度，双击复位"></div>
+
+  <aside class="rr-right" id="rrRight">
+    <h3 class="rr-sec-title">三阶九问</h3>
+    <div class="rr-q9" id="rrQ9">
+      <div class="rr-q9-tabs" id="rrQ9Tabs" role="tablist">
+        <button class="rr-q9-tab" type="button" role="tab" data-stage="pre">读前 · 定盘</button>
+        <button class="rr-q9-tab rr-q9-on" type="button" role="tab" data-stage="mid">读中 · 拆解</button>
+        <button class="rr-q9-tab" type="button" role="tab" data-stage="post">读后 · 收束</button>
+      </div>
+      <div class="rr-q9-list" id="rrQ9List"></div>
+      <p class="rr-q9-tip">想答哪问点哪问，不答也不催；答案直接进读书笔记，带原文锚点。</p>
+    </div>
+
+    <h3 class="rr-sec-title">即时想法</h3>
+    <div class="rr-flash-row">
+      <input class="rr-flash-text" id="rrFlashText" type="text" placeholder="一句话闪念">
+      <select class="rr-flash-cell" id="rrFlashCell">
+        <option value="free">自由记录</option>
+        <option value="growth">学习成长</option>
+        <option value="work">工作推进</option>
+      </select>
+      <button class="rr-flash" id="rrFlash" type="button">闪念入格</button>
+    </div>
+
+    <div class="rr-note-filter" id="rrNoteFilter">
+      <button type="button" data-filter="chapter" class="rr-filter-on">本章</button>
+      <button type="button" data-filter="all">全部</button>
+    </div>
+    <div class="rr-style-filter" id="rrStyleFilter">
+      <button type="button" data-style="" class="rr-sf-on">全部标注</button>
+      <button type="button" data-style="highlight">高亮</button>
+      <button type="button" data-style="underline">下划线</button>
+      <button type="button" data-style="strike">删除线</button>
+    </div>
+    <div class="rr-note-list" id="rrNoteList"></div>
+  </aside>
+
+  <footer class="rr-status" id="rrStatus">
+    <button class="rr-progress-sync" id="rrProgressSync" type="button" title="把当前章节位置同步进书架进度">同步进度</button>
+    <span class="rr-progress-text" id="rrProgressText">进度待同步</span>
+    <span class="rr-time" id="rrTime">本次 0 分 · 累计 0 分</span>
+    <span class="rr-status-msg" id="rrStatusMsg">就绪</span>
+  </footer>
+</div>
+
+  <!-- 章末轻卡：正文之外顶部浮层（不进正文流、不挡视线，字号小、浅灰、半透明） -->
+  <section class="rr-endcard" id="rrEndCard" hidden aria-label="本章读完">
+    <div class="rr-endcard-h" id="rrEndCardH"></div>
+    <div class="rr-endcard-m" id="rrEndCardM"></div>
+    <div class="rr-endcard-q" id="rrEndCardQ"></div>
+    <div class="rr-endcard-b">
+      <button type="button" data-act="next" id="rrEndNext">继续下一章</button>
+      <button type="button" data-act="note" id="rrEndNote">写一句感想</button>
+    </div>
+    <div class="rr-endcard-in" id="rrEndCardIn" hidden>
+      <input type="text" class="rr-endcard-input" id="rrEndCardInput" placeholder="一句话记下此刻……">
+      <button type="button" data-act="save" id="rrEndSave">存进九格</button>
+    </div>
+  </section>
+
+  <!-- 伴读提问浮窗（docs/17 三阶九问）：一次只问一个问题，可自由拖动 -->
+  <section class="rr-ask" id="rrAsk" hidden aria-label="伴读提问">
+    <header class="rr-ask-head" id="rrAskHead">
+      <span class="rr-ask-grip" aria-hidden="true">⋮⋮</span>
+      <span class="rr-ask-title" id="rrAskTitle">伴读 · 读中 1/3</span>
+      <button class="rr-ask-fold" id="rrAskFold" type="button" title="收起 / 展开">–</button>
+      <button class="rr-ask-close" id="rrAskClose" type="button" title="关掉（右下角可再唤出）">×</button>
+    </header>
+    <div class="rr-ask-body" id="rrAskBody">
+      <p class="rr-ask-q" id="rrAskQ">这句话在说什么</p>
+      <div class="rr-ask-quote" id="rrAskQuote" hidden>
+        <span class="rr-ask-quote-tag">原文</span>
+        <p class="rr-ask-quote-text" id="rrAskQuoteText"></p>
+        <button class="rr-ask-quote-x" id="rrAskQuoteClear" type="button" title="去掉引用">×</button>
+      </div>
+      <p class="rr-ask-hint" id="rrAskHint">用你自己的话讲一遍，不要抄原文</p>
+      <textarea class="rr-ask-input" id="rrAskInput" rows="3" placeholder="写一句…"></textarea>
+      <div class="rr-ask-choice" id="rrAskChoice" hidden></div>
+      <div class="rr-ask-bar">
+        <button class="rr-ask-save" id="rrAskSave" type="button">存下</button>
+        <button class="rr-ask-skip" id="rrAskSkip" type="button">跳过</button>
+        <button class="rr-ask-pick" id="rrAskPick" type="button" title="把正文里划选的那句引过来">引原文</button>
+      </div>
+      <p class="rr-ask-note" id="rrAskNote" hidden></p>
+    </div>
+  </section>
+  <button class="rr-ask-open" id="rrAskOpen" type="button" hidden title="唤出伴读提问">伴读</button>
+</body>
+</html>

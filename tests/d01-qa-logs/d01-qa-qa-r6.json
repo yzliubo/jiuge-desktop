@@ -1,0 +1,536 @@
+{
+  "label": "qa-r6",
+  "generatedAt": "2026-11-07T06:47:09.097Z",
+  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.d01-qa-userdata",
+  "checks": [
+    {
+      "id": "QA-00",
+      "name": "renderer 公开 API 可用 + 四个 Page 实例存在",
+      "ok": true,
+      "detail": "review=true index=true settings=true habit=true"
+    },
+    {
+      "id": "QA-01",
+      "name": "回看页真实点击四个标签：tabIndex / .rv-tab-on 唯一性 / .rv-ink 位移三者同步",
+      "ok": true,
+      "detail": "点第 2 个 → tabIndex=1 / .rv-tab-on 唯一=true 落在 0 基 1 / .rv-ink 含 translateX(100%)=true ; 点第 3 个 → tabIndex=2 / .rv-tab-on 唯一=true 落在 0 基 2 / .rv-ink 含 translateX(200%)=true ; 点第 1 个 → tabIndex=0 / .rv-tab-on 唯一=true 落在 0 基 0 / .rv-ink 含 translateX(0%)=true ; 点第 2 个 → tabIndex=1 / .rv-tab-on 唯一=true 落在 0 基 1 / .rv-ink 含 translateX(100%)=true"
+    },
+    {
+      "id": "QA-02",
+      "name": "设置页逐个点四套皮肤：.skin-cell-on 恒唯一且等于 theme，aria-checked / aria-label 同步",
+      "ok": true,
+      "detail": "点 tech → data.theme=tech / .skin-cell-on 数=1 位置=1（期望 1） / aria-checked=true=[1] / 含「已选中」=[1] ;; 点 girl → data.theme=girl / .skin-cell-on 数=1 位置=2（期望 2） / aria-checked=true=[2] / 含「已选中」=[2] ;; 点 kids → data.theme=kids / .skin-cell-on 数=1 位置=3（期望 3） / aria-checked=true=[3] / 含「已选中」=[3] ;; 点 standard → data.theme=standard / .skin-cell-on 数=1 位置=0（期望 0） / aria-checked=true=[0] / 含「已选中」=[0]"
+    },
+    {
+      "id": "QA-03",
+      "name": "坚持页浮层可见 + 逐个点四个预设：msDays 变化后 .ms-preset-on 唯一且跟随",
+      "ok": true,
+      "detail": "浮层可见=true ; 点第 2 个（30 天）→ msDays=30 / .ms-preset-on 唯一=true 位置=1（期望 1） ; 点第 1 个（7 天）→ msDays=7 / .ms-preset-on 唯一=true 位置=0（期望 0） ; 点第 5 个（365 天）→ msDays=365 / .ms-preset-on 唯一=true 位置=4（期望 4） ; 点第 3 个（90 天）→ msDays=90 / .ms-preset-on 唯一=true 位置=2（期望 2）"
+    },
+    {
+      "id": "QA-04",
+      "name": "今日页金钱分类：面板可见 + 三次真实点击后 .money-cat-on 唯一且跟随 data.moneyCategory",
+      "ok": true,
+      "detail": "面板可见=true / 分类数=9 ; 点第 2 个 → moneyCategory=transport（0 基 1）/ .money-cat-on 唯一=true 位置=1 ; 点第 3 个 → moneyCategory=daily（0 基 2）/ .money-cat-on 唯一=true 位置=2 ; 点第 1 个 → moneyCategory=food（0 基 0）/ .money-cat-on 唯一=true 位置=0"
+    },
+    {
+      "id": "QA-05",
+      "name": "真实 input 事件 + 3 次时钟 setData：节点/焦点/选区/值/data 全不变，时钟仍刷新",
+      "ok": true,
+      "detail": "同节点=true 焦点=true 值不变=true 选区 3→3 data.moneyNote=\"买咖啡 12 元\" .clock-value=14:02"
+    },
+    {
+      "id": "QA-06",
+      "name": "B-05 · 编辑浮层真实可见、textarea 可聚焦且已填入内容",
+      "ok": true,
+      "detail": "浮层可见=true / textarea 可见=true / 填入内容长度=28 / 聚焦=true"
+    },
+    {
+      "id": "QA-07",
+      "name": "B-05 · 连刷 clockText × 6 后 textarea 节点引用不变且仍在文档中",
+      "ok": true,
+      "detail": "同节点=true / 仍挂载=true"
+    },
+    {
+      "id": "QA-08",
+      "name": "B-05 · 连刷 6 次后 activeElement 仍是该 textarea",
+      "ok": true,
+      "detail": "activeElement=sheet-input"
+    },
+    {
+      "id": "QA-09",
+      "name": "B-05 · 连刷 6 次后选区 start/end 不变",
+      "ok": true,
+      "detail": "5/5 → 5/5"
+    },
+    {
+      "id": "QA-10",
+      "name": "B-05 · 连刷 6 次后手输内容未被回写覆盖",
+      "ok": true,
+      "detail": "长度 28 → 28"
+    },
+    {
+      "id": "QA-11",
+      "name": "B-05 · 同一批 setData 里 clockText 确实局部刷新（值级 diff 仍生效）",
+      "ok": true,
+      "detail": ".clock-value=12:35"
+    },
+    {
+      "id": "QA-12",
+      "name": "嵌套 wx:for：初始结构与 loop 注册数正确（外 1 + 内 2 = 3）",
+      "ok": true,
+      "detail": "组数=2 格数=3 loops=3 gi=0,1 外层 on=[false,true] 内层 on=[[false,false],[true]]"
+    },
+    {
+      "id": "QA-13",
+      "name": "嵌套 wx:for：外层标量变化（数组不变）时内外两层 class 都跟随，且重复 update 无重复实例",
+      "ok": true,
+      "detail": "改 sel=a 后 外层 on=[true,false] / 内层 on=[[true,true],[false]] / 重刷后 组=2 格=3 loops=3"
+    },
+    {
+      "id": "QA-14",
+      "name": "keyed 重排 + 同批标量：DOM 顺序/index 文本正确、.qa-on 唯一跟随",
+      "ok": true,
+      "detail": "初始 a,b,c → 重排后 c,a,b (文本 c-0,a-1,b-2)，on 0 基 2"
+    },
+    {
+      "id": "QA-15",
+      "name": "keyed 删除 + 同批标量：残留节点清零、class 跟随",
+      "ok": true,
+      "detail": "删除后 [a,c]，节点数 2，on 0 基 1"
+    },
+    {
+      "id": "QA-16",
+      "name": "keyed 新增 + 同批标量：新增项参与排序与 class 计算",
+      "ok": true,
+      "detail": "新增后 [a,c,d]，on 0 基 2"
+    },
+    {
+      "id": "QA-18",
+      "name": "循环项内 wx:if（数组+标量同批变化）：条件显隐随 item.show 正确翻转",
+      "ok": true,
+      "detail": "x: (空)/none → none/(空) ; y: none/(空) → (空)/none"
+    },
+    {
+      "id": "QA-19",
+      "name": "循环项内 wx:if（仅外层标量变化，数组 signature 不变）：condGroup 通道未被 refresh 破坏",
+      "ok": true,
+      "detail": ".qa-only display 前=[(空),none] 后=[none,(空)]"
+    },
+    {
+      "id": "QA-20",
+      "name": "回收不误伤：display:none 隐藏但仍在文档中的 loop 不被摘掉",
+      "ok": true,
+      "detail": "loops 4 → 4 / .qa-other 数=2 / 脱离 DOM 的 loop=0"
+    },
+    {
+      "id": "QA-21",
+      "name": "真回收：父项被删后其内嵌 loop 被摘掉（-2），存活 loop 与 DOM 不受影响",
+      "ok": true,
+      "detail": "loops 4 → 2 / .qa-outer 数=0 / 脱离 DOM 的 loop=0 / .qa-other 数=2"
+    },
+    {
+      "id": "QA-22",
+      "name": "真实跨页：index 被 [hidden] 隐藏时 setData 不回收其 loop，DOM 不丢",
+      "ok": true,
+      "detail": "隐藏=true / loops 22 → 22（全部 isConnected=true） / .money-cat 9 → 9"
+    },
+    {
+      "id": "QA-23",
+      "name": "高频 110 次 setData（含标量+分类切换）：无异常、ctx.loops 不增长、无重复/丢失 DOM 节点",
+      "ok": true,
+      "detail": "耗时 50.8ms / loops 22→22 / .money-cat 9（期望 9） / .money-cat-on 唯一=true / 首节点复用=true / .money-entry 0/0 / .study-item 0/0"
+    },
+    {
+      "id": "QA-24",
+      "name": "值级 diff：只改 clockText 时循环项 class 无冗余 setAttribute（372 格不被无谓重写）",
+      "ok": true,
+      "detail": "本次 setAttribute 总写入=1 / .pixel-cell 写入=0 / .rv-tab 写入=0"
+    },
+    {
+      "id": "QA-25",
+      "name": "真实 372 格年历：清空 pixelMonths 回收 12 个内嵌 loop，重刷后 DOM 完全复原",
+      "ok": true,
+      "detail": "格数 372→0→372 / loops 34→22→34 / 仍注册但脱离 DOM=0"
+    },
+    {
+      "id": "QA-26",
+      "name": "修复持续性：tabIndex=2 之后 3 次仅时钟 setData，选中态不回退",
+      "ok": true,
+      "detail": "第 1 次时钟刷新后 .rv-tab-on=2（唯一=true） ; 第 2 次时钟刷新后 .rv-tab-on=2（唯一=true） ; 第 3 次时钟刷新后 .rv-tab-on=2（唯一=true）"
+    },
+    {
+      "id": "QA-27",
+      "name": "九格摘要行真实点击后 .dg-row-open 唯一、与 digestOpen[key] 一致，且 wx:if 正文同步可见",
+      "ok": true,
+      "detail": "key=work / .dg-row-open 数=1 / digestOpen=true / .dg-last 可见=true"
+    },
+    {
+      "id": "QA-28",
+      "name": "负向对照：复刻修复前短路（不重算循环项）→ 选中态停在旧值；恢复新通道后立即跟随",
+      "ok": true,
+      "detail": "复刻修复前 on 0 基 0（缺陷现场应为 0）/ 修复后 on 0 基 1 / 两者不同=true"
+    },
+    {
+      "id": "QA-29",
+      "name": "性能：372 格年历 60 次 setData 平均耗时 ≤ 16ms（一帧预算）",
+      "ok": true,
+      "detail": "格数=372 / loops=34 / 循环项=447 / avg=0.402ms P50=0.4 P95=0.7 max=1 min=0.3 / 60 次合计=24.1ms"
+    },
+    {
+      "id": "QA-30",
+      "name": "长跑：来回切年历 20 次（每次重建 12 个内嵌 loop）后 loops/格数不增长、无脱离 DOM 的残留 loop",
+      "ok": true,
+      "detail": "loops 34→34→34 / 格数 372→372 / 残留=0 / 年份回到起点=true（2026）"
+    },
+    {
+      "id": "QA-31",
+      "name": "性能（真实每秒路径）：今日页 60 次 setData({clockText}) 平均 ≤ 16ms",
+      "ok": true,
+      "detail": "loops=22 / 循环项=26 / avg=0.443ms P50=0.4 P95=0.8 max=1.1"
+    }
+  ],
+  "facts": {
+    "reviewTabs": [
+      "点第 2 个 → tabIndex=1 / .rv-tab-on 唯一=true 落在 0 基 1 / .rv-ink 含 translateX(100%)=true",
+      "点第 3 个 → tabIndex=2 / .rv-tab-on 唯一=true 落在 0 基 2 / .rv-ink 含 translateX(200%)=true",
+      "点第 1 个 → tabIndex=0 / .rv-tab-on 唯一=true 落在 0 基 0 / .rv-ink 含 translateX(0%)=true",
+      "点第 2 个 → tabIndex=1 / .rv-tab-on 唯一=true 落在 0 基 1 / .rv-ink 含 translateX(100%)=true"
+    ],
+    "skins": [
+      "点 tech → data.theme=tech / .skin-cell-on 数=1 位置=1（期望 1） / aria-checked=true=[1] / 含「已选中」=[1]",
+      "点 girl → data.theme=girl / .skin-cell-on 数=1 位置=2（期望 2） / aria-checked=true=[2] / 含「已选中」=[2]",
+      "点 kids → data.theme=kids / .skin-cell-on 数=1 位置=3（期望 3） / aria-checked=true=[3] / 含「已选中」=[3]",
+      "点 standard → data.theme=standard / .skin-cell-on 数=1 位置=0（期望 0） / aria-checked=true=[0] / 含「已选中」=[0]"
+    ],
+    "habitPresets": {
+      "sheetVisible": true,
+      "steps": [
+        "点第 2 个（30 天）→ msDays=30 / .ms-preset-on 唯一=true 位置=1（期望 1）",
+        "点第 1 个（7 天）→ msDays=7 / .ms-preset-on 唯一=true 位置=0（期望 0）",
+        "点第 5 个（365 天）→ msDays=365 / .ms-preset-on 唯一=true 位置=4（期望 4）",
+        "点第 3 个（90 天）→ msDays=90 / .ms-preset-on 唯一=true 位置=2（期望 2）"
+      ]
+    },
+    "moneyCats": {
+      "panelVisible": true,
+      "count": 9,
+      "steps": [
+        "点第 2 个 → moneyCategory=transport（0 基 1）/ .money-cat-on 唯一=true 位置=1",
+        "点第 3 个 → moneyCategory=daily（0 基 2）/ .money-cat-on 唯一=true 位置=2",
+        "点第 1 个 → moneyCategory=food（0 基 0）/ .money-cat-on 唯一=true 位置=0"
+      ]
+    },
+    "keyboard": {
+      "dataAfterInput": "买咖啡 12 元",
+      "sameNode": true,
+      "focused": true,
+      "valueKept": true,
+      "caret0": 3,
+      "caretNow": 3,
+      "clockText": "14:02"
+    },
+    "b05": {
+      "sheetVisible": true,
+      "taVisible": true,
+      "sameNode": true,
+      "focused": true,
+      "sel": "5/5 → 5/5",
+      "valueKept": true,
+      "clockText": "12:35"
+    },
+    "nested": {
+      "base": true,
+      "follow": true,
+      "noDup": true,
+      "loops": 3,
+      "gOn": [
+        true,
+        false
+      ],
+      "cOn": [
+        [
+          true,
+          true
+        ],
+        [
+          false
+        ]
+      ]
+    },
+    "keyed": {
+      "r0": {
+        "ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "texts": [
+          "a-0",
+          "b-1",
+          "c-2"
+        ],
+        "on": {
+          "on": 0,
+          "count": 1,
+          "n": 3
+        },
+        "count": 3
+      },
+      "r1": {
+        "ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "texts": [
+          "c-0",
+          "a-1",
+          "b-2"
+        ],
+        "on": {
+          "on": 2,
+          "count": 1,
+          "n": 3
+        },
+        "count": 3
+      },
+      "r2": {
+        "ids": [
+          "a",
+          "c"
+        ],
+        "texts": [
+          "a-0",
+          "c-1"
+        ],
+        "on": {
+          "on": 1,
+          "count": 1,
+          "n": 2
+        },
+        "count": 2
+      },
+      "r3": {
+        "ids": [
+          "a",
+          "c",
+          "d"
+        ],
+        "texts": [
+          "a-0",
+          "c-1",
+          "d-2"
+        ],
+        "on": {
+          "on": 2,
+          "count": 1,
+          "n": 3
+        },
+        "count": 3
+      }
+    },
+    "loopCond": {
+      "initOk": true,
+      "arrOk": true,
+      "scalarOk": true,
+      "only0": [
+        "(空)",
+        "none"
+      ],
+      "only1": [
+        "none",
+        "(空)"
+      ]
+    },
+    "reclaimSynth": {
+      "loops0": 4,
+      "loops1": 4,
+      "loops2": 2,
+      "otherCount1": 2,
+      "outerDom": 0,
+      "disconnected1": 0,
+      "disconnected2": 0
+    },
+    "crossPage": {
+      "loops0": 22,
+      "loops1": 22,
+      "connected": 22,
+      "cats0": 9,
+      "cats1": 9,
+      "hidden": true
+    },
+    "stress": {
+      "ms": 50.8,
+      "loops0": 22,
+      "loops1": 22,
+      "cats": 9,
+      "onCount": 1,
+      "sameFirstNode": true,
+      "entries": 0,
+      "entriesWant": 0,
+      "study": 0,
+      "studyWant": 0,
+      "err": ""
+    },
+    "diffWrites": {
+      "total": 1,
+      "cellWrites": 0,
+      "tabWrites": 0
+    },
+    "realReclaim": {
+      "cells0": 372,
+      "cells1": 0,
+      "cells2": 372,
+      "loops0": 34,
+      "loops1": 22,
+      "loops2": 34,
+      "stale": 0
+    },
+    "digest": {
+      "key": "work",
+      "openFlag": true,
+      "bodyShown": true,
+      "closedFlagAfterSecondTap": false
+    },
+    "negativeControl": {
+      "loops": 1,
+      "staleOn": 0,
+      "staleCount": 1,
+      "freshOn": 1,
+      "freshCount": 1
+    },
+    "perf": {
+      "cells": 372,
+      "loops": 34,
+      "loopItems": 447,
+      "avgMs": 0.402,
+      "p50Ms": 0.4,
+      "p95Ms": 0.7,
+      "maxMs": 1,
+      "minMs": 0.3,
+      "totalMs": 24.1,
+      "iterations": 60,
+      "cpuCores": 18,
+      "deviceMemoryGB": 8,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.234 Electron/31.7.7 Safari/537.36",
+      "platform": "Win32",
+      "samples": [
+        0.4,
+        0.4,
+        0.3,
+        0.4,
+        0.4,
+        0.7,
+        0.8,
+        0.4,
+        0.4,
+        0.3,
+        0.5,
+        0.4,
+        0.4,
+        0.3,
+        0.4,
+        1,
+        0.4,
+        0.4,
+        0.3,
+        0.5,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.5,
+        0.3,
+        0.4,
+        0.5,
+        0.4,
+        0.4,
+        0.5,
+        0.3,
+        0.7,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.4,
+        0.4,
+        0.4,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.5
+      ]
+    },
+    "yearSwitch": {
+      "loops0": 34,
+      "loopsMid": 34,
+      "loops1": 34,
+      "cells0": 372,
+      "cells1": 372,
+      "stale": 0,
+      "year": 2026,
+      "backToStart": true
+    },
+    "perfIndex": {
+      "loops": 22,
+      "loopItems": 26,
+      "iterations": 60,
+      "avgMs": 0.443,
+      "p50Ms": 0.4,
+      "p95Ms": 0.8,
+      "maxMs": 1.1,
+      "totalMs": 26.6
+    },
+    "machine": {
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.234 Electron/31.7.7 Safari/537.36",
+      "cpuCores": 18,
+      "deviceMemoryGB": 8,
+      "elapsedMs": 388
+    }
+  },
+  "failed": [],
+  "jsErrors": [],
+  "consoleMessages": [
+    {
+      "level": "1",
+      "message": "[页面运行时] 已落盘页面 JS：index,review,capsule,habit,settings",
+      "line": 267,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」",
+      "line": 283,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}",
+      "line": 62,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html"
+    },
+    {
+      "level": "2",
+      "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+      "line": 2,
+      "source": "node:electron/js2c/renderer_init"
+    }
+  ]
+}

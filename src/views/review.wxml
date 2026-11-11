@@ -1,0 +1,551 @@
+<view class="theme-root theme-{{theme}} rv-root">
+    <view class="rv-top">
+        <view class="rv-head">
+            <text class="rv-title">回看</text>
+            <text class="rv-head-sub">每年的同一天，都在同一页上</text>
+        </view>
+        <view class="rv-tabs">
+            <view class="rv-tab {{tabIndex === index ? 'rv-tab-on' : ''}}"
+                  wx:for="{{tabs}}" wx:key="key"
+                  data-index="{{index}}" bindtap="onTabTap">{{item.label}}</view>
+            <view class="rv-ink" style="transform: translateX({{tabIndex * 100}}%)">
+                <view class="rv-ink-bar"></view>
+            </view>
+        </view>
+    </view>
+
+    <swiper class="rv-swiper" current="{{tabIndex}}" duration="260"
+            easing-function="easeInOutCubic" bindchange="onTabChange">
+        <!-- ================= 一、概览：本周小结 + 工作 + 收支 + 学习 + 近 30 天心情 ================= -->
+        <swiper-item>
+            <scroll-view class="rv-scroll" scroll-y enable-back-to-top>
+                <view class="card weekly-card">
+                    <view class="weekly-head">
+                        <text class="weekly-tag">本周小结</text>
+                        <text class="weekly-range">{{weeklyRange}}</text>
+                    </view>
+                    <text class="weekly-summary">{{weekly.summary}}</text>
+                    <view class="weekly-metrics">
+                        <view class="weekly-metric">
+                            <text class="wm-num">{{weekly.days}}</text>
+                            <text class="wm-label">已写天数</text>
+                        </view>
+                        <view class="weekly-metric">
+                            <text class="wm-num">{{weekly.chars}}</text>
+                            <text class="wm-label">落笔字数</text>
+                        </view>
+                        <view class="weekly-metric">
+                            <text class="wm-num wm-word">{{weekly.topMood ? weekly.topMood : '—'}}</text>
+                            <text class="wm-label">主要心情</text>
+                        </view>
+                    </view>
+                    <block wx:if="{{weekly.excerpts.length > 0}}">
+                        <view class="weekly-excerpt" wx:for="{{weekly.excerpts}}" wx:key="date">
+                            <text class="excerpt-meta">{{item.date}} · {{item.label}}</text>
+                            <text class="excerpt-text">{{item.text}}</text>
+                        </view>
+                    </block>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">工作 · 任务与感想</text>
+                    <text class="section-note">来自九宫格「工作」格 · 本机统计</text>
+                </view>
+                <view class="card work-digest-card">
+                    <view class="review-tabs">
+                        <view class="review-tab {{workPeriod === 'week' ? 'review-tab-on' : ''}}"
+                              data-period="week" bindtap="onWorkPeriod">本周</view>
+                        <view class="review-tab {{workPeriod === 'month' ? 'review-tab-on' : ''}}"
+                              data-period="month" bindtap="onWorkPeriod">本月</view>
+                        <view class="review-tab {{workPeriod === 'year' ? 'review-tab-on' : ''}}"
+                              data-period="year" bindtap="onWorkPeriod">本年</view>
+                    </view>
+                    <text class="wd-range">{{workDigest.periodWord}} · {{workDigest.rangeLabel}}</text>
+
+                    <view class="wd-metrics">
+                        <view class="wd-metric">
+                            <text class="wd-metric-num wd-num-open">{{workDigest.taskOpen}}</text>
+                            <text class="wd-metric-label">未完成</text>
+                        </view>
+                        <view class="wd-metric">
+                            <text class="wd-metric-num">{{workDigest.taskDone}}</text>
+                            <text class="wd-metric-label">已完成</text>
+                        </view>
+                        <view class="wd-metric">
+                            <text class="wd-metric-num">{{workDigest.pct}}%</text>
+                            <text class="wd-metric-label">完成率</text>
+                        </view>
+                        <view class="wd-metric">
+                            <text class="wd-metric-num">{{workDigest.reflectCount}}</text>
+                            <text class="wd-metric-label">感想 · 篇</text>
+                        </view>
+                    </view>
+                    <text class="wd-insight">{{workDigest.insight}}</text>
+
+                    <view class="wd-block" wx:if="{{workDigest.filters.length > 1}}">
+                        <text class="wd-block-title">按标签查看</text>
+                        <view class="wd-chips">
+                            <view class="wd-chip {{item.active ? 'wd-chip-on' : ''}}"
+                                  wx:for="{{workDigest.filters}}" wx:key="key"
+                                  data-tag="{{item.tag}}" bindtap="onWorkTag">
+                                <text>{{item.label}}</text>
+                                <text class="wd-chip-num">{{item.total}}</text>
+                            </view>
+                        </view>
+                    </view>
+
+                    <view class="wd-block" wx:if="{{!workDigest.empty}}">
+                        <text class="wd-block-title">未完成 · {{workDigest.taskOpen}} 项</text>
+                        <view class="wd-task" wx:for="{{workDigest.openTasks}}" wx:key="id"
+                              data-date="{{item.date}}" bindtap="onEditDate">
+                            <view class="wd-dot wd-dot-open"></view>
+                            <view class="wd-task-main">
+                                <text class="wd-task-title">{{item.title}}</text>
+                                <view class="wd-task-meta">
+                                    <text class="wd-task-date">{{item.dateLabel}}</text>
+                                    <text class="wd-task-tag" wx:for="{{item.tags}}" wx:for-item="tg"
+                                          wx:for-index="ti" wx:key="*this">#{{tg}}</text>
+                                </view>
+                            </view>
+                            <text class="wd-go">›</text>
+                        </view>
+                        <text class="wd-none" wx:if="{{!workDigest.openTasks.length}}">这一周期没有未完成的任务，节奏不错。</text>
+                        <text class="wd-more" wx:if="{{workDigest.openMore > 0}}">只列了最近 {{workDigest.openTasks.length}} 条，另有 {{workDigest.openMore}} 条较早的未完成。</text>
+                    </view>
+
+                    <view class="wd-block" wx:if="{{workDigest.taskDone > 0}}">
+                        <view class="wd-block-head" bindtap="onToggleWorkDone">
+                            <text class="wd-block-title">已完成 · {{workDigest.taskDone}} 项</text>
+                            <text class="wd-toggle">{{workDoneOpen ? '收起 ▴' : '展开 ▾'}}</text>
+                        </view>
+                        <block wx:if="{{workDoneOpen}}">
+                            <view class="wd-task" wx:for="{{workDigest.doneTasks}}" wx:key="id"
+                                  data-date="{{item.date}}" bindtap="onEditDate">
+                                <view class="wd-dot wd-dot-done"></view>
+                                <view class="wd-task-main">
+                                    <text class="wd-task-title wd-task-title-done">{{item.title}}</text>
+                                    <view class="wd-task-meta">
+                                        <text class="wd-task-date">{{item.dateLabel}}</text>
+                                        <text class="wd-task-tag" wx:for="{{item.tags}}" wx:for-item="tg"
+                                              wx:for-index="ti" wx:key="*this">#{{tg}}</text>
+                                    </view>
+                                </view>
+                            </view>
+                            <text class="wd-more" wx:if="{{workDigest.doneMore > 0}}">另有 {{workDigest.doneMore}} 条较早的已完成任务。</text>
+                        </block>
+                    </view>
+
+                    <view class="wd-block" wx:if="{{workDigest.reflectCount > 0}}">
+                        <text class="wd-block-title">工作感想 · {{workDigest.reflectCount}} 篇 / {{workDigest.reflectChars}} 字</text>
+                        <block wx:for="{{workDigest.reflections}}" wx:key="date">
+                            <view class="wd-reflect" wx:if="{{workReflectOpen || index < 3}}">
+                                <text class="wd-reflect-date">{{item.dateLabel}}</text>
+                                <text class="wd-reflect-text">{{item.text}}</text>
+                            </view>
+                        </block>
+                        <text class="wd-toggle wd-toggle-wide" wx:if="{{workDigest.reflectCount > 3}}"
+                              bindtap="onToggleWorkReflect">{{workReflectOpen ? '收起 ▴' : '展开全部 ' + workDigest.reflectCount + ' 篇 ▾'}}</text>
+                    </view>
+
+                    <text wx:if="{{workDigest.empty}}" class="wd-empty">这一周期还没有工作记录。点首页「工作」格，写一条任务或一句感想就好。</text>
+                    <text class="wd-foot">{{workDigest.note}}</text>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">收支汇总</text>
+                    <text class="section-note">来自九宫格「金钱」格 · 本机统计</text>
+                </view>
+                <view class="card money-summary-card">
+                    <view class="review-tabs">
+                        <view class="review-tab {{moneyPeriod === 'week' ? 'review-tab-on' : ''}}"
+                              data-period="week" bindtap="onMoneyPeriod">本周</view>
+                        <view class="review-tab {{moneyPeriod === 'month' ? 'review-tab-on' : ''}}"
+                              data-period="month" bindtap="onMoneyPeriod">本月</view>
+                        <view class="review-tab {{moneyPeriod === 'year' ? 'review-tab-on' : ''}}"
+                              data-period="year" bindtap="onMoneyPeriod">本年</view>
+                    </view>
+                    <text class="ms-range">{{moneySummary.periodLabel}} · {{moneySummary.rangeLabel}}</text>
+
+                    <view class="ms-metrics">
+                        <view class="ms-metric">
+                            <text class="ms-metric-num ms-in">{{moneySummary.incomeText}}</text>
+                            <text class="ms-metric-label">收入</text>
+                        </view>
+                        <view class="ms-metric">
+                            <text class="ms-metric-num ms-out">{{moneySummary.expenseText}}</text>
+                            <text class="ms-metric-label">支出</text>
+                        </view>
+                        <view class="ms-metric">
+                            <text class="ms-metric-num">{{moneySummary.balanceText}}</text>
+                            <text class="ms-metric-label">结余</text>
+                        </view>
+                        <view class="ms-metric">
+                            <text class="ms-metric-num">{{moneySummary.count}}</text>
+                            <text class="ms-metric-label">笔数 · {{moneySummary.days}} 天</text>
+                        </view>
+                    </view>
+                    <text class="ms-insight">{{moneySummary.insight}}</text>
+
+                    <block wx:if="{{!moneySummary.empty}}">
+                        <view class="ms-block">
+                            <text class="ms-block-title">支出分类</text>
+                            <view class="ms-cat" wx:for="{{moneySummary.byCategory}}" wx:key="id">
+                                <text class="ms-cat-label">{{item.label}}</text>
+                                <view class="ms-cat-track"><view class="ms-cat-fill" style="width:{{item.pct}}%"></view></view>
+                                <text class="ms-cat-value">{{item.text}} · {{item.pct}}%</text>
+                            </view>
+                        </view>
+
+                        <view class="ms-block">
+                            <text class="ms-block-title">节奏</text>
+                            <view class="ms-legend">
+                                <view class="ms-legend-item"><view class="ms-legend-dot ms-bar-out"></view><text>支出</text></view>
+                                <view class="ms-legend-item"><view class="ms-legend-dot ms-bar-in"></view><text>收入</text></view>
+                            </view>
+                            <view class="ms-bars">
+                                <view class="ms-bar-col" wx:for="{{moneySummary.trend}}" wx:key="label">
+                                    <view class="ms-bar-track">
+                                        <view class="ms-bar ms-bar-out" style="height:{{item.expenseH}}%"></view>
+                                        <view class="ms-bar ms-bar-in" style="height:{{item.incomeH}}%"></view>
+                                    </view>
+                                    <text class="ms-bar-label">{{item.label}}</text>
+                                </view>
+                            </view>
+                        </view>
+
+                        <view class="ms-block" wx:if="{{moneySummary.recent.length}}">
+                            <text class="ms-block-title">最近几笔</text>
+                            <view class="ms-recent" wx:for="{{moneySummary.recent}}" wx:key="id">
+                                <text class="ms-recent-date">{{item.dateLabel}}</text>
+                                <text class="ms-recent-cat">{{item.label}}</text>
+                                <text class="ms-recent-note">{{item.note}}</text>
+                                <text class="ms-recent-amount {{item.type === 'income' ? 'ms-in' : 'ms-out'}}">{{item.amountText}}</text>
+                            </view>
+                        </view>
+                    </block>
+                    <text wx:if="{{moneySummary.empty}}" class="ms-empty">这一周期还没有收支记录。点首页「金钱」格，随手记一笔就好。</text>
+                    <text class="ms-foot">{{moneySummary.note}}</text>
+                    <button class="btn-ghost ms-copy" bindtap="onCopyMoneySummary">复制收支汇总</button>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">学习进展</text>
+                    <text class="section-note">来自九宫格「学习成长」格 · 本机统计</text>
+                </view>
+                <view class="card study-summary-card">
+                    <view class="review-tabs">
+                        <view class="review-tab {{studyPeriod === 'week' ? 'review-tab-on' : ''}}"
+                              data-period="week" bindtap="onStudyPeriod">本周</view>
+                        <view class="review-tab {{studyPeriod === 'month' ? 'review-tab-on' : ''}}"
+                              data-period="month" bindtap="onStudyPeriod">本月</view>
+                        <view class="review-tab {{studyPeriod === 'year' ? 'review-tab-on' : ''}}"
+                              data-period="year" bindtap="onStudyPeriod">本年</view>
+                    </view>
+                    <text class="ss-range">{{studySummary.periodLabel}} · {{studySummary.rangeLabel}}</text>
+
+                    <view class="ss-metrics">
+                        <view class="ss-metric">
+                            <text class="ss-metric-num">{{studySummary.count}}</text>
+                            <text class="ss-metric-label">条进展 · {{studySummary.days}} 天</text>
+                        </view>
+                        <view class="ss-metric">
+                            <text class="ss-metric-num">{{studySummary.steps}}</text>
+                            <text class="ss-metric-label">推进单位</text>
+                        </view>
+                        <view class="ss-metric">
+                            <text class="ss-metric-num">{{studySummary.overall.finished}}</text>
+                            <text class="ss-metric-label">已完成 / {{studySummary.overall.total}} 项</text>
+                        </view>
+                        <view class="ss-metric">
+                            <text class="ss-metric-num">{{studySummary.overall.avgPct}}%</text>
+                            <text class="ss-metric-label">整体推进</text>
+                        </view>
+                    </view>
+                    <text class="ss-insight">{{studySummary.insight}}</text>
+
+                    <block wx:if="{{!studySummary.empty}}">
+                        <view class="ss-block">
+                            <text class="ss-block-title">四类分布</text>
+                            <view class="ss-kind" wx:for="{{studySummary.byKind}}" wx:key="id">
+                                <text class="ss-kind-label">{{item.label}}</text>
+                                <view class="ss-kind-track"><view class="ss-kind-fill" style="width:{{item.pct}}%"></view></view>
+                                <text class="ss-kind-value">{{item.count}} 条</text>
+                            </view>
+                        </view>
+
+                        <view class="ss-block" wx:if="{{studySummary.topics.length}}">
+                            <text class="ss-block-title">主题进度</text>
+                            <view class="ss-topic" wx:for="{{studySummary.topics}}" wx:key="id">
+                                <text class="ss-topic-label">{{item.title}}</text>
+                                <view class="ss-topic-track"><view class="ss-topic-fill" style="width:{{item.pct}}%"></view></view>
+                                <text class="ss-topic-value">{{item.pct}}%</text>
+                            </view>
+                        </view>
+
+                        <view class="ss-block" wx:if="{{studySummary.recent.length}}">
+                            <text class="ss-block-title">最近记录</text>
+                            <view class="ss-recent" wx:for="{{studySummary.recent}}" wx:key="id">
+                                <text class="ss-recent-date">{{item.dateLabel}}</text>
+                                <text class="ss-recent-title">{{item.title}} · {{item.actionLabel}}</text>
+                                <text class="ss-recent-progress">{{item.progressText}}</text>
+                            </view>
+                        </view>
+                    </block>
+                    <text wx:if="{{studySummary.empty}}" class="ss-empty">这一周期还没有学习进展。点首页「学习成长」格，记下一页就好。</text>
+                    <text class="ss-foot">{{studySummary.note}}</text>
+                    <button class="btn-ghost ss-copy" bindtap="onCopyStudySummary">复制学习汇总</button>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">近 30 天的心情</text>
+                    <text class="section-note">有效心情 {{moodWithMood}} / 30 天</text>
+                </view>
+                <view class="card trend-card">
+                    <view class="trend-chart">
+                        <view class="trend-col" wx:for="{{moodItems}}" wx:key="date">
+                            <view class="trend-bar {{item.cls}}" style="height:{{item.barH}}rpx"></view>
+                        </view>
+                    </view>
+                    <view class="trend-axis">
+                        <text>30 天前</text>
+                        <text>今天</text>
+                    </view>
+                    <text class="trend-note">{{moodNote}}</text>
+                    <text class="trend-meta">平均 {{moodAverage}} / 5 · 柱子越矮，那天越没记心情</text>
+                </view>
+            </scroll-view>
+        </swiper-item>
+
+        <!-- ================= 二、复盘：三问 + 九格汇总 + 反复出现的字句 ================= -->
+        <swiper-item>
+            <scroll-view class="rv-scroll" scroll-y enable-back-to-top>
+                <view class="section-head section-head-first">
+                    <text class="section-title">复盘三问</text>
+                    <text class="section-note">从记录里看出规律</text>
+                </view>
+                <view class="card review-card">
+                    <view class="review-tabs">
+                        <view class="review-tab {{reviewPeriod === 'week' ? 'review-tab-on' : ''}}"
+                              data-period="week" bindtap="onReviewPeriod">本周</view>
+                        <view class="review-tab {{reviewPeriod === 'month' ? 'review-tab-on' : ''}}"
+                              data-period="month" bindtap="onReviewPeriod">本月</view>
+                    </view>
+                    <view class="review-q" wx:for="{{reviewRows}}" wx:key="index">
+                        <text class="review-q-label">{{item.index + 1}}. {{item.q}}</text>
+                        <textarea class="review-input" value="{{item.a}}" data-index="{{item.index}}"
+                                  bindinput="onReviewInput" placeholder="写一句就好" placeholder-class="input-ph"
+                                  maxlength="500" auto-height fixed="true" show-confirm-bar="{{false}}" />
+                    </view>
+                    <button class="btn-primary review-save" bindtap="onSaveReview">保存复盘</button>
+                    <text class="review-note">按周／月分别保存在本机，换设备前记得导出备份。</text>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">九格模块汇总</text>
+                    <text class="section-note">每格写了多少天 · {{digest.rangeLabel}}</text>
+                </view>
+                <view class="card digest-card">
+                    <view class="review-tabs">
+                        <view class="review-tab {{digestPeriod === 'week' ? 'review-tab-on' : ''}}"
+                              data-period="week" bindtap="onDigestPeriod">本周</view>
+                        <view class="review-tab {{digestPeriod === 'month' ? 'review-tab-on' : ''}}"
+                              data-period="month" bindtap="onDigestPeriod">本月</view>
+                        <view class="review-tab {{digestPeriod === 'year' ? 'review-tab-on' : ''}}"
+                              data-period="year" bindtap="onDigestPeriod">本年</view>
+                    </view>
+                    <text class="dg-insight">{{digest.insight}}</text>
+                    <view class="dg-rows">
+                        <!-- 默认只显示「写了几天 / 多少字」和覆盖率，最近一句点开才看：
+                             九行全展开的话，这一屏全是正文，扫不出哪格空着 -->
+                        <view class="dg-row {{item.days ? '' : 'dg-row-idle'}} {{digestOpen[item.key] ? 'dg-row-open' : ''}}"
+                              wx:for="{{digest.rows}}" wx:key="key"
+                              data-key="{{item.key}}" bindtap="onDigestRowTap"
+                              hover-class="{{item.last ? 'dg-row-hover' : 'none'}}" hover-stay-time="80">
+                            <view class="dg-top">
+                                <text class="dg-label">{{item.label}}</text>
+                                <view class="dg-top-right">
+                                    <text class="dg-meta">{{item.metaText}}</text>
+                                    <text class="dg-caret" wx:if="{{item.last}}">▾</text>
+                                </view>
+                            </view>
+                            <view class="dg-track">
+                                <view class="dg-fill" style="width:{{item.pct}}%"></view>
+                            </view>
+                            <text class="dg-last" wx:if="{{item.last && digestOpen[item.key]}}">{{item.last}}</text>
+                        </view>
+                    </view>
+                    <text class="dg-foot">{{digest.note}}</text>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">反复出现的字句</text>
+                    <text class="section-note">本机统计 · {{phraseScanned}} 篇</text>
+                </view>
+                <view class="card phrase-card">
+                    <block wx:if="{{phrases.length > 0}}">
+                        <view class="phrase-wrap">
+                            <view class="phrase-item" wx:for="{{phrases}}" wx:key="phrase">
+                                <text class="phrase-text">{{item.phrase}}</text>
+                                <text class="phrase-count">{{item.days}} 天</text>
+                            </view>
+                        </view>
+                    </block>
+                    <text wx:else class="phrase-empty">写得多了，这里会浮现你反复提起的字句。</text>
+                    <text class="phrase-note">{{phraseNote}}</text>
+                </view>
+            </scroll-view>
+        </swiper-item>
+
+        <!-- ================= 三、日记：按日期翻 ================= -->
+        <swiper-item>
+            <scroll-view class="rv-scroll" scroll-y enable-back-to-top
+                         scroll-into-view="{{diaryAnchor}}">
+                <view id="diary-top"></view>
+
+                <picker mode="date" value="{{selectedDate}}" bindchange="onDateChange">
+                    <view class="date-bar card">
+                        <view class="date-bar-left">
+                            <text class="date-bar-label">回看日期</text>
+                            <text class="date-bar-value">{{selectedDateLabel}}</text>
+                        </view>
+                        <text class="date-bar-arrow">切换日期 ›</text>
+                    </view>
+                </picker>
+
+                <view class="section-head">
+                    <text class="section-title">这一天的历年日记</text>
+                    <text class="section-note">{{monthDayLabel}} · 共 {{sameDay.length}} 年</text>
+                </view>
+
+                <block wx:if="{{sameDay.length > 0}}">
+                    <view class="year-card card" wx:for="{{sameDay}}" wx:key="date">
+                        <view class="year-head">
+                            <text class="year-badge">{{item.year}}</text>
+                            <text class="year-date">{{item.dateLabel}}</text>
+                            <text class="year-edit" data-date="{{item.date}}" bindtap="onEditDate">补记 ›</text>
+                        </view>
+                        <view class="year-basic" wx:if="{{item.basicText}}">
+                            <text>{{item.basicText}}</text>
+                        </view>
+                        <view class="year-line" wx:for="{{item.lines}}" wx:for-item="line" wx:key="label">
+                            <text class="line-label">{{line.label}}</text>
+                            <text class="line-text">{{line.text}}</text>
+                        </view>
+                    </view>
+                </block>
+                <view class="card empty-card" wx:else>
+                    <text class="empty-icon">○</text>
+                    <text class="empty-title">这一天还没有记录</text>
+                    <text class="empty-desc">换一个日期，或直接补记这一天。</text>
+                    <text class="empty-edit" bindtap="onEditSelected">去补记这一天 ›</text>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">这一年的每一天</text>
+                    <text class="section-note">已写 {{pixelWritten}} 天</text>
+                </view>
+                <view class="card pixel-card">
+                    <view class="pixel-top">
+                        <text class="pixel-year-btn" bindtap="onPrevYear">‹ 上一年</text>
+                        <text class="pixel-year">{{pixelYear}} 年</text>
+                        <text class="pixel-year-btn {{canNextPixel ? '' : 'pixel-year-btn-off'}}"
+                              bindtap="onNextYear">下一年 ›</text>
+                    </view>
+                    <view class="pixel-chart">
+                        <view class="pixel-col" wx:for="{{pixelMonths}}" wx:key="month">
+                            <view wx:for="{{item.cells}}" wx:for-item="c" wx:key="day"
+                                  class="pixel-cell {{c.cls}}"></view>
+                            <text class="pixel-month">{{item.label}}</text>
+                        </view>
+                    </view>
+                    <view class="pixel-legend">
+                        <view class="legend-item"><view class="legend-dot px-empty"></view><text class="legend-label">没写</text></view>
+                        <view class="legend-item"><view class="legend-dot px-written"></view><text class="legend-label">写了</text></view>
+                        <view class="legend-item"><view class="legend-dot px-5"></view><text class="legend-label">愉悦</text></view>
+                        <view class="legend-item"><view class="legend-dot px-1"></view><text class="legend-label">烦躁</text></view>
+                    </view>
+                    <text class="pixel-note">空白不是失败，只是还没来得及写；点「上一年」可以回看更早的年份。</text>
+                </view>
+
+                <view class="section-head">
+                    <text class="section-title">随手重读一篇</text>
+                    <text class="section-note">还没跨年的日子也有得看</text>
+                </view>
+                <view class="random-bar" bindtap="onRandom">
+                    <text class="random-btn">{{randomShown ? '再换一篇 ↻' : '给我一篇看看 ↻'}}</text>
+                </view>
+                <block wx:if="{{randomShown}}">
+                    <view wx:if="{{randomCard}}" class="year-card card random-card">
+                        <view class="year-head">
+                            <text class="year-badge">{{randomCard.year}}</text>
+                            <text class="year-date">{{randomCard.dateLabel}}</text>
+                            <text class="year-edit" data-date="{{randomCard.date}}" bindtap="onEditDate">补记 ›</text>
+                        </view>
+                        <view class="year-basic" wx:if="{{randomCard.basicText}}">
+                            <text>{{randomCard.basicText}}</text>
+                        </view>
+                        <view class="year-line" wx:for="{{randomCard.lines}}" wx:for-item="line" wx:key="label">
+                            <text class="line-label">{{line.label}}</text>
+                            <text class="line-text">{{line.text}}</text>
+                        </view>
+                    </view>
+                    <view wx:else class="card empty-card empty-card-small">
+                        <text class="empty-title">还没有可重读的日记</text>
+                        <text class="empty-desc">去「今日」写下一篇，这里就会有一篇属于你的回顾。</text>
+                    </view>
+                </block>
+
+                <view class="section-head">
+                    <text class="section-title">关键词查找</text>
+                    <text class="section-note">也可只按心情浏览</text>
+                </view>
+                <view class="search-card card">
+                    <input class="search-input" value="{{searchKeyword}}" bindinput="onSearchInput"
+                           placeholder="输入关键词，如「项目」「体检」" placeholder-class="input-ph"
+                           confirm-type="search" bindconfirm="doSearch" />
+                    <view class="search-btn" bindtap="doSearch">查找</view>
+                </view>
+                <view class="mood-filter">
+                    <text class="mood-filter-label">按心情筛</text>
+                    <view class="mood-filter-chips">
+                        <view wx:for="{{moodFilters}}" wx:key="value"
+                              class="mood-chip {{item.selected ? 'mood-chip-on' : ''}}"
+                              data-value="{{item.value}}" bindtap="onPickMoodFilter">{{item.label}}</view>
+                    </view>
+                </view>
+
+                <block wx:if="{{searched}}">
+                    <view wx:if="{{searchHits.length > 0}}" class="hit-list">
+                        <view class="card hit-item" wx:for="{{searchHits}}" wx:key="id">
+                            <view class="hit-head">
+                                <text class="hit-date">{{item.date}}</text>
+                                <text class="tag">{{item.label}}</text>
+                            </view>
+                            <text class="hit-text">{{item.text}}</text>
+                        </view>
+                    </view>
+                    <view wx:else class="card empty-card empty-card-small">
+                        <text class="empty-title">{{searchKeyword ? '没有找到「' + searchKeyword + '」' : '这个心情下还没有日记'}}</text>
+                        <text class="empty-desc">{{searchKeyword ? '换个词试试，关键词会同时搜索栏位内容与基本栏位。' : '换一个心情，或先去写今天的一行。'}}</text>
+                    </view>
+                </block>
+
+                <view class="section-head">
+                    <text class="section-title">全部日记</text>
+                    <text class="section-note">共 {{totalCount}} 篇</text>
+                </view>
+                <view wx:if="{{allDates.length > 0}}" class="card list-card">
+                    <view class="list-item" wx:for="{{allDates}}" wx:key="*this"
+                          data-date="{{item}}" bindtap="viewDate">
+                        <text class="list-date">{{item}}</text>
+                        <text class="list-arrow">›</text>
+                    </view>
+                </view>
+                <view wx:else class="card empty-card empty-card-small">
+                    <text class="empty-title">还没有日记</text>
+                    <text class="empty-desc">写下第一篇后，这里会按日期排列。</text>
+                </view>
+            </scroll-view>
+        </swiper-item>
+    </swiper>
+</view>

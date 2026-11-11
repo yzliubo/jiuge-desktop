@@ -1,0 +1,1950 @@
+'use strict';
+// B 架构 M3 最小可运行入口：加载 Vue3/Vite 静态产物，接上 M0/M1 数据层。
+// 本文件不覆盖 src/main/main.js（旧等价移植入口保持可用，便于回滚对比）。
+// 启动：npm run start:v2 （需先 npm run build:view）
+const { app, BrowserWindow, ipcMain, powerMonitor, dialog, shell } = require('electron');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createJournal } = require('../core/journal.js');
+const { createRepository } = require('../core/repository.js');
+const { createLifecycle } = require('../core/lifecycle.js');
+const { createApiLayer } = require('../core/api-layer.js');
+const { createMigrator } = require('../core/migrate.js');
+const { createRecycle } = require('../core/recycle.js');
+const persistence = require('../core/persistence.js');
+// 本地电子书正文 / 目录解析：EPUB 走 ZIP，TXT/MD 分章，零第三方依赖
+const readerSource = require('../reading/reader-source.js');
+// 本机时间源：只读订阅 ActivityWatch（127.0.0.1:5600），不采集、不写回、不落窗口标题
+const worktimeMod = require('../worktime/board.js');
+const worktimeClient = require('../worktime/client.js');
+const worktimeAgg = require('../worktime/aggregate.js');
+// 首页天气：IP 定位 + Open-Meteo（两个提供方都免 Key）。只发 GET、只连白名单域名
+const weatherMod = require('../weather/board.js');
+const weatherClient = require('../weather/client.js');
+
+const DIST = path.resolve(__dirname, '../../renderer-v2/dist/index.html');
+// 独立阅读窗口：纯静态页，不进 vite 构建（三栏：目录 / 正文 / 笔记）
+const READER_HTML = path.resolve(__dirname, '../../renderer-v2/reader/index.html');
+// 独立账本窗口：Vite 第二入口，左（导航+净值）/ 中（模块）/ 右（洞察）三栏。
+// 与主窗共用同一个 v2-preload，所以 finance.* 仍走 v1/domain:call 白名单。
+const FINANCE_HTML = path.resolve(__dirname, '../../renderer-v2/dist/finance.html');
+const PROBE = process.env.JIUGE_V2_PROBE === '1';
+// 干净机 / 数据隔离：E2E 用独立 userData，绝不碰真实用户日记
+if (process.env.JIUGE_V2_USERDATA) app.setPath('userData', process.env.JIUGE_V2_USERDATA);
+let mainWindow = null;
+// 一本书一个阅读窗口：重复点「翻开读」只聚焦，不叠窗
+const readerWindows = new Map();
+// 账本全局只有一个窗口：重复点顶栏「账本」只聚焦，不叠窗
+let financeWindow = null;
+let journal = null;
+let repo = null;
+let lifecycle = null;
+
+function findLegacyStore() {
+  const base = app.getPath('userData');
+  const candidates = [
+    path.join(base, 'store.json'),
+    path.join(base, 'jiuge-desktop', 'store.json'),
+    path.join(base, '..', 'jiuge-desktop', 'store.json')
+  ];
+  return candidates.find(function (p) { return fs.existsSync(p); }) || null;
+}
+
+function bootCore() {
+  if (!fs.existsSync(DIST)) {
+    throw new Error('视图层产物不存在，请先执行 npm run build:view：' + DIST);
+  }
+  const dataDir = path.join(app.getPath('userData'), 'jiuge-data');
+  // 封面是小文件，落在本机数据目录；store 里只存 coverId，不塞 base64 进备份
+  const coverDir = path.join(dataDir, 'covers');
+  // 梦想的具象化图片：同一条目标一张，文件名 <dreamId>.<ext>，store 里只记文件名。
+  // 12MB 封顶——手机原图三五 MB 够用，再大就该先压缩（把几十 MB 的 base64 穿过 IPC 会卡界面）。
+  const dreamImageDir = path.join(dataDir, 'dream-images');
+  const DREAM_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+  const DREAM_IMAGE_MAX = 12 * 1024 * 1024;
+  function dreamImageMime(ext) {
+    return ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
+      : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  }
+  function dreamImagePath(name) {
+    // 只接受纯文件名：basename 不等于自身的一律拒绝，杜绝越界读写
+    const n = String(name || '');
+    if (!n || path.basename(n) !== n) return '';
+    return path.join(dreamImageDir, n);
+  }
+  function dropDreamImage(name) {
+    const p = dreamImagePath(name);
+    if (!p) return;
+    try { fs.unlinkSync(p); } catch (_) { /* 文件本来就不在：不算失败 */ }
+  }
+  journal = createJournal(dataDir);
+  // 封存箱与仓储互相依赖：StoragePort 需要问"这个键是不是被软删了"，
+  // 而封存箱要读写仓储。用 let 变量做延迟求值，创建 repo 时不做同步调用。
+  let recycle = null;
+  let autoBackup = { enabled: true, intervalMinutes: 30, kept: 5, lastAt: 0, lastId: '', timer: null };
+  repo = createRepository({
+    dir: dataDir,
+    journal: journal,
+    originWindowId: 'main',
+    isHidden: function (key) { return recycle ? recycle.isHidden(key) : false; }
+  });
+  const loaded = repo.load();
+  // 第一次打开种一棵初始的梦想树。
+  // 注意 repo.get 对不存在的键返回 undefined/''（不是 null），所以要看「里面有没有 dreams」，
+  // 不能只看键在不在——否则空库永远种不进去。用户把目标删光了也不会重种（那时 dreams 是 []）。
+  try {
+    const stored = repo.get('md_dream');
+    const hasDreams = stored && Array.isArray(stored.dreams);
+    if (!hasDreams) repo.set('md_dream', require('../dream/board.js').seedState());
+  } catch (e) { /* 种树失败不该拦住启动 */ }
+  lifecycle = createLifecycle(repo);
+
+  // StoragePort：8 utils 下沉主进程，全局仅一份实例，算法零改动
+  global.wx = repo.createWxAdapter();
+  let diary = require('../utils/diary-store.js');
+  // 封存/还原/焚毁之后必须让 diary-store 的模块级 memo 失效（memoAll/memoWritten/
+  // memoStats/memoFreq）。它只在内部 write() 里清缓存，没有对外导出，所以只能重载模块。
+  // domain 里的函数用闭包引用变量 diary，重载后自动指向新模块，调用方无感。
+  function reloadDiary() {
+    const p = require.resolve('../utils/diary-store.js');
+    delete require.cache[p];
+    diary = require(p);
+  }
+  const quotes = require('../utils/quotes.js');
+  const greetings = require('../utils/greetings.js');
+  const insights = require('../utils/cell-insights.js');
+  // GTD 是桌面端增量能力，单独成模块、存 md_gtd 单键：
+  // 8 个 utils 保持与源项目逐字节一致（verify 第 1 条 SHA256 对拍），不动一行。
+  const gtd = require('../gtd/board.js');
+  const GTD_KEY = 'md_gtd';
+  // 梦想（目标板）：原九格里的「梦想」格升成一级模块，存 md_dream 单键。
+  // 它要存的是期限、进度、量化指标，不是「今天写一句」。
+  const dream = require('../dream/board.js');
+  const DREAM_KEY = 'md_dream';
+  // 学习成长：考试考证 / 技能学习 / 主题阅读三种活动的时间尺度不同，
+  // 领域层用三张独立表（exams / skills / themes），一起存 md_growth 单键。
+  const growth = require('../growth/board.js');
+  const GROWTH_KEY = 'md_growth';
+  const growthStore = {
+    read: function () { return growth.normalize(repo.get(GROWTH_KEY)); },
+    write: function (next) {
+      const norm = growth.normalize(next);
+      repo.set(GROWTH_KEY, norm);
+      return norm;
+    },
+    mutate: function (fn) {
+      const s = growthStore.read();
+      const out = fn(s);
+      return growthStore.write(out || s);
+    }
+  };
+  // 语料库：名言警句 / 问候语 / 运动提示。
+  // 内置 539 条名言与 72 条问候/提示不复制进数据文件——只记「覆盖 / 隐藏 / 我的」
+  // 三种改动，所以 md_inspire 通常只有几百字节，导出备份也轻。
+  const inspire = require('../inspire/library.js');
+  const INSPIRE_KEY = 'md_inspire';
+  // V1.3 时间纵深：纯派生层，不建 store、不新增数据键、不改 8 个冻结 utils。
+  // 人生月历 / 正文待办 / 随机重读 / 导出卡 / 一个文件，都从这里出函数。
+  const v13 = require('../v13/board.js');
+  // ---- V2.0 / V2.1 领域层：各管各的新键，8 个冻结 utils 一行不动 ----
+  const searchMod = require('../search/query.js');
+  const tagsMod = require('../tags/board.js');
+  const recurMod = require('../recur/board.js');
+  const relationMod = require('../relation/board.js');
+  const termMod = require('../review/term.js');
+  const traceMod = require('../trace/board.js');
+  const secureMod = require('../secure/vault.js');
+  const attachMod = require('../attach/links.js');
+  // 图书馆（休闲娱乐阅读 + 主题阅读）与「读书笔记」数据库：md_reading 单键。
+  // 主题阅读的书单权威源仍是 md_growth，这里只放休闲书与全部笔记，绝不复制书单。
+  const readingMod = require('../reading/board.js');
+  // 本地电子书：只用 Node 内置 fs + zlib 读 EPUB 元数据 / 封面，零第三方依赖
+  const readingEpub = require('../reading/epub.js');
+  // 家庭账本（md_finance）：信封预算 + 条件→动作自动分类 + CSV 导入，金额全程整数分。
+  const financeMod = require('../finance/board.js');
+  // 通用 store：normalize 幂等 + repo.set。新键必须显式包装进备份（见 exportBackup），
+  // 否则换机后这些模块的数据会静默丢失。
+  function makeDomainStore(key, api) {
+    return {
+      read: function () { return api.normalize(repo.get(key)); },
+      write: function (next) {
+        const norm = api.normalize(next);
+        repo.set(key, norm);
+        return norm;
+      },
+      mutate: function (fn) {
+        const s = this.read();
+        const out = fn(s);
+        return this.write(out || s);
+      }
+    };
+  }
+  const tagsStore = makeDomainStore('md_tags', tagsMod);
+  const recurStore = makeDomainStore('md_recur', recurMod);
+  const relationStore = makeDomainStore('md_relation', relationMod);
+  const termStore = makeDomainStore('md_term_review', termMod);
+  const traceStore = makeDomainStore('md_trace', traceMod);
+  const attachStore = makeDomainStore('md_attach', attachMod);
+  // 图书馆 / 读书笔记：同走 normalize 幂等 + repo.set，且必须显式进备份（见 V2_SECTIONS）
+  const readingStore = makeDomainStore('md_reading', readingMod);
+  // 家庭账本：独立单键，绝不与九格内的 MoneyView（按天挂在日记里）混写。
+  const financeStore = makeDomainStore('md_finance', financeMod);
+  // 本机时间源：日聚合 + 规则表，独立键（保留期与清空都能单独做）
+  const worktimeStore = makeDomainStore('md_worktime', worktimeMod);
+  // 首页天气：只存偏好（开关 / 模式 / 城市 / 坐标），缓存留在内存里。
+  // 不进备份是故意的：温度是「此刻的窗外」，不是你的记录，换台机器重新拉一次就行。
+  const weatherStore = makeDomainStore('md_weather', weatherMod);
+  const WEATHER_TTL = 30 * 60 * 1000;      // 成功一次管 30 分钟
+  const WEATHER_FAIL_TTL = 5 * 60 * 1000;  // 失败后 5 分钟内不再打网络，避免断网时反复重试
+  let weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+
+  // 本地日界：ActivityWatch 存 UTC，九格按本地日切分。时区只在这里出现一次。
+  function localDayBounds(date) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    const start = new Date(y, mo, d, 0, 0, 0, 0).getTime();
+    const end = new Date(y, mo, d + 1, 0, 0, 0, 0).getTime();
+    if (!(end > start)) return null;
+    return { start: start, end: end };
+  }
+  const inspireStore = {
+    read: function () { return inspire.normalize(repo.get(INSPIRE_KEY)); },
+    write: function (next) {
+      const norm = inspire.normalize(next);
+      repo.set(INSPIRE_KEY, norm);
+      return norm;
+    },
+    mutate: function (fn) {
+      const s = inspireStore.read();
+      const out = fn(s);
+      return inspireStore.write(out || s);
+    }
+  };
+  const dreamStore = {
+    read: function () { return dream.normalize(repo.get(DREAM_KEY)); },
+    write: function (next) {
+      const norm = dream.normalize(next);
+      repo.set(DREAM_KEY, norm);
+      return norm;
+    },
+    mutate: function (fn) {
+      const s = dreamStore.read();
+      const out = fn(s);
+      return dreamStore.write(out || s);
+    }
+  };
+  const gtdStore = {
+    read: function () { return gtd.normalize(repo.get(GTD_KEY)); },
+    write: function (next) {
+      const norm = gtd.normalize(next);
+      repo.set(GTD_KEY, norm);
+      return norm;
+    },
+    mutate: function (fn) {
+      const s = gtdStore.read();
+      const out = fn(s);
+      return gtdStore.write(out || s);
+    }
+  };
+
+  // 主题阅读书单从 md_growth 只读派生（扁平化给视图用），绝不写进 md_reading。
+  // 图书馆里的「翻页」也转发 growth.advanceBook：同一份事实只能有一个写口。
+  function themeBooksFlat() {
+    const g = growthStore.read();
+    const out = [];
+    (g.themes || []).forEach(function (t) {
+      (t.books || []).forEach(function (b) {
+        const pct = b.status === 'done' ? 100 : (b.total > 0 ? Math.round(b.done * 100 / b.total) : 0);
+        out.push({
+          themeId: t.id, themeTitle: t.title || '',
+          bookId: b.id, title: b.title || '', author: b.author || '',
+          total: b.total || 0, done: b.done || 0, unit: b.unit || '\u9875',
+          status: b.status || 'todo', pct: pct,
+          quoteCount: (b.quotes || []).length
+        });
+      });
+    });
+    return out;
+  }
+
+  // 闭包绑定而非值拷贝：reloadDiary() 后所有领域函数自动指向新模块。
+  // 这是封存箱能让 all()/stats/search 立刻看到删除结果的前提。
+  const domain = {};
+  Object.keys(diary).forEach(function (k) {
+    if (typeof diary[k] === 'function') {
+      domain[k] = function () { return diary[k].apply(null, arguments); };
+    } else {
+      domain[k] = diary[k];
+    }
+  });
+  Object.assign(domain, {
+    'quotes.size': function () { return quotes.size; },
+    'quotes.dailyIndex': quotes.dailyIndex,
+    'quotes.randomIndex': quotes.randomIndex,
+    'quotes.pick': quotes.pick,
+    'greetings.compose': greetings.compose,
+    'greetings.periodOf': greetings.periodOf,
+    'insights.axisOf': insights.axisOf,
+    'insights.analyze': insights.analyze,
+
+    // ---- GTD 工作台 ----
+    'gtd.read': function () { return gtdStore.read(); },
+    'gtd.statusMeta': function () {
+      return {
+        status: gtd.STATUS,
+        label: gtd.STATUS_LABEL,
+        hint: gtd.STATUS_HINT,
+        contexts: gtd.CONTEXTS,
+        limits: {
+          title: gtd.TITLE_MAX, note: gtd.NOTE_MAX, waitingFor: gtd.WAITING_MAX,
+          context: gtd.CONTEXT_MAX, project: gtd.PROJECT_MAX,
+          tasks: gtd.MAX_TASKS, projects: gtd.MAX_PROJECTS, doneKeepDays: gtd.DONE_KEEP_DAYS,
+          childMax: gtd.MAX_CHILDREN, depthMax: gtd.PARENT_DEPTH
+        }
+      };
+    },
+    'gtd.add': function (patch) {
+      return gtdStore.mutate(function (s) { return gtd.addTask(s, patch || {}); });
+    },
+    'gtd.update': function (id, patch) {
+      return gtdStore.mutate(function (s) { return gtd.updateTask(s, id, patch || {}); });
+    },
+    'gtd.remove': function (id) {
+      return gtdStore.mutate(function (s) { return gtd.removeTask(s, id); });
+    },
+    'gtd.complete': function (id) {
+      return gtdStore.mutate(function (s) { return gtd.complete(s, id); });
+    },
+    // 连同子项一起完成：界面在勾父任务且还有未完成子项时用这条，
+    // 不去级联删除、也不静默只完成父项
+    'gtd.completeAll': function (id) {
+      return gtdStore.mutate(function (s) { return gtd.completeAll(s, id); });
+    },
+    'gtd.completionInfo': function (id) { return gtd.completionInfo(gtdStore.read(), id); },
+    'gtd.reopen': function (id) {
+      return gtdStore.mutate(function (s) { return gtd.reopen(s, id); });
+    },
+    'gtd.clarify': function (id, status, patch) {
+      return gtdStore.mutate(function (s) { return gtd.clarify(s, id, status, patch || {}); });
+    },
+    'gtd.board': function (nowDate) { return gtd.board(gtdStore.read(), nowDate); },
+    // ---- 今日六点：只存指针，跨天不结转 ----
+    'gtd.focus': function (nowDate) { return gtd.focusOf(gtdStore.read(), nowDate); },
+    'gtd.focusCandidates': function (nowDate) { return gtd.focusCandidates(gtdStore.read(), nowDate); },
+    'gtd.focusToggle': function (nowDate, id, cell) {
+      return gtdStore.mutate(function (s) { return gtd.toggleFocus(s, nowDate, id, cell); });
+    },
+    'gtd.focusSet': function (nowDate, ids) {
+      return gtdStore.mutate(function (s) { return gtd.setFocus(s, nowDate, ids); });
+    },
+    'gtd.focusClear': function (nowDate) {
+      return gtdStore.mutate(function (s) { return gtd.clearFocus(s, nowDate); });
+    },
+    'gtd.review': function (nowDate) { return gtd.weeklyReview(gtdStore.read(), nowDate); },
+    'gtd.markReviewed': function (nowDate) {
+      return gtdStore.mutate(function (s) { return gtd.markReviewed(s, nowDate); });
+    },
+    'gtd.projects': function () { return gtd.projectRollup(gtdStore.read()); },
+    'gtd.contexts': function () { return gtd.contextPool(gtdStore.read()); },
+    // ---- 项目 / 情境的用户层：新建 / 改名 / 归档 / 删除 ----
+    // 这四个动作都会改任务上的归属字段，所以必须走 mutate（一次落盘），不能只改名单
+    'gtd.projectAdd': function (name) {
+      return gtdStore.mutate(function (s) { return gtd.projectAdd(s, name); });
+    },
+    'gtd.projectRename': function (from, to) {
+      return gtdStore.mutate(function (s) { return gtd.projectRename(s, from, to); });
+    },
+    'gtd.projectArchive': function (name, archived) {
+      return gtdStore.mutate(function (s) { return gtd.projectArchive(s, name, archived); });
+    },
+    'gtd.projectRemove': function (name) {
+      return gtdStore.mutate(function (s) { return gtd.projectRemove(s, name); });
+    },
+    'gtd.contextAdd': function (name) {
+      return gtdStore.mutate(function (s) { return gtd.contextAdd(s, name); });
+    },
+    'gtd.contextRename': function (from, to) {
+      return gtdStore.mutate(function (s) { return gtd.contextRename(s, from, to); });
+    },
+    'gtd.contextRemove': function (name) {
+      return gtdStore.mutate(function (s) { return gtd.contextRemove(s, name); });
+    },
+    // ---- 梦想（目标板）----
+    'dream.meta': function () { return dream.meta(); },
+    // V2.1「主目标倒计时」只读入口：不新增字段，读不到主目标口径就在界面如实说明
+    'dream.read': function () { return dreamStore.read(); },
+    // 目标板上要看到「关联行动推进到哪」，所以把 GTD 任务一起传进去算
+    'dream.board': function (today) { return dream.board(dreamStore.read(), gtdStore.read().tasks, today); },
+    'dream.add': function (patch) {
+      return dreamStore.mutate(function (s) { return dream.add(s, patch || {}); });
+    },
+    'dream.update': function (id, patch) {
+      return dreamStore.mutate(function (s) { return dream.update(s, id, patch || {}); });
+    },
+    'dream.remove': function (id) {
+      // 删目标时顺手把它的图片一起删掉：store 里的引用没了，留着文件只会变成看不见的垃圾
+      const key = String(id || '');
+      const one = dreamStore.read().dreams.filter(function (d) { return d.id === key; })[0];
+      const out = dreamStore.mutate(function (s) { return dream.remove(s, id); });
+      if (one && one.image) dropDreamImage(one.image);
+      return out;
+    },
+    // 具象化图片：渲染层只给「选中的文件路径」，复制与命名都在主进程，
+    // store 里落的是文件名（换机丢图可以重选，但绝不把 base64 写进 journal）
+    'dream.setImage': function (id, srcPath) {
+      const key = String(id || '');
+      const one = dreamStore.read().dreams.filter(function (d) { return d.id === key; })[0];
+      if (!one) return { ok: false, reason: '找不到这条目标' };
+      const src = String(srcPath || '');
+      const ext = path.extname(src).slice(1).toLowerCase();
+      if (DREAM_IMAGE_EXTS.indexOf(ext) < 0) return { ok: false, reason: '只支持 JPG / PNG / WebP / GIF' };
+      let st;
+      try { st = fs.statSync(src); } catch (_) { return { ok: false, reason: '找不到这个文件' }; }
+      if (!st.isFile()) return { ok: false, reason: '这不是一个文件' };
+      if (st.size > DREAM_IMAGE_MAX) return { ok: false, reason: '图片超过 12MB，先压缩一下再选' };
+      try {
+        if (!fs.existsSync(dreamImageDir)) fs.mkdirSync(dreamImageDir, { recursive: true });
+        const name = key + '.' + ext;
+        // 换了扩展名就把旧文件删掉，否则同一条目标会留两份图
+        if (one.image && one.image !== name) dropDreamImage(one.image);
+        fs.copyFileSync(src, path.join(dreamImageDir, name));
+        dreamStore.mutate(function (s) { return dream.setImage(s, key, name); });
+        return { ok: true, image: name };
+      } catch (e) {
+        return { ok: false, reason: '保存失败：' + ((e && e.message) || e) };
+      }
+    },
+    'dream.clearImage': function (id) {
+      const key = String(id || '');
+      const one = dreamStore.read().dreams.filter(function (d) { return d.id === key; })[0];
+      if (!one) return { ok: false, reason: '找不到这条目标' };
+      const old = one.image;
+      dreamStore.mutate(function (s) { return dream.setImage(s, key, ''); });
+      if (old) dropDreamImage(old);
+      return { ok: true };
+    },
+    // 图片以 dataURL 回传：视图层 CSP 只放行 img-src 'self' data:，也不该拿到本机路径
+    'dream.image': function (id) {
+      const key = String(id || '');
+      const one = dreamStore.read().dreams.filter(function (d) { return d.id === key; })[0];
+      if (!one || !one.image) return '';
+      const p = dreamImagePath(one.image);
+      if (!p) return '';
+      try {
+        const buf = fs.readFileSync(p);
+        return 'data:' + dreamImageMime(path.extname(one.image).slice(1).toLowerCase()) + ';base64,' + buf.toString('base64');
+      } catch (_) { return ''; }
+    },
+    'dream.setTheme': function (theme) {
+      return dreamStore.mutate(function (s) { return dream.setTheme(s, theme); });
+    },
+    'dream.setFund': function (id, targetCents) {
+      return dreamStore.mutate(function (s) { return dream.setFund(s, id, targetCents); });
+    },
+    // 存款从金钱账户划过来：金额按「分」存，和账本口径一致
+    'dream.deposit': function (id, cents, date, note, source) {
+      return dreamStore.mutate(function (s) { return dream.deposit(s, id, cents, date, note, source); });
+    },
+    'dream.linkTask': function (id, taskId) {
+      return dreamStore.mutate(function (s) { return dream.linkTask(s, id, taskId); });
+    },
+    'dream.unlinkTask': function (id, taskId) {
+      return dreamStore.mutate(function (s) { return dream.unlinkTask(s, id, taskId); });
+    },
+
+    // ---- 学习成长（考试考证 / 技能学习 / 主题阅读）----
+    'growth.meta': function () { return growth.meta(); },
+    'growth.read': function () { return growthStore.read(); },
+    'growth.board': function (today) { return growth.board(growthStore.read(), today); },
+    'growth.addExam': function (patch) {
+      return growthStore.mutate(function (s) { return growth.addExam(s, patch || {}); });
+    },
+    'growth.updateExam': function (id, patch) {
+      return growthStore.mutate(function (s) { return growth.updateExam(s, id, patch || {}); });
+    },
+    'growth.removeExam': function (id) {
+      return growthStore.mutate(function (s) { return growth.removeExam(s, id); });
+    },
+    'growth.addSubject': function (examId, patch) {
+      return growthStore.mutate(function (s) { return growth.addSubject(s, examId, patch || {}); });
+    },
+    'growth.updateSubject': function (examId, subId, patch) {
+      return growthStore.mutate(function (s) { return growth.updateSubject(s, examId, subId, patch || {}); });
+    },
+    'growth.removeSubject': function (examId, subId) {
+      return growthStore.mutate(function (s) { return growth.removeSubject(s, examId, subId); });
+    },
+    'growth.setExamResult': function (id, score, passLine) {
+      return growthStore.mutate(function (s) { return growth.setExamResult(s, id, score, passLine); });
+    },
+    'growth.retakeExam': function (id) {
+      return growthStore.mutate(function (s) { return growth.retakeExam(s, id); });
+    },
+    'growth.addSkill': function (patch) {
+      return growthStore.mutate(function (s) { return growth.addSkill(s, patch || {}); });
+    },
+    'growth.updateSkill': function (id, patch) {
+      return growthStore.mutate(function (s) { return growth.updateSkill(s, id, patch || {}); });
+    },
+    'growth.removeSkill': function (id) {
+      return growthStore.mutate(function (s) { return growth.removeSkill(s, id); });
+    },
+    'growth.addMilestone': function (skillId, title) {
+      return growthStore.mutate(function (s) { return growth.addMilestone(s, skillId, title); });
+    },
+    'growth.toggleMilestone': function (skillId, msId) {
+      return growthStore.mutate(function (s) { return growth.toggleMilestone(s, skillId, msId); });
+    },
+    'growth.removeMilestone': function (skillId, msId) {
+      return growthStore.mutate(function (s) { return growth.removeMilestone(s, skillId, msId); });
+    },
+    // 练习记录是技能的唯一「投入」证据：只记日期与分钟，不做评分
+    'growth.addPractice': function (skillId, patch) {
+      return growthStore.mutate(function (s) { return growth.addPractice(s, skillId, patch || {}); });
+    },
+    'growth.removePractice': function (skillId, practiceId) {
+      return growthStore.mutate(function (s) { return growth.removePractice(s, skillId, practiceId); });
+    },
+    'growth.addTheme': function (patch) {
+      return growthStore.mutate(function (s) { return growth.addTheme(s, patch || {}); });
+    },
+    'growth.updateTheme': function (id, patch) {
+      return growthStore.mutate(function (s) { return growth.updateTheme(s, id, patch || {}); });
+    },
+    'growth.removeTheme': function (id) {
+      return growthStore.mutate(function (s) { return growth.removeTheme(s, id); });
+    },
+    'growth.addBook': function (themeId, patch) {
+      return growthStore.mutate(function (s) { return growth.addBook(s, themeId, patch || {}); });
+    },
+    'growth.updateBook': function (themeId, bookId, patch) {
+      return growthStore.mutate(function (s) { return growth.updateBook(s, themeId, bookId, patch || {}); });
+    },
+    'growth.removeBook': function (themeId, bookId) {
+      return growthStore.mutate(function (s) { return growth.removeBook(s, themeId, bookId); });
+    },
+    'growth.advanceBook': function (themeId, bookId, delta) {
+      return growthStore.mutate(function (s) { return growth.advanceBook(s, themeId, bookId, delta); });
+    },
+    'growth.setBookStatus': function (themeId, bookId, status) {
+      return growthStore.mutate(function (s) { return growth.setBookStatus(s, themeId, bookId, status); });
+    },
+    'growth.addQuote': function (themeId, bookId, patch) {
+      return growthStore.mutate(function (s) { return growth.addQuote(s, themeId, bookId, patch || {}); });
+    },
+    'growth.removeQuote': function (themeId, bookId, quoteId) {
+      return growthStore.mutate(function (s) { return growth.removeQuote(s, themeId, bookId, quoteId); });
+    },
+    // 旧学习库（md_study_library，utils 里动不了的那份）一次性搬进来，按标题去重
+    'growth.importLegacy': function () {
+      // readStudyLibrary 直接返回库对象（不是 { data } 契约），这里按原样取
+      const lib = diary.readStudyLibrary() || { items: [], topics: [] };
+      const out = growth.importLegacy(growthStore.read(), lib);
+      growthStore.write(out.state);
+      return { addedBooks: out.addedBooks, addedSkills: out.addedSkills };
+    },
+
+    'gtd.importLegacy': function () {
+      const all = diary.all();
+      const records = (all && all.data) || [];
+      const res = gtd.importLegacy(gtdStore.read(), records);
+      gtdStore.write(res.state);
+      return { added: res.added, skipped: res.skipped };
+    },
+
+    // ---- 语料库：名言警句 / 问候语 / 运动提示（使用者可自行增删改）----
+    // 读：三条 list 走同一份状态；写：全部是「状态进、状态出」，与 gtd/dream 一致。
+    'inspire.meta': function () { return inspire.meta(); },
+    'inspire.read': function () { return inspireStore.read(); },
+    'inspire.stats': function () { return inspire.stats(inspireStore.read()); },
+    'inspire.list': function (kind) { return inspire.list(inspireStore.read(), kind); },
+    // 首页问候 + 名言：同一天同一时段稳定；offset 用于「换一组」
+    'inspire.today': function (opts) { return inspire.today(inspireStore.read(), opts || {}); },
+    'inspire.pick': function (kind, opts) { return inspire.pick(inspireStore.read(), kind, opts || {}); },
+    'inspire.add': function (kind, patch) {
+      return inspireStore.mutate(function (s) { return inspire.add(s, kind, patch || {}); });
+    },
+    'inspire.update': function (kind, id, patch) {
+      return inspireStore.mutate(function (s) { return inspire.update(s, kind, id, patch || {}); });
+    },
+    // 删内置 = 记一个 hidden（可还原）；删我的 = 真删
+    'inspire.remove': function (kind, id) {
+      return inspireStore.mutate(function (s) { return inspire.remove(s, kind, id); });
+    },
+    'inspire.restore': function (kind, id) {
+      return inspireStore.mutate(function (s) { return inspire.restore(s, kind, id); });
+    },
+    // 撤销对内置条目的改写（保留隐藏状态）
+    'inspire.revert': function (kind, id) {
+      return inspireStore.mutate(function (s) { return inspire.revert(s, kind, id); });
+    },
+    'inspire.toggle': function (kind, id, enabled) {
+      return inspireStore.mutate(function (s) { return inspire.toggle(s, kind, id, enabled); });
+    },
+    // 恢复内置默认：只清隐藏与覆盖，「我的」条目一条不动
+    'inspire.reset': function (kind) {
+      return inspireStore.mutate(function (s) { return inspire.reset(s, kind); });
+    },
+
+    // ---- V1.3 时间纵深：全部从 diary.all() / repo 派生，零新键 ----
+    'v13.calendar': function (opts) {
+      const res = diary.all();
+      return v13.calendar((res && res.data) || [], opts || {});
+    },
+    'v13.todos': function () {
+      const res = diary.all();
+      return v13.todos((res && res.data) || []);
+    },
+    'v13.random': function (exclude) {
+      const res = diary.all();
+      const d = new Date();
+      const p = function (n) { return (n < 10 ? '0' : '') + n; };
+      const today = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+      return v13.pickRandom((res && res.data) || [], exclude || [], { today: today });
+    },
+    'v13.card': function (date, opts) {
+      const res = diary.all();
+      const rec = ((res && res.data) || []).find(function (r) { return r && r.date === date; }) || null;
+      let quote = '';
+      try {
+        const pack = inspire.today(inspireStore.read());
+        quote = pack && pack.quote ? String(pack.quote.text || '') : '';
+      } catch (e) { quote = ''; }
+      const labels = {
+        work: '工作推进', money: '金钱收支', health: '身心健康', relation: '关系经营',
+        future: '今日六条', emotion: '情绪觉察', leisure: '休闲娱乐', growth: '学习成长', free: '自由记录'
+      };
+      return v13.cardData(rec, labels, { quote: quote, brand: !!(opts && opts.brand) });
+    },
+    'v13.archiveInfo': function () {
+      const keys = repo.keys().filter(function (k) { return k.indexOf('__') !== 0; });
+      const storePath = path.join(dataDir, 'store.json');
+      let storeBytes = 0;
+      try { storeBytes = fs.statSync(storePath).size; } catch (e) { /* 首启可能还没落盘 */ }
+      let totalBytes = 0;
+      let fileCount = 0;
+      try {
+        fs.readdirSync(dataDir).forEach(function (f) {
+          try {
+            const st = fs.statSync(path.join(dataDir, f));
+            if (!st.isFile()) return;
+            totalBytes += st.size;
+            fileCount += 1;
+          } catch (e) { /* 忽略正在写的文件 */ }
+        });
+      } catch (e) { /* 目录还没建 */ }
+      return { path: dataDir, storePath: storePath, storeBytes: storeBytes, totalBytes: totalBytes, keyCount: keys.length, fileCount: fileCount };
+    },
+    // 打包产物只装数据键，绝不装 app.asar / 程序文件 / 日志
+    'v13.pack': function () {
+      return v13.packSnapshot(repo.keys(), function (k) { return repo.get(k); }, { generator: 'v13' });
+    },
+    'v13.verifyPack': function (text) {
+      const v = v13.verifyPack(text);
+      return { ok: v.ok, error: v.error, keyCount: v.keyCount, keys: v.keys, exportedAt: v.exportedAt || '' };
+    },
+    // 还原只补写不覆盖：本机已有的键一律保留，避免旧包把今天写没了
+    'v13.unpack': function (text) {
+      return v13.unpackInto(text, function (k) {
+        return typeof repo.get(k) !== 'undefined';
+      }, function (k, val) { repo.set(k, val); });
+    },
+
+    // ---- V2.0b 内容连接：搜索增强 / 正文内链 / 轻标签 / 重复任务 / 耗时 ----
+    'search.or': function (kw) {
+      const res = diary.all();
+      return searchMod.orSearch((res && res.data) || [], String(kw || ''));
+    },
+    'search.pinyin': function (kw) {
+      const res = diary.all();
+      return searchMod.pinyinMatch((res && res.data) || [], String(kw || ''));
+    },
+    'search.linksAll': function () {
+      const res = diary.all();
+      const out = [];
+      ((res && res.data) || []).forEach(function (r) {
+        const cells = (r && r.cells) || {};
+        Object.keys(cells).forEach(function (cell) {
+          const text = typeof cells[cell] === 'string' ? cells[cell] : '';
+          searchMod.parseLinks(text).forEach(function (l) {
+            out.push({ date: r.date, cell: cell, raw: l.raw, target: l.target, type: l.type });
+          });
+        });
+      });
+      return out;
+    },
+    'tags.read': function () { return tagsStore.read(); },
+    'tags.add': function (name) {
+      return tagsStore.mutate(function (s) { return tagsMod.addTag(s, String(name || '')); });
+    },
+    'tags.remove': function (id) {
+      return tagsStore.mutate(function (s) { return tagsMod.removeTag(s, id); });
+    },
+    'tags.tag': function (target, id) {
+      return tagsStore.mutate(function (s) { return tagsMod.tagRecord(s, target, id); });
+    },
+    'tags.untag': function (target, id) {
+      return tagsStore.mutate(function (s) { return tagsMod.untagRecord(s, target, id); });
+    },
+    'tags.for': function (target) { return tagsMod.listFor(tagsStore.read(), target); },
+    'tags.stats': function () { return tagsMod.stats(tagsStore.read()); },
+    'recur.read': function () { return recurStore.read(); },
+    'recur.derive': function (task, today) {
+      const g = gtdStore.read();
+      return recurMod.deriveNext(task || {}, (g && g.tasks) || [], today);
+    },
+    'recur.log': function (taskId, minutes, opts) {
+      return recurStore.mutate(function (s) { return recurMod.logMinutes(s, taskId, minutes, opts || {}); });
+    },
+    'recur.week': function (today) { return recurMod.weekDistribution(recurStore.read(), today); },
+
+    // ---- V2.0a 关系经营：三轴分层 / 通讯录 / 温度 / 四视角 ----
+    'relation.meta': function () {
+      return {
+        circles: relationMod.CIRCLES, circleLabel: relationMod.CIRCLE_LABEL,
+        tiers: relationMod.TIERS, tierLabel: relationMod.TIER_LABEL,
+        channels: relationMod.CHANNELS, channelLabel: relationMod.CHANNEL_LABEL, channelWeight: relationMod.CHANNEL_WEIGHT,
+        depths: relationMod.DEPTHS, depthLabel: relationMod.DEPTH_LABEL, depthWeight: relationMod.DEPTH_WEIGHT,
+        limits: { contacts: relationMod.MAX_CONTACTS, logs: relationMod.MAX_LOGS, name: relationMod.NAME_MAX }
+      };
+    },
+    'relation.read': function () { return relationStore.read(); },
+    'relation.list': function (opts) { return relationMod.listContacts(relationStore.read(), opts || {}); },
+    'relation.addContact': function (patch) {
+      return relationStore.mutate(function (s) { return relationMod.addContact(s, patch || {}); });
+    },
+    'relation.updateContact': function (id, patch) {
+      return relationStore.mutate(function (s) { return relationMod.updateContact(s, id, patch || {}); });
+    },
+    'relation.archiveContact': function (id) {
+      return relationStore.mutate(function (s) { return relationMod.archiveContact(s, id); });
+    },
+    'relation.addLog': function (patch) {
+      return relationStore.mutate(function (s) { return relationMod.addLog(s, patch || {}); });
+    },
+    'relation.removeLog': function (id) {
+      return relationStore.mutate(function (s) { return relationMod.removeLog(s, id); });
+    },
+    'relation.logsFor': function (id) { return relationMod.logsFor(relationStore.read(), id); },
+    'relation.temperature': function (id) { return relationMod.temperature(relationStore.read(), id); },
+    'relation.analytics': function () { return relationMod.analytics(relationStore.read()); },
+
+    // ---- V2.1 长期形状：节气 / 弱引用 / 单条加密 / 链接型附件 ----
+    'term.current': function () {
+      const cur = termMod.termOf(new Date());
+      let key = '';
+      try { key = termMod.termKeyOf(new Date()); } catch (e) { key = String(cur.name || ''); }
+      return { name: cur.name, index: cur.index, next: cur.next, daysLeft: cur.daysLeft, hou: cur.hou, key: key };
+    },
+    'term.meta': function () { return { TERMS: termMod.TERMS, MAX_REVIEWS: termMod.MAX_REVIEWS }; },
+    'term.reviews': function () { return termMod.listReviews(termStore.read()); },
+    'term.save': function (key, answers) {
+      return termStore.mutate(function (s) { return termMod.saveReview(s, key, answers || {}); });
+    },
+    'trace.all': function () { return traceMod.all(traceStore.read()); },
+    'trace.for': function (target) { return traceMod.listFor(traceStore.read(), target); },
+    'trace.missing': function (ids) { return traceMod.markMissing(traceStore.read(), ids || []); },
+    'trace.add': function (patch) {
+      return traceStore.mutate(function (s) { return traceMod.add(s, patch || {}); });
+    },
+    'trace.remove': function (id) {
+      return traceStore.mutate(function (s) { return traceMod.remove(s, id); });
+    },
+    'secure.encrypt': function (text, pass) {
+      if (!pass) throw new Error('口令不能为空');
+      return secureMod.encrypt(String(text || ''), String(pass));
+    },
+    'secure.decrypt': function (blob, pass) {
+      if (!pass) throw new Error('口令不能为空');
+      return secureMod.decrypt(blob, String(pass));
+    },
+    'secure.verify': function (blob, pass) {
+      if (!pass) throw new Error('口令不能为空');
+      return secureMod.verify(blob, String(pass));
+    },
+    'attach.list': function () { return attachMod.list(attachStore.read()); },
+    'attach.add': function (p) {
+      const s = attachStore.read();
+      const next = attachMod.add(s, String(p || ''));
+      if (!next) return null;
+      attachStore.write(next);
+      return next;
+    },
+    'attach.remove': function (id) {
+      return attachStore.mutate(function (s) { return attachMod.remove(s, id); });
+    },
+    'attach.refresh': function () {
+      return attachStore.mutate(function (s) { return attachMod.refresh(s); });
+    },
+    'attach.reconnect': function (missingPath, candidates) {
+      return attachStore.mutate(function (s) { return attachMod.reconnect(s, missingPath, candidates || []); });
+    },
+
+    // ---- 图书馆 / 读书笔记：两类阅读共用一个笔记库 ----
+    'reading.meta': function () { return readingMod.meta(); },
+    // ---- 本地电子书：只登记路径，绝不把书的内容复制进库 ----
+    'reading.addFiles': function (paths) {
+      const list = Array.isArray(paths) ? paths : [];
+      let added = 0, skipped = 0;
+      const errors = [];
+      list.slice(0, 20).forEach(function (raw) {
+        const p = String(raw || '').trim();
+        if (!p) return;
+        let st;
+        try { st = fs.statSync(p); } catch (_) { errors.push('找不到：' + p); return; }
+        if (!st.isFile()) { errors.push('不是文件：' + p); return; }
+        if (!readingEpub.isAllowed(p)) { errors.push('格式不支持：' + p); return; }
+        if (st.size > readingEpub.MAX_FILE_BYTES) { errors.push('超过 100MB：' + p); return; }
+        let s = readingStore.read();
+        if (readingMod.hasPath(s, p)) { skipped += 1; return; }
+        const ext = readingEpub.extOf(p);
+        let meta = null;
+        try { meta = readingEpub.inspect(p); } catch (_) { meta = null; }
+        const title = (meta && meta.title) || readingEpub.titleFromPath(p);
+        const author = (meta && meta.author) || '';
+        const id = 'bk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+        let coverId = '';
+        if (meta && meta.cover && meta.cover.data) {
+          try {
+            if (!fs.existsSync(coverDir)) fs.mkdirSync(coverDir, { recursive: true });
+            coverId = id + '.' + meta.cover.ext;
+            fs.writeFileSync(path.join(coverDir, coverId), meta.cover.data);
+          } catch (_) { coverId = ''; }
+        }
+        s = readingMod.addBook(s, {
+          id: id, title: title, author: author,
+          filePath: p, fileExt: ext, fileSize: st.size,
+          format: ext.toUpperCase(), coverId: coverId, source: 'file',
+          total: 100, unit: '章', status: 'todo', createdAt: Date.now()
+        });
+        readingStore.write(s);
+        added += 1;
+      });
+      return { added: added, skipped: skipped, errors: errors };
+    },
+    // 封面：CSP 只允许 img-src 'self' data:，故由主进程读文件转 dataURL 回传
+    'reading.cover': function (id) {
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === String(id || ''); })[0];
+      if (!b || !b.coverId || path.basename(b.coverId) !== b.coverId) return '';
+      try {
+        const buf = fs.readFileSync(path.join(coverDir, b.coverId));
+        const ext = readingEpub.extOf(b.coverId);
+        const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
+          : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        return 'data:' + mime + ';base64,' + buf.toString('base64');
+      } catch (_) { return ''; }
+    },
+    'reading.revealBook': function (id) {
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === String(id || ''); })[0];
+      if (!b || !b.filePath || !fs.existsSync(b.filePath)) return { ok: false };
+      shell.showItemInFolder(b.filePath);
+      return { ok: true };
+    },
+
+    // ---- 独立阅读窗口（目录 / 正文 / 笔记）：只读打开，正文按章取 ----
+    // 不返回文件内容本身，只返回目录与元数据；正文由 reading.readerChapter 一章一取。
+    'reading.readerOpen': function (id) {
+      const bookId = String(id || '');
+      const now = new Date();
+      const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      const todayStr = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === bookId; })[0];
+      const theme = b ? null : themeBooksFlat().filter(function (x) { return x.bookId === bookId; })[0];
+      if (!b && !theme) return { ok: false, reason: '书架上找不到这本书', today: todayStr };
+      const book = b ? {
+        id: b.id, title: b.title, author: b.author,
+        format: b.format || String(b.fileExt || '').toUpperCase(),
+        filePath: b.filePath, done: b.done, total: b.total, unit: b.unit, status: b.status,
+        cover: '', mode: 'leisure', themeId: '', bookTitle: b.title
+      } : {
+        id: theme.bookId, title: theme.title, author: theme.author,
+        format: String(theme.fileExt || 'BOOK').toUpperCase(),
+        filePath: theme.filePath || '', done: theme.done, total: theme.total, unit: theme.unit,
+        status: theme.status, cover: '', mode: 'theme', themeId: theme.themeId, bookTitle: theme.title
+      };
+      // 封面同样由主进程读成 dataURL：阅读窗口的 CSP 也不允许 file:
+      if (b && b.coverId && path.basename(b.coverId) === b.coverId) {
+        try {
+          const cp = path.join(coverDir, b.coverId);
+          if (fs.existsSync(cp)) {
+            const buf = fs.readFileSync(cp);
+            const ext = readingEpub.extOf(b.coverId);
+            const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
+              : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+            book.cover = 'data:' + mime + ';base64,' + buf.toString('base64');
+          }
+        } catch (_) { book.cover = ''; }
+      }
+      let source;
+      if (!book.filePath) {
+        source = { supported: false, reason: '这本没有关联本机电子书文件，只能在右侧记笔记', kind: '', toc: [], chapterCount: 0 };
+      } else if (!fs.existsSync(book.filePath)) {
+        source = { supported: false, reason: '原文件已不在原处，请回图书馆重新定位', kind: '', toc: [], chapterCount: 0 };
+      } else {
+        try {
+          source = readerSource.openBook(book.filePath) || {};
+        } catch (e) {
+          source = { ok: false, supported: false, reason: '打开失败：' + ((e && e.message) || e), toc: [], chapterCount: 0 };
+        }
+        if (source.ok === false) source.supported = false;
+      }
+      return {
+        ok: true,
+        book: book,
+        source: {
+          supported: !!source.supported,
+          reason: source.reason || '',
+          kind: source.kind || '',
+          format: source.format || book.format,
+          toc: source.toc || [],
+          chapterCount: source.chapterCount || 0
+        },
+        meta: readingMod.meta(),
+        today: todayStr
+      };
+    },
+    'reading.readerChapter': function (id, index) {
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === String(id || ''); })[0];
+      if (!b || !b.filePath) return { ok: false, html: '', title: '' };
+      try {
+        return readerSource.chapter(b.filePath, Number(index) || 0);
+      } catch (e) {
+        return { ok: false, html: '', title: '', reason: (e && e.message) || String(e) };
+      }
+    },
+    // 翻到第几章 → 按比例折算 done。只前进不后退：往回翻不该抹掉已读进度。
+    'reading.readerProgress': function (id, index, chapterCount) {
+      const bookId = String(id || '');
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === bookId; })[0];
+      if (!b) return { ok: false };
+      const total = Math.max(1, Number(chapterCount) || 1);
+      const at = Math.min(Math.max(Number(index) || 0, 0), total - 1);
+      const target = Math.round(((at + 1) / total) * (b.total || 100));
+      if (target <= (b.done || 0)) return { ok: true, done: b.done, total: b.total, status: b.status };
+      const now = new Date();
+      const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      const date = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+      readingStore.write(readingMod.advanceBook(s, bookId, target - (b.done || 0), date));
+      const after = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
+      return { ok: true, done: after ? after.done : target, total: after ? after.total : b.total, status: after ? after.status : b.status };
+    },
+    'reading.read': function () { return readingStore.read(); },
+    'reading.board': function () {
+      const b = readingMod.board(readingStore.read(), themeBooksFlat());
+      // 文件失效 / 大小是派生值，不落库：每次读 board 现算，文件移走立刻标灰
+      b.books = b.books.map(function (x) {
+        return Object.assign({}, x, {
+          fileMissing: !!(x.filePath && !fs.existsSync(x.filePath)),
+          fileSizeText: x.fileSize
+            ? (x.fileSize >= 1048576 ? (x.fileSize / 1048576).toFixed(1) + ' MB'
+              : Math.max(1, Math.round(x.fileSize / 1024)) + ' KB')
+            : ''
+        });
+      });
+      return b;
+    },
+    'reading.notes': function (opts) { return readingMod.notesQuery(readingStore.read(), opts || {}); },
+    // 主题阅读书单只读派生自 md_growth：图书馆不存第二份书单
+    'reading.themeBooks': function () { return themeBooksFlat(); },
+    'reading.addBook': function (patch) {
+      return readingStore.mutate(function (s) { return readingMod.addBook(s, patch || {}); });
+    },
+    'reading.updateBook': function (id, patch) {
+      return readingStore.mutate(function (s) { return readingMod.updateBook(s, id, patch || {}); });
+    },
+    'reading.removeBook': function (id) {
+      return readingStore.mutate(function (s) { return readingMod.removeBook(s, id); });
+    },
+    'reading.advanceBook': function (id, delta, date) {
+      return readingStore.mutate(function (s) { return readingMod.advanceBook(s, id, delta, date || ''); });
+    },
+    'reading.setBookStatus': function (id, status, date) {
+      return readingStore.mutate(function (s) { return readingMod.setBookStatus(s, id, status, date || ''); });
+    },
+    'reading.addChapter': function (bookId, patch) {
+      return readingStore.mutate(function (s) { return readingMod.addChapter(s, bookId, patch || {}); });
+    },
+    'reading.updateChapter': function (id, patch) {
+      return readingStore.mutate(function (s) { return readingMod.updateChapter(s, id, patch || {}); });
+    },
+    'reading.removeChapter': function (id) {
+      return readingStore.mutate(function (s) { return readingMod.removeChapter(s, id); });
+    },
+    'reading.addNote': function (patch) {
+      return readingStore.mutate(function (s) { return readingMod.addNote(s, patch || {}); });
+    },
+    'reading.updateNote': function (id, patch) {
+      return readingStore.mutate(function (s) { return readingMod.updateNote(s, id, patch || {}); });
+    },
+    'reading.removeNote': function (id) {
+      return readingStore.mutate(function (s) { return readingMod.removeNote(s, id); });
+    },
+    'reading.markPushed': function (id, cell, at) {
+      return readingStore.mutate(function (s) { return readingMod.markPushed(s, id, cell, at || 0); });
+    },
+    // 主题阅读翻页转发 growth：唯一写口仍是 md_growth
+    'reading.themeAdvance': function (themeId, bookId, delta) {
+      return growthStore.mutate(function (s) { return growth.advanceBook(s, themeId, bookId, delta); });
+    },
+    // 一次性把第 22 轮学习成长里的旧摘录汇进「读书笔记」，按 sourceQuoteId 去重
+    'reading.importGrowthQuotes': function () {
+      const g = growthStore.read();
+      let st = readingStore.read();
+      const seen = {};
+      (st.notes || []).forEach(function (n) { if (n && n.sourceQuoteId) seen[n.sourceQuoteId] = 1; });
+      let added = 0;
+      (g.themes || []).forEach(function (t) {
+        (t.books || []).forEach(function (b) {
+          (b.quotes || []).forEach(function (q) {
+            const sid = 'gq-' + t.id + '-' + b.id + '-' + q.id;
+            if (seen[sid]) return;
+            seen[sid] = 1;
+            st = readingMod.addNote(st, {
+              mode: 'theme', themeId: t.id, bookId: b.id, bookTitle: b.title || '',
+              type: 'highlight', quote: q.text || '', text: '', page: q.page || 0,
+              tags: [], chapterId: '', createdAt: q.createdAt || Date.now(), sourceQuoteId: sid
+            });
+            added += 1;
+          });
+        });
+      });
+      if (added) readingStore.write(st);
+      return { added: added };
+    },
+    // 九格回写行由领域层唯一生成，保证「只追加、带出处」的口径不被视图各写一遍
+    // ---- 书签 / 书内搜索（V2.6 R1）----
+    'reading.bookmarks': function (bookId) {
+      return readingMod.bookmarksOf(readingStore.read(), String(bookId || ''));
+    },
+    'reading.addBookmark': function (patch) {
+      const next = readingMod.addBookmark(readingStore.read(), patch || {});
+      readingStore.write(next);
+      return readingMod.bookmarksOf(next, String((patch || {}).bookId || ''));
+    },
+    'reading.removeBookmark': function (id) {
+      readingStore.write(readingMod.removeBookmark(readingStore.read(), String(id || '')));
+      return { ok: true };
+    },
+    // 只读扫描：不落库、不快照正文，命中带章节号与前后文
+    'reading.searchBook': function (bookId, keyword, limit) {
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === String(bookId || ''); })[0];
+      if (!b || !b.filePath) return { ok: false, reason: '这本书没有关联本机文件', hits: [], total: 0 };
+      if (!fs.existsSync(b.filePath)) return { ok: false, reason: '原文件已不在原处', hits: [], total: 0 };
+      try {
+        return readerSource.search(b.filePath, String(keyword || ''), Number(limit) || 30);
+      } catch (e) {
+        return { ok: false, reason: (e && e.message) || String(e), hits: [], total: 0 };
+      }
+    },
+    'reading.diaryLine': function (note) { return readingMod.noteToDiaryLine(note || {}); },
+    'reading.exportMd': function () {
+      return readingMod.exportMarkdown(readingStore.read(), themeBooksFlat());
+    },
+
+    // ---- 家庭账本（md_finance）：预算信封 + 条件→动作规则 + CSV 导入 ----
+    // 口径：领域层只收/发整数 cents，月份由调用方给；不做账号、不做成员、不做同步。
+    'finance.meta': function () { return financeMod.meta(); },
+    'finance.board': function (month) {
+      const m = month || (function () {
+        const d = new Date(), mm = d.getMonth() + 1;
+        return d.getFullYear() + '-' + (mm < 10 ? '0' + mm : String(mm));
+      })();
+      return financeMod.board(financeStore.read(), m);
+    },
+    'finance.read': function () { return financeStore.read(); },
+    'finance.add': function (draft) {
+      return financeStore.mutate(function (s) { return financeMod.addTxn(s, draft || {}); });
+    },
+    'finance.update': function (id, patch) {
+      return financeStore.mutate(function (s) { return financeMod.updateTxn(s, id, patch || {}); });
+    },
+    'finance.remove': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeTxn(s, id); });
+    },
+    'finance.setBudget': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.setBudget(s, patch || {}); });
+    },
+    'finance.removeBudget': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeBudget(s, id); });
+    },
+    'finance.addRule': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.addRule(s, patch || {}); });
+    },
+    'finance.updateRule': function (id, patch) {
+      return financeStore.mutate(function (s) { return financeMod.updateRule(s, id, patch || {}); });
+    },
+    'finance.removeRule': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeRule(s, id); });
+    },
+    'finance.addCategory': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.addCategory(s, patch || {}); });
+    },
+    'finance.removeCategory': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeCategory(s, id); });
+    },
+    'finance.addAccount': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.addAccount(s, patch || {}); });
+    },
+    'finance.removeAccount': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeAccount(s, id); });
+    },
+    // CSV：解码（UTF-8 BOM / GBK）、表头定位、去重、过规则全在领域层一次做完；
+    // 主进程只负责把新状态落库，回执只给报告，不把整份账本回传渲染层。
+    'finance.importCsv': function (opts) {
+      const out = financeMod.importCsv(financeStore.read(), opts || {});
+      if (out.report.added > 0) financeStore.write(out.state);
+      return out.report;
+    },
+    'finance.exportCsv': function () { return financeMod.exportCsv(financeStore.read()); },
+
+    // ---- 完整理财（只读视图）：账户/净值/损益/分类环比/目标/周期/订阅/检索/洞察 ----
+    // 全部是同步纯函数，沿用 v1/domain:call；金额一律整数分，元只在渲染层出现。
+    'finance.accountRows': function (month) { return financeMod.accountRows(financeStore.read(), month); },
+    'finance.netWorth': function (month) { return financeMod.netWorth(financeStore.read(), month); },
+    'finance.cashFlow': function (month) { return financeMod.cashFlow(financeStore.read(), month); },
+    'finance.categoryReport': function (month) { return financeMod.categoryReport(financeStore.read(), month); },
+    'finance.goalRows': function () { return financeMod.goalRows(financeStore.read()); },
+    'finance.recurringRows': function (month) { return financeMod.recurringRows(financeStore.read(), month); },
+    'finance.detectSubscriptions': function () { return financeMod.detectSubscriptions(financeStore.read()); },
+    'finance.search': function (q) { return financeMod.searchTxns(financeStore.read(), q || {}); },
+    'finance.insights': function (month) { return financeMod.insights(financeStore.read(), month); },
+    // ---- 完整理财（写）----
+    'finance.addGoal': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.addGoal(s, patch || {}); });
+    },
+    'finance.updateGoal': function (id, patch) {
+      return financeStore.mutate(function (s) { return financeMod.updateGoal(s, id, patch || {}); });
+    },
+    'finance.removeGoal': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeGoal(s, id); });
+    },
+    'finance.addRecurring': function (patch) {
+      return financeStore.mutate(function (s) { return financeMod.addRecurring(s, patch || {}); });
+    },
+    'finance.updateRecurring': function (id, patch) {
+      return financeStore.mutate(function (s) { return financeMod.updateRecurring(s, id, patch || {}); });
+    },
+    'finance.removeRecurring': function (id) {
+      return financeStore.mutate(function (s) { return financeMod.removeRecurring(s, id); });
+    },
+    'finance.setAccountMeta': function (id, patch) {
+      return financeStore.mutate(function (s) { return financeMod.setAccountMeta(s, id, patch || {}); });
+    },
+    'finance.bulkUpdate': function (ids, patch) {
+      const out = financeMod.bulkUpdate(financeStore.read(), ids, patch || {});
+      if (out.updated > 0) financeStore.write(out.state);
+      return out.updated;
+    },
+
+    // ---- V2.12 本机时间源：只读订阅 ActivityWatch ----
+    // 写边界：本段没有任何「写回 ActivityWatch」的函数（不建 bucket、不打 tag）。
+    // 唯一一次跨进程请求在 worktime.sync 里，方法固定 GET，主机固定回环。
+    'worktime.read': function () { return worktimeStore.read(); },
+    'worktime.meta': function () { return worktimeMod.meta(worktimeStore.read()); },
+    'worktime.enable': function (on) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.setEnabled(s, on === true); });
+    },
+    'worktime.setHost': function (host) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.setHost(s, host); });
+    },
+    'worktime.setKeepDays': function (n) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.setKeepDays(s, n); });
+    },
+    'worktime.setToken': function (token) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.setToken(s, token); });
+    },
+    'worktime.addRule': function (patch) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.addRule(s, patch || {}); });
+    },
+    'worktime.updateRule': function (id, patch) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.updateRule(s, id, patch || {}); });
+    },
+    'worktime.removeRule': function (id) {
+      return worktimeStore.mutate(function (s) { return worktimeMod.removeRule(s, id); });
+    },
+    'worktime.day': function (date) {
+      return worktimeMod.dayOf(worktimeStore.read(), String(date || ''));
+    },
+    // 工作视图投入条一次拿全：开关态 + 当天聚合 + 规则（要标签）+ 保留期
+    'worktime.dayForView': function (date) {
+      const s = worktimeStore.read();
+      return {
+        enabled: s.enabled,
+        host: s.host,
+        keepDays: s.keepDays,
+        rules: s.rules,
+        day: worktimeMod.dayOf(s, String(date || '')),
+        error: s.lastError
+      };
+    },
+    'worktime.week': function (endDate) {
+      const s = worktimeStore.read();
+      const dates = [];
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(endDate || ''));
+      if (!m) return worktimeMod.weekStats(s, []);
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) - i);
+        const p = function (n) { return (n < 10 ? '0' : '') + n; };
+        dates.push(d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()));
+      }
+      return worktimeMod.weekStats(s, dates);
+    },
+    'worktime.clearDays': function () {
+      return worktimeStore.mutate(function (s) { return worktimeMod.clearDays(s); });
+    },
+    'worktime.clearError': function () {
+      return worktimeStore.mutate(function (s) { return worktimeMod.clearError(s); });
+    },
+    // 同步：唯一会发 HTTP 的领域函数（异步，走 v1/worktime:sync 专用通道）
+    'worktime.sync': function (date) {
+      const s = worktimeStore.read();
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : diary.today();
+      if (!s.enabled) return Promise.resolve({ ok: false, code: 'NOT_ENABLED', msg: '本机时间源未开启' });
+      const bounds = localDayBounds(d);
+      if (!bounds) return Promise.resolve({ ok: false, code: 'BAD_DATE', msg: '日期不合法' });
+      return worktimeClient.collect({
+        host: s.host,
+        token: s.token,
+        dayStart: bounds.start,
+        dayEnd: bounds.end
+      }).then(function (raw) {
+        const out = worktimeAgg.aggregate({
+          windowEvents: raw.windowEvents,
+          afkEvents: raw.afkEvents,
+          rules: s.rules,
+          dayStart: bounds.start,
+          dayEnd: bounds.end
+        });
+        // 聚合输出的是绝对毫秒，落库改存「相对当天 0 点的分钟」——跨时区无意义，还能省字节
+        const blocks = out.blocks.map(function (b) {
+          return [
+            Math.round((b.start - bounds.start) / 60000),
+            Math.round((b.end - bounds.start) / 60000),
+            b.ruleId || '',
+            b.app || ''
+          ];
+        });
+        const day = Object.assign({}, out, { blocks: blocks, syncedAt: Date.now() });
+        worktimeStore.mutate(function (st) { return worktimeMod.applyDay(st, d, day); });
+        return {
+          ok: true,
+          date: d,
+          hostname: raw.hostname,
+          version: raw.version,
+          partial: raw.partial,
+          day: worktimeMod.dayOf(worktimeStore.read(), d)
+        };
+      }).catch(function (e) {
+        const code = (e && e.code) || 'AW_ERROR';
+        const msg = (e && e.message) || '同步失败';
+        worktimeStore.mutate(function (st) { return worktimeMod.setError(st, code, msg); });
+        return { ok: false, code: code, msg: msg };
+      });
+    },
+    // 回写：把一段时间写进当天工作格。只追加、幂等、行在就不重复写（自愈）
+    'worktime.writeLine': function (date, key) {
+      const s = worktimeStore.read();
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : '';
+      const day = worktimeMod.dayOf(s, d);
+      if (!day) return { ok: false, code: 'NO_DATA', msg: '这一天还没有本机投入数据' };
+      const k = String(key || '');
+      const b = (day.blocks || []).filter(function (x) { return worktimeMod.blockKey(x) === k; })[0];
+      if (!b) return { ok: false, code: 'NO_BLOCK', msg: '找不到这段时间' };
+      const rule = (s.rules || []).filter(function (r) { return r.id === b[2]; })[0];
+      const line = worktimeMod.blockLine(b, rule ? rule.label : '未归类', b[3]);
+      const loaded = diary.load(d);
+      if (!loaded || loaded.error || !loaded.data) return { ok: false, code: 'NO_RECORD', msg: '读不到这一天的记录' };
+      const rec = loaded.data;
+      const cur = String((rec.cells && rec.cells.work) || '');
+      if (worktimeMod.hasLine(cur, line)) return { ok: true, already: true, line: line, record: rec };
+      const next = Object.assign({}, rec, {
+        cells: Object.assign({}, rec.cells || {}, { work: (cur.replace(/\s+$/, '') ? cur.replace(/\s+$/, '') + '\n' : '') + line })
+      });
+      const saved = diary.save(next);
+      if (!saved || saved.error) return { ok: false, code: 'SAVE_FAILED', msg: '写入失败' };
+      worktimeStore.mutate(function (st) { return worktimeMod.markWritten(st, d, k); });
+      return { ok: true, line: line, record: saved.data };
+    },
+
+    // ---- 首页天气与位置（md_weather）----
+    // 读：只给偏好 + 内存缓存，不联网。首屏先拿到「上次的温度」再决定要不要刷新，
+    // 这样断网时首页仍然有数，不会白着一块。
+    'weather.view': function () {
+      return weatherMod.view(weatherStore.read(), weatherCache, Date.now());
+    },
+    'weather.setEnabled': function (on) {
+      const s = weatherStore.mutate(function (st) { return weatherMod.setEnabled(st, on === true); });
+      // 关掉即清缓存：留着会让人以为「关了还在偷偷取」
+      if (!s.enabled) weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+      return weatherMod.view(s, weatherCache, Date.now());
+    },
+    'weather.setMode': function (mode) {
+      const s = weatherStore.mutate(function (st) { return weatherMod.setMode(st, mode); });
+      weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+      return weatherMod.view(s, weatherCache, Date.now());
+    },
+    'weather.setCity': function (city, place) {
+      const s = weatherStore.mutate(function (st) { return weatherMod.setCity(st, city, place); });
+      weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+      return weatherMod.view(s, weatherCache, Date.now());
+    },
+    'weather.clearCity': function () {
+      const s = weatherStore.mutate(function (st) { return weatherMod.clearCity(st); });
+      weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+      return weatherMod.view(s, weatherCache, Date.now());
+    },
+    'weather.setUnit': function (unit) {
+      const s = weatherStore.mutate(function (st) { return weatherMod.setUnit(st, unit); });
+      return weatherMod.view(s, weatherCache, Date.now());
+    },
+    // 取：唯一会发远程 HTTP 的领域函数之一（另一条是本机时间源）。
+    // 关闭态直接返回 NOT_ENABLED，连一次 DNS 都不做——这条是「关了就是真关」的证据。
+    'weather.sync': function (force) {
+      const s = weatherStore.read();
+      if (!s.enabled) return Promise.resolve({ ok: false, code: 'NOT_ENABLED', msg: '首页天气未开启' });
+      if (s.mode === 'city' && !s.place) {
+        return Promise.resolve({ ok: false, code: 'NO_CITY', msg: '还没有选好城市', view: weatherMod.view(s, weatherCache, Date.now()) });
+      }
+      const now = Date.now();
+      const ttl = weatherCache.error ? WEATHER_FAIL_TTL : WEATHER_TTL;
+      const fresh = weatherCache.report && (now - weatherCache.fetchedAt) < ttl;
+      if (!force && fresh) {
+        return Promise.resolve({ ok: true, cached: true, view: weatherMod.view(s, weatherCache, now) });
+      }
+      return weatherClient.collect({ place: s.mode === 'city' ? s.place : null }).then(function (raw) {
+        const at = Date.now();
+        const report = weatherMod.pack(raw.place, raw.current, raw.daily, at);
+        weatherCache = { report: report, fetchedAt: at, ttl: WEATHER_TTL, error: null };
+        return { ok: true, view: weatherMod.view(weatherStore.read(), weatherCache, at) };
+      }).catch(function (e) {
+        const err = {
+          at: Date.now(),
+          code: (e && e.code) || 'WEATHER_ERROR',
+          msg: (e && e.message) || '取天气失败'
+        };
+        // 失败不清掉上次的 report：显示「昨天的温度 + 出错提示」比显示空白有用，
+        // 但 stale 标记会让界面把它写灰，不假装是最新的。
+        weatherCache = {
+          report: weatherCache.report,
+          fetchedAt: weatherCache.fetchedAt,
+          ttl: WEATHER_TTL,
+          error: err
+        };
+        return { ok: false, code: err.code, msg: err.msg, view: weatherMod.view(weatherStore.read(), weatherCache, Date.now()) };
+      });
+    },
+    // 手填城市：检索一次拿坐标，再交给 setCity 落库（两步分开，失败不会写坏偏好）
+    'weather.geocode': function (name) {
+      return weatherClient.geocode(String(name || '')).then(function (place) {
+        const s = weatherStore.mutate(function (st) { return weatherMod.setCity(st, place.label, place); });
+        weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+        return { ok: true, place: place, view: weatherMod.view(s, weatherCache, Date.now()) };
+      }).catch(function (e) {
+        return { ok: false, code: (e && e.code) || 'WEATHER_ERROR', msg: (e && e.message) || '找不到这个城市' };
+      });
+    },
+
+    // ---- 封存箱（软删除）：删除不再等于销毁 ----
+    'recycle.list': function () { return recycle.list(); },
+    'recycle.seal': function (date) { return recycle.seal(date); },
+    'recycle.restore': function (key) { return recycle.restore(key); },
+    'recycle.purge': function (key) { return recycle.purge(key); },
+    'recycle.empty': function () { return recycle.empty(); },
+    'recycle.sweep': function () { return recycle.sweep(); },
+
+    // ---- 内联状态提示：每一格最后一次写的是哪天 ----
+    // all() 走 memo 缓存，9 个格共用一次遍历，不必每格调一次
+    'cell.lastWrittenMap': function () {
+      const res = diary.all();
+      const list = (res && res.data) || [];
+      const out = {};
+      for (let i = 0; i < list.length; i++) {
+        const rec = list[i];
+        const cells = (rec && rec.cells) || {};
+        Object.keys(cells).forEach(function (k) {
+          if (Object.prototype.hasOwnProperty.call(out, k)) return;
+          if (String(cells[k] || '').trim()) out[k] = rec.date;
+        });
+      }
+      return out;
+    },
+
+    // ---- 胶囊写信日映射 ----
+    // capsuleGroups() 只给"还有几天开启"，不给"已经封存了几天"。
+    // writtenAt 在原始 listCapsules() 里有，补一个 id → writtenAt 的映射，界面自己算天数。
+    'capsule.writtenMap': function () {
+      const res = diary.listCapsules();
+      const list = Array.isArray(res && res.data) ? res.data : [];
+      const out = {};
+      list.forEach(function (c) {
+        if (!c || !c.id) return;
+        out[c.id] = { writtenAt: String(c.writtenAt || ''), createdAt: Number(c.createdAt) || 0 };
+      });
+      return out;
+    }
+  });
+
+  // 封存箱实例：onChanged 负责让 diary-store 的 memo 失效
+  recycle = createRecycle({
+    repository: repo,
+    onChanged: function () { reloadDiary(); }
+  });
+  // 启动即清一次超期条目（30 天前封存的直接焚毁）
+  const swept = recycle.sweep();
+
+  // 备份包装：utils 的 exportBackup 是固定字段清单，不会带上 md_gtd 与封存箱。
+  // 这里在结果里注入 gtd / bin 两段，导入时先摘出来再委托原逻辑（只补不改，与原口径一致）。
+  // 注意 rawExportBackup 不能在 reload 后继续用旧引用，改成每次取 diary 上的最新函数。
+  domain.exportBackup = function () {
+    const res = diary.exportBackup();
+    if (!res || res.error) return res;
+    try {
+      const obj = JSON.parse(res.data);
+      obj.gtd = gtdStore.read();
+      obj.gtdVersion = 1;
+      // 梦想也不在日记记录里，导出必须显式带上
+      obj.dream = dreamStore.read();
+      obj.dreamVersion = 1;
+      // 学习成长三张表同样不在日记记录里（旧学习库由 utils 的 exportBackup 负责）
+      obj.growth = growthStore.read();
+      obj.growthVersion = 1;
+      // 语料库只带「我的 + 覆盖 + 隐藏」，内置文案在代码里，不必也不该塞进备份
+      obj.inspire = inspireStore.read();
+      obj.inspireVersion = 1;
+      // V2.0 / V2.1 的六个新键：utils 的 exportBackup 只认固定字段清单，
+      // 不在这里显式注入，换机后这些模块的数据会静默丢失。
+      obj.tags = tagsStore.read();
+      obj.tagsVersion = 1;
+      obj.recur = recurStore.read();
+      obj.recurVersion = 1;
+      obj.relation = relationStore.read();
+      obj.relationVersion = 1;
+      obj.termReview = termStore.read();
+      obj.termReviewVersion = 1;
+      obj.trace = traceStore.read();
+      obj.traceVersion = 1;
+      obj.attach = attachStore.read();
+      obj.attachVersion = 1;
+      // 图书馆 / 读书笔记：休闲书 + 章节 + 全部笔记（主题书单在 growth 段里，不重复）
+      obj.reading = readingStore.read();
+      obj.readingVersion = 1;
+      // 家庭账本：分类 / 账户 / 流水 / 预算 / 规则全量带走，换机后预算不用重设
+      obj.finance = financeStore.read();
+      obj.financeVersion = 1;
+      // 本机时间源：规则 + 日聚合。**不含任何窗口标题**（契约里就没有这个字段）
+      obj.worktime = worktimeStore.read();
+      obj.worktimeVersion = 1;
+      // 封存箱带完整原文：换机后还能还原。
+      // 正文导出（txt / Markdown / JSON 的 records）不含已封存记录——那是另一条路径。
+      obj.bin = recycle.snapshotForBackup();
+      return { data: JSON.stringify(obj, null, 0), error: null };
+    } catch (e) {
+      return res;
+    }
+  };
+  domain.importBackup = function (text) {
+    let section = null;
+    let binSection = null;
+    let dreamSection = null;
+    let growthSection = null;
+    let inspireSection = null;
+    let v2Sections = {};
+    try {
+      const parsed = JSON.parse(String(text || ''));
+      section = parsed && parsed.gtd ? parsed.gtd : null;
+      binSection = parsed && parsed.bin ? parsed.bin : null;
+      dreamSection = parsed && parsed.dream ? parsed.dream : null;
+      growthSection = parsed && parsed.growth ? parsed.growth : null;
+      inspireSection = parsed && parsed.inspire ? parsed.inspire : null;
+      v2Sections = parsed || {};
+    } catch (e) {
+      section = null;
+      binSection = null;
+    }
+    const res = diary.importBackup(text);
+    const report = res && res.data ? res.data : null;
+    if (section && report && !res.error) {
+      try {
+        const merged = gtd.mergeSection(gtdStore.read(), section);
+        gtdStore.write(merged.state);
+        report.gtdImported = merged.added;
+      } catch (e) {
+        report.gtdError = 'GTD 段写入失败，日记部分已导入';
+      }
+    }
+    if (binSection && report && !res.error) {
+      try {
+        const mergedBin = recycle.mergeFromBackup(binSection);
+        report.binImported = mergedBin.added;
+      } catch (e) {
+        report.binError = '封存箱段写入失败，日记部分已导入';
+      }
+    }
+    if (dreamSection && report && !res.error) {
+      try {
+        const mergedDream = dream.mergeSection(dreamStore.read(), dreamSection);
+        dreamStore.write(mergedDream.state);
+        report.dreamImported = mergedDream.added;
+      } catch (e) {
+        report.dreamError = '梦想段写入失败，日记部分已导入';
+      }
+    }
+    if (growthSection && report && !res.error) {
+      try {
+        const mergedGrowth = growth.mergeSection(growthStore.read(), growthSection);
+        growthStore.write(mergedGrowth.state);
+        report.growthImported = mergedGrowth.added;
+      } catch (e) {
+        report.growthError = '学习成长段写入失败，日记部分已导入';
+      }
+    }
+    if (inspireSection && report && !res.error) {
+      try {
+        const mergedInspire = inspire.mergeSection(inspireStore.read(), inspireSection);
+        inspireStore.write(mergedInspire.state);
+        report.inspireImported = mergedInspire.added;
+      } catch (e) {
+        report.inspireError = '语料库段写入失败，日记部分已导入';
+      }
+    }
+    // V2.0 / V2.1 六个新段统一走 mergeSection：只补不改、幂等。
+    // 任一段失败都单独报告，不影响日记主体已导入的部分。
+    const V2_SECTIONS = [
+      ['tags', tagsStore, tagsMod],
+      ['recur', recurStore, recurMod],
+      ['relation', relationStore, relationMod],
+      ['termReview', termStore, termMod],
+      ['trace', traceStore, traceMod],
+      ['attach', attachStore, attachMod],
+      ['reading', readingStore, readingMod],
+      ['finance', financeStore, financeMod],
+      ['worktime', worktimeStore, worktimeMod]
+    ];
+    V2_SECTIONS.forEach(function (entry) {
+      const key = entry[0];
+      const store = entry[1];
+      const mod = entry[2];
+      const sec = v2Sections && v2Sections[key];
+      if (!sec || !report || res.error) return;
+      try {
+        if (typeof mod.mergeSection === 'function') {
+          const merged = mod.mergeSection(store.read(), sec);
+          const next = merged && merged.state ? merged.state : merged;
+          store.write(next);
+          report[key + 'Imported'] = merged && typeof merged.added === 'number' ? merged.added : 0;
+        } else {
+          // recur 没有 mergeSection：只把对侧本机没有的分钟日志补进来，
+          // 重复任务是派生数据，不跨机合并（否则会造出两份真相）。
+          const cur = store.read();
+          const seen = {};
+          (cur.logs || []).forEach(function (l) { if (l && l.id) seen[l.id] = 1; });
+          const add = (Array.isArray(sec.logs) ? sec.logs : []).filter(function (l) {
+            return l && l.id && !seen[l.id];
+          });
+          if (add.length) store.write(Object.assign({}, cur, { logs: (cur.logs || []).concat(add) }));
+          report[key + 'Imported'] = add.length;
+        }
+      } catch (e) {
+        report[key + 'Error'] = key + ' 段写入失败，日记部分已导入';
+      }
+    });
+    return res;
+  };
+
+  // ---- 数据健康中心 ----
+  // persistence.createSnapshot / listSnapshots / restoreSnapshot 从 Phase 2 就写好了，
+  // 主进程一次都没调用过（"差一根线"）。这里接上"启动一份 + 定时一份 + 滚动保留"，
+  // 并把状态翻译成用户看得懂的话——数据层其实很强，只是一直没告诉用户。
+  function snapshotDirOf(id) { return path.join(dataDir, 'snapshots', id); }
+
+  function pruneAutoSnapshots() {
+    const all = persistence.listSnapshots(dataDir); // 目录名以时间戳开头，天然倒序
+    const autos = all.filter(function (id) { return /-auto$/.test(id); });
+    autos.slice(autoBackup.kept).forEach(function (id) {
+      try { fs.rmSync(snapshotDirOf(id), { recursive: true, force: true }); } catch (e) { /* 保留即可 */ }
+    });
+    return autos.length;
+  }
+
+  function runAutoBackup(reason) {
+    try {
+      // 先 flush 再快照：否则快照到的是内存里还没落盘的旧数据
+      if (repo.isDirty()) repo.flush('auto-backup');
+      const storeFile = path.join(dataDir, 'store.json');
+      if (!fs.existsSync(storeFile)) {
+        // 从没落过盘（干净机首启且没写过任何东西）：没有可备份的内容。
+        // 这里刻意不制造"空快照"——空快照会让用户以为有备份，比没有更危险。
+        return { ok: false, skipped: true, reason: 'empty' };
+      }
+      const r = persistence.createSnapshot(dataDir, 'auto', { reason: reason || 'timer' });
+      autoBackup.lastAt = Date.now();
+      autoBackup.lastId = r.id;
+      pruneAutoSnapshots();
+      return { ok: true, id: r.id };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
+  }
+
+  function fileStat(f) {
+    try {
+      const s = fs.statSync(f);
+      return { exists: true, bytes: s.size, mtime: s.mtime.toISOString() };
+    } catch (e) {
+      return { exists: false, bytes: 0, mtime: '' };
+    }
+  }
+
+  // 记录数：不硬给"一致性"布尔值，而是如实报两个数字。
+  // 备份是"写前复制"，天生比主文件旧几篇——把它说成"一致/不一致"是谎话。
+  function countEntries(file) {
+    try {
+      const doc = persistence.readJsonSafe(file);
+      if (!doc || !doc.entries) return -1;
+      let n = 0;
+      Object.keys(doc.entries).forEach(function (k) {
+        if (/^morning_diary_\d{4}-\d{2}-\d{2}$/.test(k)) n += 1;
+      });
+      return n;
+    } catch (e) {
+      return -2;
+    }
+  }
+
+  function buildHealth() {
+    const storeFile = path.join(dataDir, 'store.json');
+    const bakFile = storeFile + '.bak';
+    const manifestFile = path.join(dataDir, 'manifest.json');
+
+    const snaps = persistence.listSnapshots(dataDir).map(function (id) {
+      let createdAt = '';
+      try {
+        const meta = persistence.readJsonSafe(path.join(snapshotDirOf(id), 'meta.json'));
+        createdAt = (meta && meta.createdAt) || '';
+      } catch (e) { /* 元数据缺失不影响列表 */ }
+      return { id: id, createdAt: createdAt, auto: /-auto$/.test(id) };
+    });
+
+    let diaryCount = -1;
+    try { const r = diary.listDates(); diaryCount = ((r && r.data) || []).length; } catch (e) { diaryCount = -2; }
+
+    let gtdOpen = 0;
+    try {
+      const s = gtdStore.read();
+      gtdOpen = (s.tasks || []).filter(function (t) { return t.status !== 'done'; }).length;
+    } catch (e) { gtdOpen = -1; }
+
+    let capsuleCount = 0;
+    try {
+      const r = diary.listCapsules();
+      capsuleCount = Array.isArray(r && r.data) ? r.data.length : 0;
+    } catch (e) { capsuleCount = -1; }
+
+    const bin = recycle.list();
+    const store = fileStat(storeFile);
+    const bak = fileStat(bakFile);
+    const storeCount = countEntries(storeFile);
+    const bakCount = countEntries(bakFile);
+
+    return {
+      checkedAt: Date.now(),
+      boot: {
+        replayed: loaded.replayed || 0,
+        loadedKeys: loaded.loaded || 0,
+        revision: repo.revision,
+        lastExitClean: (loaded.replayed || 0) === 0,
+        sweptAtBoot: swept.burned || 0
+      },
+      store: { bytes: store.bytes, mtime: store.mtime, count: storeCount },
+      bak: { exists: bak.exists, bytes: bak.bytes, mtime: bak.mtime, count: bakCount, behind: storeCount >= 0 && bakCount >= 0 ? storeCount - bakCount : -1 },
+      snapshots: { count: snaps.length, latest: snaps[0] || null, entries: snaps.slice(0, 5) },
+      data: {
+        diaries: diaryCount,
+        keys: repo.keys().length,
+        sealed: bin.total,
+        sealedSoonest: bin.soonest,
+        gtdOpen: gtdOpen,
+        capsules: capsuleCount
+      },
+      migration: { done: fs.existsSync(manifestFile), manifestAt: fileStat(manifestFile).mtime },
+      autoBackup: {
+        enabled: autoBackup.enabled,
+        intervalMinutes: autoBackup.intervalMinutes,
+        kept: autoBackup.kept,
+        lastAt: autoBackup.lastAt,
+        lastId: autoBackup.lastId
+      }
+    };
+  }
+
+  // 独立阅读窗口：三栏布局需要大宽度，放主窗口里挤不下；一本书一个窗口，重复点只聚焦。
+  // 窗口只加载静态 reader 页 + 同一个 preload，渲染层仍然只能走 v1 白名单。
+  function openReaderWindow(payload) {
+    const q = payload || {};
+    const bookId = String(q.bookId || '');
+    if (!bookId) return { ok: false, reason: '缺少 bookId' };
+    const alive = readerWindows.get(bookId);
+    if (alive && !alive.isDestroyed()) {
+      if (alive.isMinimized()) alive.restore();
+      alive.focus();
+      return { ok: true, reused: true };
+    }
+    const s = readingStore.read();
+    const b = s.books.filter(function (x) { return x.id === bookId; })[0];
+    const theme = b ? null : themeBooksFlat().filter(function (x) { return x.bookId === bookId; })[0];
+    if (!b && !theme) return { ok: false, reason: '书架上找不到这本书' };
+    const title = b ? b.title : theme.title;
+    const win = new BrowserWindow({
+      width: 1360,
+      height: 880,
+      minWidth: 1080,
+      minHeight: 680,
+      title: '九格手记 · 阅读《' + title + '》',
+      backgroundColor: '#faf7f1',
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/v2-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        spellcheck: false
+      }
+    });
+    win.setMenuBarVisibility(false);
+    win.loadFile(READER_HTML, { query: { bookId: bookId, mode: b ? 'leisure' : 'theme' } });
+    win.on('closed', function () { readerWindows.delete(bookId); });
+    readerWindows.set(bookId, win);
+    return { ok: true, reused: false };
+  }
+
+  // 账本三栏需要比主窗更宽的画布，且记账是长时间连续操作，独立窗口比内嵌页合适。
+  // 仍用同一个 preload：渲染层没有第二条出境口，也没有任何跨窗口直连。
+  function openFinanceWindow() {
+    if (financeWindow && !financeWindow.isDestroyed()) {
+      if (financeWindow.isMinimized()) financeWindow.restore();
+      financeWindow.focus();
+      return { ok: true, reused: true };
+    }
+    const win = new BrowserWindow({
+      width: 1480,
+      height: 920,
+      minWidth: 1200,
+      minHeight: 720,
+      title: '九格手记 · 家庭账本',
+      backgroundColor: '#faf7f1',
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/v2-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        spellcheck: false
+      }
+    });
+    win.setMenuBarVisibility(false);
+    win.loadFile(FINANCE_HTML);
+    win.on('closed', function () { financeWindow = null; });
+    financeWindow = win;
+    return { ok: true, reused: false };
+  }
+
+  const api = createApiLayer({
+    repository: repo,
+    lifecycle: lifecycle,
+    domain: domain,
+    healthChecker: buildHealth,
+    backupRunner: runAutoBackup,
+    // 独立阅读窗口（目录 / 正文 / 笔记三栏）：开窗是主进程职责，渲染层只传 bookId
+    readerOpener: openReaderWindow,
+    // 独立账本窗口（导航 / 模块 / 洞察三栏）：渲染层只说「开账本」，不碰窗口句柄
+    financeOpener: openFinanceWindow,
+    // 原生文件选择：电子书（图书馆）与图片（梦想具象化）共用一条通道，
+    // 靠 payload.kind 切过滤器——新通道等于新失败面，不为一个滤镜再开一条 IPC
+    filePicker: function (p) {
+      const kind = p && p.kind === 'image' ? 'image' : 'book';
+      if (PROBE) {
+        const raw = kind === 'image'
+          ? process.env.JIUGE_V2_PICK_IMAGE || ''
+          : process.env.JIUGE_V2_PICK_FILES || '';
+        return { canceled: !raw, paths: raw ? raw.split('|').filter(Boolean) : [] };
+      }
+      const picked = kind === 'image'
+        ? dialog.showOpenDialogSync(mainWindow, {
+          title: '给这个梦想选一张具象的图片',
+          buttonLabel: '用它',
+          properties: ['openFile'],
+          filters: [{ name: '图片', extensions: DREAM_IMAGE_EXTS }]
+        })
+        : dialog.showOpenDialogSync(mainWindow, {
+          title: '把本电脑的电子书放进图书馆',
+          buttonLabel: '放入图书馆',
+          properties: ['openFile', 'multiSelections'],
+          filters: [{ name: '电子书', extensions: readingEpub.ALLOWED_EXTS }]
+        });
+      return { canceled: !picked, paths: picked || [] };
+    },
+    fileSaver: function (name, text) {
+      let target;
+      if (PROBE) {
+        // E2E 无法点击 Windows 原生模态另存为对话框：只跳过「选路径」这一步，
+        // 写文件仍是真实 fs.writeFileSync，回执仍是真实完整路径 + 字节数。
+        // 该分支仅由 JIUGE_V2_PROBE=1 触发，正式运行必须走用户可见的 dialog。
+        target = path.join(os.tmpdir(), name);
+      } else {
+        target = dialog.showSaveDialogSync(mainWindow, {
+          title: '导出九格手记',
+          defaultPath: path.join(app.getPath('documents'), name),
+          filters: [{ name: '所有文件', extensions: ['*'] }]
+        });
+      }
+      if (!target) return { canceled: true };
+      // 导出为一张图：渲染层把 canvas 转成 dataURL，仍走同一个 v1/file:save 通道。
+      // 识别前缀后按二进制落盘，不必为 PNG 再开一条 IPC（新通道 = 新失败面）。
+      const PNG_PREFIX = 'data:image/png;base64,';
+      if (text.indexOf(PNG_PREFIX) === 0) {
+        const buf = Buffer.from(text.slice(PNG_PREFIX.length), 'base64');
+        fs.writeFileSync(target, buf);
+        return { canceled: false, path: target, bytes: buf.length };
+      }
+      fs.writeFileSync(target, text, 'utf8');
+      return { canceled: false, path: target, bytes: Buffer.byteLength(text, 'utf8') };
+    }
+  });
+  api.register(ipcMain);
+  global.__jiugeApi = api;
+  global.__jiugeLoaded = loaded;
+  // 暴露给 E2E 探针：产物端到端要能验证"备份真的在跑"，而不只是"函数存在"
+  global.__jiugeHealth = buildHealth;
+  global.__jiugeBackup = runAutoBackup;
+
+  // 自动备份：启动一份 + 定时滚动（默认 30 分钟 / 保留 5 份）
+  // 内部会先 flush 再判断有没有可备份内容：干净机首启且没写过东西时自动跳过，不造空快照。
+  runAutoBackup('startup');
+  autoBackup.timer = setInterval(function () {
+    if (!autoBackup.enabled) return;
+    runAutoBackup('timer');
+  }, autoBackup.intervalMinutes * 60 * 1000);
+  if (autoBackup.timer.unref) autoBackup.timer.unref();
+  app.on('will-quit', function () {
+    if (autoBackup.timer) { clearInterval(autoBackup.timer); autoBackup.timer = null; }
+  });
+
+  // 按 key 精确失效：主进程写后广播到所有窗口，根除「窗口 A 写、窗口 B 读旧值」
+  repo.onChange(function (event) {
+    BrowserWindow.getAllWindows().forEach(function (win) {
+      if (!win.isDestroyed()) win.webContents.send('v1/data:changed', event);
+    });
+  });
+
+  // 四道 flush 兜底 + process exit；主进程独立落盘，不依赖渲染进程回执
+  lifecycle.installFlushGuards({
+    onBeforeQuit: function (fn) { app.on('before-quit', fn); },
+    onWindowAllClosed: function (fn) { app.on('window-all-closed', fn); },
+    onPowerShutdown: function (fn) { powerMonitor.on('shutdown', fn); },
+    onPowerSuspend: function (fn) { powerMonitor.on('suspend', fn); },
+    onProcessExit: function (fn) { process.on('exit', fn); }
+  });
+
+  // 一次性迁移：旧 store.json 存在且 manifest 未生成时执行，失败即只读
+  const legacyPath = findLegacyStore();
+  const manifestPath = path.join(dataDir, 'manifest.json');
+  if (legacyPath && !fs.existsSync(manifestPath)) {
+    const result = createMigrator({ legacyPath: legacyPath, dataDir: dataDir, repository: repo }).run();
+    if (result.error) {
+      repo.setReadOnly(true);
+      console.error('[jiuge-v2] 迁移失败，进入只读模式：' + result.error);
+    }
+  }
+  return dataDir;
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 1024,
+    minHeight: 680,
+    title: '九格手记 · 个人记录工作台',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/v2-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false
+    }
+  });
+  mainWindow.loadFile(DIST);
+  mainWindow.webContents.on('did-finish-load', function () {
+    if (!PROBE) return;
+    try {
+      const api = global.__jiugeApi;
+      const loaded = global.__jiugeLoaded || {};
+      fs.writeFileSync(path.join(app.getPath('userData'), 'v2-probe.json'), JSON.stringify({
+        pid: process.pid,
+        isAsar: __dirname.indexOf('app.asar') >= 0 || DIST.indexOf('app.asar') >= 0,
+        resourcePath: DIST,
+        loadedUrl: mainWindow.webContents.getURL(),
+        apiChannels: api ? api.routeNames().length : 0,
+        domainAttached: !!global.wx,
+        title: mainWindow.getTitle(),
+        userData: app.getPath('userData'),
+        replayedAtBoot: loaded.replayed || 0,
+        loadedKeys: loaded.loaded || 0,
+        contextIsolation: true,
+        sandbox: true
+      }, null, 2));
+    } catch (e) {
+      fs.writeFileSync(path.join(app.getPath('userData'), 'v2-probe-error.txt'), String(e && e.stack || e));
+    }
+  });
+  mainWindow.on('closed', function () { mainWindow = null; });
+}
+
+// 单实例锁：取锁失败时连 KV 都不初始化
+// E2E 诊断（仅 PROBE）：主进程中途消失时，要靠这份流水判断是「自己退出」还是「被带走」
+if (PROBE) {
+  const diagLog = function (tag, extra) {
+    try {
+      fs.appendFileSync(
+        path.join(app.getPath('userData'), 'v2-probe-lifecycle.log'),
+        new Date().toISOString() + ' ' + tag + (extra === undefined ? '' : ' ' + JSON.stringify(extra)) + '\n'
+      );
+    } catch (e) { /* noop */ }
+  };
+  diagLog('boot', { pid: process.pid });
+  process.on('uncaughtException', function (e) { diagLog('uncaughtException', String((e && e.stack) || e)); });
+  process.on('unhandledRejection', function (e) { diagLog('unhandledRejection', String((e && e.stack) || e)); });
+  process.on('exit', function (code) { diagLog('process-exit', { code: code }); });
+  app.on('child-process-gone', function (ev, d) { diagLog('child-process-gone', d); });
+  app.on('render-process-gone', function (ev, wc, d) { diagLog('render-process-gone', d); });
+  app.on('before-quit', function () { diagLog('before-quit'); });
+  app.on('will-quit', function () { diagLog('will-quit'); });
+  app.on('quit', function (ev, code) { diagLog('quit', { code: code }); });
+}
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', function () {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+  app.whenReady().then(function () {
+    bootCore();
+    createWindow();
+  });
+  app.on('window-all-closed', function () {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}

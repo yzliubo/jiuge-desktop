@@ -1,0 +1,30 @@
+{
+  "name": "jiuge-desktop",
+  "version": "1.0.0",
+  "description": "九格手记 Windows 桌面版：纯本地、零网络、五页等价移植",
+  "main": "src/main/main.js",
+  "private": true,
+  "author": "九格手记桌面版团队",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron src/main/main.js",
+    "start:v2": "electron src/main/main-v2.js",
+    "verify": "node tools/verify-equivalence.js",
+    "smoke": "node tools/smoke.js",
+    "bench": "node tools/bench-store.js",
+    "golden": "node tests/phase2/golden-case.js",
+    "migrate:verify": "node tests/phase2/golden-case.js --only=migrate",
+    "bench:core": "node tests/phase2/golden-case.js --only=bench",
+    "view:check": "node tests/phase2/view-contract.js",
+    "weather:check": "node tests/phase2/weather-case.js",
+    "build:view": "npm --prefix renderer-v2 run build",
+    "dist": "electron-builder --win --x64 --config electron-builder.yml",
+    "dist:v2": "electron-builder --win --x64 --config electron-builder-v2.yml",
+    "test:gui": "node tests/e2e/gui-assert.js",
+    "test:exe": "node tests/e2e/exe-assert.js"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

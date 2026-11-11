@@ -1,0 +1,157 @@
+{
+  "label": "mem-before",
+  "generatedAt": "2026-11-07T06:32:15.011Z",
+  "machine": {
+    "platform": "win32 10.0.26300 / x64",
+    "cpu": "Intel(R) Core(TM) Ultra 5 125H",
+    "cores": 18,
+    "memGB": 31,
+    "node": "v22.22.2"
+  },
+  "exitCode": 0,
+  "logBytes": 1270,
+  "checksTotal": 14,
+  "checksPassed": 13,
+  "checksFailed": [
+    "D01-13"
+  ],
+  "facts": {
+    "tabSteps": [
+      "setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ]",
+      "setData({tabIndex:2}) → .rv-tab-on 落在第 3 个（0 基 2），三个标签 class 实录=[rv-tab  ][ rv-tab  ][ rv-tab rv-tab-on]",
+      "setData({tabIndex:0}) → .rv-tab-on 落在第 1 个（0 基 0），三个标签 class 实录=[rv-tab rv-tab-on ][ rv-tab  ][ rv-tab ]",
+      "setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ]"
+    ],
+    "skinSteps": [
+      "standard → data.theme=standard，期望第 1 张卡（standard），实际 .skin-cell-on=第 1 张，aria-checked=true 的第 [1] 张，aria-label 含「已选中」的第 [1] 张；aria-label 实录=标准版，森绿米白，已选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中",
+      "tech → data.theme=tech，期望第 2 张卡（tech），实际 .skin-cell-on=第 2 张，aria-checked=true 的第 [2] 张，aria-label 含「已选中」的第 [2] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，已选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中",
+      "girl → data.theme=girl，期望第 3 张卡（girl），实际 .skin-cell-on=第 3 张，aria-checked=true 的第 [3] 张，aria-label 含「已选中」的第 [3] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，已选中 ‖ 儿童版，糖果积木，未选中",
+      "kids → data.theme=kids，期望第 4 张卡（kids），实际 .skin-cell-on=第 4 张，aria-checked=true 的第 [4] 张，aria-label 含「已选中」的第 [4] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，已选中"
+    ],
+    "skinIds": [
+      "standard",
+      "tech",
+      "girl",
+      "kids"
+    ],
+    "b05": {
+      "sixSetDataMs": 5.3,
+      "sameNode": true,
+      "focused": true,
+      "selKept": true,
+      "valueKept": true,
+      "clockText": "12:35",
+      "sheetVisible": true
+    },
+    "digest": {
+      "key": "work",
+      "s0": {
+        "found": true,
+        "className": "dg-row  ",
+        "open": false,
+        "bodyExists": true,
+        "bodyDisplay": "none",
+        "bodyText": "探针最近一句"
+      },
+      "s1": {
+        "found": true,
+        "className": "dg-row  dg-row-open",
+        "open": true,
+        "bodyExists": true,
+        "bodyDisplay": "",
+        "bodyText": "探针最近一句"
+      },
+      "s2": {
+        "found": true,
+        "className": "dg-row  ",
+        "open": false,
+        "bodyExists": true,
+        "bodyDisplay": "none",
+        "bodyText": "探针最近一句"
+      }
+    },
+    "timing": {
+      "page": "review（372 格年历）",
+      "pixels": 372,
+      "loops": 34,
+      "loopItems": 447,
+      "iterations": 60,
+      "avgMs": 0.467,
+      "p50Ms": 0.4,
+      "p95Ms": 0.7,
+      "maxMs": 0.8,
+      "minMs": 0.2,
+      "totalMs": 28,
+      "samples": [
+        0.6,
+        0.8,
+        0.7,
+        0.7,
+        0.6,
+        0.5,
+        0.4,
+        0.6,
+        0.4,
+        0.5,
+        0.4,
+        0.4,
+        0.4,
+        0.6,
+        0.4,
+        0.5,
+        0.5,
+        0.8,
+        0.5,
+        0.5,
+        0.4,
+        0.5,
+        0.4,
+        0.4,
+        0.4,
+        0.4,
+        0.6,
+        0.5,
+        0.6,
+        0.5,
+        0.3,
+        0.5,
+        0.3,
+        0.5,
+        0.4,
+        0.5,
+        0.6,
+        0.3,
+        0.5,
+        0.5,
+        0.4,
+        0.3,
+        0.4,
+        0.4,
+        0.4,
+        0.5,
+        0.5,
+        0.5,
+        0.4,
+        0.7,
+        0.5,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.4,
+        0.4,
+        0.2,
+        0.3,
+        0.4
+      ]
+    },
+    "loopReclaim": {
+      "loopsBefore": 34,
+      "loopsAfter": 34,
+      "reclaimed": 0,
+      "staleStillRegistered": 12
+    }
+  },
+  "jsErrors": [],
+  "consoleMessages": 4
+}

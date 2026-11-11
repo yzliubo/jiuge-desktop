@@ -1,0 +1,108 @@
+<view class="theme-root theme-{{theme}} page capsule-page">
+    <view class="hero">
+        <text class="eyebrow eyebrow--latin">LETTERS TO FUTURE</text>
+        <text class="hero-title">写给未来的自己</text>
+        <text class="hero-sub">把想说的话封存起来，到那天才准打开。写给未来的自己，也写给现在的自己。</text>
+        <view class="hero-stats">
+            <view class="hero-stat">
+                <text class="hero-stat-num">{{dueCount}}</text>
+                <text class="hero-stat-label">待开启</text>
+            </view>
+            <view class="hero-stat">
+                <text class="hero-stat-num">{{sealedCount}}</text>
+                <text class="hero-stat-label">封存中</text>
+            </view>
+            <view class="hero-stat">
+                <text class="hero-stat-num">{{openedCount}}</text>
+                <text class="hero-stat-label">已开启</text>
+            </view>
+        </view>
+    </view>
+
+    <!-- 分类一：到期待开启，置顶醒目 -->
+    <view wx:if="{{dueCount > 0}}" class="section-head">
+        <text class="section-title">可以拆开了</text>
+        <text class="section-note">来自过去的信</text>
+    </view>
+    <view wx:if="{{dueCount > 0}}" class="card due-card">
+        <view class="due-row" wx:for="{{groups.due}}" wx:key="id">
+            <view class="due-body">
+                <text class="due-from">{{item.writtenAtLabel}} 寄出</text>
+                <text class="due-state">{{item.countText}} · {{item.openAtLabel}} 开启</text>
+            </view>
+            <text class="due-btn" data-id="{{item.id}}" bindtap="onShowCapsule">拆开 ›</text>
+        </view>
+    </view>
+
+    <!-- 写新胶囊 -->
+    <view class="section-head">
+        <text class="section-title">寄一封新的</text>
+        <text class="section-note">给明天 · 时间胶囊</text>
+    </view>
+    <view class="card compose-card">
+        <text class="compose-desc">写下来，封存，到那天才显示内容。哪怕只写一句，也是给未来的自己留一个坐标。</text>
+        <textarea class="compose-input" value="{{capsuleText}}" bindinput="onCapsuleInput"
+                  placeholder="写给那时候的自己……" placeholder-class="input-ph"
+                  maxlength="500" auto-height fixed="true" show-confirm-bar="{{false}}" />
+        <text class="compose-label">什么时候开启</text>
+        <view class="preset-row">
+            <view wx:for="{{capsulePresets}}" wx:key="value"
+                  class="preset {{item.selected ? 'preset-on' : ''}}"
+                  data-value="{{item.value}}" bindtap="onPickCapsulePreset">{{item.label}}</view>
+        </view>
+        <picker mode="date" value="{{capsuleOpenAt}}" start="{{capsuleMinDate}}" bindchange="onCapsuleDateChange">
+            <view class="compose-custom">或选一个日子：{{capsuleOpenAtLabel}} ›</view>
+        </picker>
+        <button class="btn-primary compose-send" bindtap="onSendCapsule">封存，寄出去</button>
+    </view>
+
+    <!-- 分类二：封存中，带到期倒计时与封存进度 -->
+    <view class="section-head">
+        <text class="section-title">封存中</text>
+        <text class="section-note">{{sealedCount}} 封 · 到那天才显示</text>
+    </view>
+    <block wx:if="{{sealedCount > 0}}">
+        <view class="card sealed-card" wx:for="{{groups.sealed}}" wx:key="id"
+              data-id="{{item.id}}" bindtap="onShowCapsule">
+            <view class="sealed-top">
+                <text class="sealed-date">{{item.openAtLabel}} 开启</text>
+                <text class="sealed-count">{{item.countText}}</text>
+            </view>
+            <view class="sealed-track">
+                <view class="sealed-fill" style="width:{{item.progress}}%"></view>
+            </view>
+            <text class="sealed-meta">{{item.writtenAtLabel}} 寄出 · 封存旅程已走过 {{item.progress}}%</text>
+            <text class="sealed-locked">封存中，到那天才会显示内容</text>
+        </view>
+    </block>
+    <view wx:else class="empty-hint">还没有封存中的信。上面写第一封吧。</view>
+
+    <!-- 分类三：已开启，可重读 -->
+    <view class="section-head">
+        <text class="section-title">已开启</text>
+        <text class="section-note">{{openedCount}} 封 · 可重读</text>
+    </view>
+    <block wx:if="{{openedCount > 0}}">
+        <view class="card opened-card" wx:for="{{groups.opened}}" wx:key="id"
+              data-id="{{item.id}}" bindtap="onShowCapsule">
+            <view class="opened-top">
+                <text class="opened-date">{{item.openAtLabel}} 开启</text>
+                <text class="opened-tag">已开启</text>
+            </view>
+            <text class="opened-text">{{item.preview}}</text>
+            <text class="opened-more">重读全文 ›</text>
+        </view>
+    </block>
+    <view wx:else class="empty-hint">还没有开启过的信。等日子到了，第一封会出现在「可以拆开了」。</view>
+
+    <text class="source-note">所有信件只保存在本机，到期前不会提前展示内容。</text>
+
+    <view class="mask" wx:if="{{openedId}}" bindtap="onCloseCapsuleRead"></view>
+    <view wx:if="{{openedId}}" class="reader">
+        <text class="reader-meta">{{openedFrom}} 写给你</text>
+        <scroll-view scroll-y class="reader-scroll">
+            <text class="reader-text">{{openedText}}</text>
+        </scroll-view>
+        <text class="reader-close" bindtap="onCloseCapsuleRead">收起</text>
+    </view>
+</view>

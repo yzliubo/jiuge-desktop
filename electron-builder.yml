@@ -1,0 +1,55 @@
+# 九格手记 Windows 桌面版 · 打包配置
+# 交付形态：portable 免安装 exe 优先 + NSIS 安装版可选（架构 §10 自行裁定 1）
+# portable 不写注册表、不触发安装拦截、卸载/重装不会误删 userData 数据目录（E3）。
+
+appId: com.jiuge.desktop
+productName: 九格手记
+copyright: 九格手记 · 数据只存在本机
+
+directories:
+  output: build
+  buildResources: build-resources
+
+# 运行时零第三方库：只把主进程 / preload / 8 个 utils / 页面 / 视图 / 样式 / 工具脚本打进 asar。
+# tools/ 内的验证脚本随包发布，便于用户自行跑 npm run verify / smoke（无 GUI 依赖）。
+files:
+  - package.json
+  - src/**/*
+  - tools/**/*
+  - "!**/*.sha256.json"
+  - "!**/*.log"
+  - "!**/*.bak"
+  - "!**/store.pre-import-*.json"
+
+asar: true
+compression: maximum
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+  icon: null
+  legalTrademarks: 数据只存在本机
+# 注：fileVersion / productVersion 不是 electron-builder 24.13.3 的 win 合法字段，
+# 版本信息由 package.json 的 version 自动注入，故不在此重复声明。
+
+portable:
+  # 单文件免安装 exe，双击即用；userData 落在 %APPDATA%/九格手记，不随 exe 删除。
+  artifactName: 九格手记-便携版.exe
+  unpackDirName: jiu-ge-desktop
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 九格手记
+  artifactName: 九格手记-安装版-${version}.${ext}
+  deleteAppDataOnUninstall: false
+
+# 不签名（未采购代码签名证书）。首次运行若被 SmartScreen 拦截，
+# 需用户点「更多信息 → 仍要运行」；如实标注，不谎报为已签名（R8）。

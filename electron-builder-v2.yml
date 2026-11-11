@@ -1,0 +1,71 @@
+# 九格手记 v2（B 架构）打包配置：Vue3/Vite 静态 dist + M0/M1 数据层 + v2 入口
+# 与旧 electron-builder.yml 完全隔离，产物落 build-v2/，不覆盖旧 exe（保 verify #65）。
+appId: com.jiuge.desktop.v2
+productName: 九格手记-v2
+copyright: 九格手记 · 数据只存在本机
+
+directories:
+  output: build-v2
+  buildResources: build-resources
+
+files:
+  - package.json
+  - src/core/**/*
+  - src/utils/**/*
+  # GTD 工作台是独立领域模块（数据存 md_gtd），必须随包，否则主进程 require 直接崩
+  - src/gtd/**/*
+  # 梦想目标板同理（数据存 md_dream）；这条漏过一次，exe 一启动就白屏
+  - src/dream/**/*
+  # 学习成长三张表（考试 / 技能 / 阅读，存 md_growth）
+  - src/growth/**/*
+  # 语料库（名言 / 问候 / 运动提示，存 md_inspire）：缺了主进程 require 直接崩
+  - src/inspire/**/*
+  # V1.3 时间纵深（人生月历 / 待办汇总 / 随机重读 / 一个文件）：零新键的派生层
+  - src/v13/**/*
+  # V2.0 / V2.1 领域层：每个新模块都必须进 files，漏一条 exe 启动即 require 失败（白屏）
+  - src/search/**/*
+  - src/tags/**/*
+  - src/recur/**/*
+  - src/relation/**/*
+  - src/review/**/*
+  - src/trace/**/*
+  - src/secure/**/*
+  - src/attach/**/*
+  # 图书馆与「读书笔记」数据库（md_reading）：漏一条 exe 启动即白屏
+  - src/reading/**/*
+  # 家庭账本（md_finance）：预算 / 规则 / CSV 导入，漏配会在启动时挂掉
+  - src/finance/**/*
+  # 本机时间源（md_worktime）：主进程 require 了 board/client/aggregate，漏配会在启动时挂掉
+  - src/worktime/**/*
+  # 首页天气（md_weather）：主进程 require 了 board/client，漏配同样启动即白屏
+  - src/weather/**/*
+  - src/main/main-v2.js
+  - src/preload/v2-preload.js
+  - renderer-v2/dist/**/*
+  # 独立阅读窗口（三栏：目录 / 正文 / 笔记）：纯静态页，不进 vite 构建，必须随包
+  - renderer-v2/reader/**/*
+  - "!**/*.sha256.json"
+  - "!**/*.log"
+  - "!**/*.bak*"
+  - "!**/*.map"
+
+# v2 的入口必须写进打包后的 package.json，否则 electron 仍会去加载旧 main.js
+extraMetadata:
+  main: src/main/main-v2.js
+
+asar: true
+compression: maximum
+
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  icon: null
+  legalTrademarks: 数据只存在本机
+
+portable:
+  artifactName: 九格手记-v2-便携版.exe
+  unpackDirName: jiu-ge-desktop-v2
+
+# 未采购 OV/EV 代码签名证书前保持未签名，如实标注；SmartScreen 过渡话术见交付文档。

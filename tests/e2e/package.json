@@ -1,0 +1,13 @@
+{
+  "name": "jiuge-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "九格手记 v2 · Playwright + Electron 真 GUI 断言与打包 exe 端到端",
+  "scripts": {
+    "gui": "node gui-assert.js",
+    "exe": "node exe-assert.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

@@ -1,0 +1,210 @@
+{
+  "mode": "probe",
+  "generatedAt": "2026-11-07T03:38:33.518Z",
+  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.qa-userdata",
+  "probe": {
+    "checks": [
+      {
+        "id": "B-01",
+        "name": "sys.listPages() 返回 5 页且顺序为 index,review,capsule,habit,settings",
+        "ok": true,
+        "detail": "index,review,capsule,habit,settings"
+      },
+      {
+        "id": "B-02",
+        "name": "5 个常驻 Page 实例均已注册",
+        "ok": true,
+        "detail": "实例数=5"
+      },
+      {
+        "id": "B-03",
+        "name": "冷启动落在「今日」页（导航态 / 侧栏激活项 / section 显隐一致）",
+        "ok": true,
+        "detail": "current=index / active=index / 其余隐藏=true"
+      },
+      {
+        "id": "B-04",
+        "name": "今日页真实 WXML 已接管（九宫格 9 格 + {{clockText}} 插值）",
+        "ok": true,
+        "detail": "格数=9 / clockText=11:38"
+      },
+      {
+        "id": "B-05",
+        "name": "每秒刷新时钟 6 次：输入框节点 / 焦点 / 选区三重不变且 clockText 局部刷新",
+        "ok": true,
+        "detail": "节点未替换=true / 焦点保持=true / 选区=4→4 / clockText=12:35"
+      },
+      {
+        "id": "B-06",
+        "name": "wx.getSystemInfoSync().windowWidth 固定 375（R2 与 1rpx=0.5px 一致）",
+        "ok": true,
+        "detail": "windowWidth=375"
+      },
+      {
+        "id": "B-07",
+        "name": "一键留一句两条预设文案逐字保留",
+        "ok": true,
+        "detail": "今天无事，留个记号。 | 今天没有什么大事，我还是想把今天留下来。"
+      },
+      {
+        "id": "B-08",
+        "name": "4 套皮肤在今日页全局生效（<html> class 与 --c-switch 同步）",
+        "ok": true,
+        "detail": "standard:#2F7357 / tech:#1B62D6 / girl:#C9416F / kids:#1578B8"
+      },
+      {
+        "id": "B-09",
+        "name": "回看页真实 WXML 已接管",
+        "ok": true,
+        "detail": "root=true"
+      },
+      {
+        "id": "B-10",
+        "name": "回看页 3 个横向标签 + 3 个 swiper-item 且首帧只显示 current=0",
+        "ok": true,
+        "detail": "标签=3 / swiper-item=3 / 可见=0"
+      },
+      {
+        "id": "B-11",
+        "name": "swiper bindchange 传入 {detail:{current}} 且 tabIndex 同步为 1",
+        "ok": true,
+        "detail": "current=1 / tabIndex=1 / 可见=1"
+      },
+      {
+        "id": "B-12",
+        "name": "三标签可切到「日记」tabIndex=2 且 swiper-item 显隐跟随",
+        "ok": true,
+        "detail": "tabIndex=2 / 可见=2"
+      },
+      {
+        "id": "B-13",
+        "name": "年历 12×31=372 格一次渲染（P1 保持，未分片）",
+        "ok": true,
+        "detail": "DOM 格数=372"
+      },
+      {
+        "id": "B-14",
+        "name": "picker mode=date → input[type=date]，值仍为 YYYY-MM-DD",
+        "ok": true,
+        "detail": "2026-11-07"
+      },
+      {
+        "id": "B-15",
+        "name": "只按心情筛选：每篇一条摘要，label 为「心情 · 平静」",
+        "ok": true,
+        "detail": "命中=1 / 样本={\"date\":\"2026-10-01\",\"label\":\"心情 · 平静\",\"text\":\"QA心情筛选样本\"}"
+      },
+      {
+        "id": "B-16",
+        "name": "往年今天 → 回看落到「日记」标签（reviewTab=2），AppState 消费一次即清",
+        "ok": true,
+        "detail": "tabIndex=2 / reviewTab=null"
+      },
+      {
+        "id": "B-17",
+        "name": "补记 → 今日落到指定日期 2026-11-01，backfillDate 消费一次即清",
+        "ok": true,
+        "detail": "dateKey=2026-11-01 / backfillDate="
+      },
+      {
+        "id": "B-18",
+        "name": "未来日期补记被拒（AppState 不写入未来日期）",
+        "ok": true,
+        "detail": "backfillDate=（空）"
+      },
+      {
+        "id": "B-19",
+        "name": "胶囊页真实 WXML 接管 + picker mode=date 的 min=明天",
+        "ok": true,
+        "detail": "min=2026-11-08 / capsuleMinDate=2026-11-08 / today=2026-11-07"
+      },
+      {
+        "id": "B-20",
+        "name": "过去日期被拒且不改写 capsuleOpenAt",
+        "ok": true,
+        "detail": "2026-11-14 → 2026-11-14"
+      },
+      {
+        "id": "B-21",
+        "name": "非法 openAt 不显示「已到期 NaN 天」且 capsuleGroups 跳过该记录",
+        "ok": true,
+        "detail": "DOM含NaN=false / capsuleGroups.total=1"
+      },
+      {
+        "id": "B-22",
+        "name": "坚持页真实 WXML 接管",
+        "ok": true,
+        "detail": "milestone-card=true"
+      },
+      {
+        "id": "B-23",
+        "name": "switch→checkbox 恰好 4 个开关（3 模块 + 1 头七天双向）",
+        "ok": true,
+        "detail": "checkbox 数=4"
+      },
+      {
+        "id": "B-24",
+        "name": "switch bindchange → e.detail.value 为布尔且 store.modules() 真的变化",
+        "ok": true,
+        "detail": "captured=false / work:true→false"
+      },
+      {
+        "id": "B-25",
+        "name": "剪贴板三导出 + 剪贴板导入 + 新增文件导入共 5 个入口并存",
+        "ok": true,
+        "detail": "缺失=[] / 实际=导出可读文本 | 导出 Markdown | 导出 JSON 备份 | 从剪贴板导入 | 导入小程序备份文件（v6/v7）"
+      },
+      {
+        "id": "B-26",
+        "name": "4 套皮肤在全部 5 页一起变色（含 <html> class / --c-switch / 5 页 data.theme）",
+        "ok": true,
+        "detail": "standard:standard,standard,standard,standard,standard | tech:tech,tech,tech,tech,tech | girl:girl,girl,girl,girl,girl | kids:kids,kids,kids,kids,kids"
+      },
+      {
+        "id": "B-27",
+        "name": "左侧竖栏 5 项导航全部可达且对应 section 可见",
+        "ok": true,
+        "detail": "index:可见 / review:可见 / capsule:可见 / habit:可见 / settings:可见"
+      },
+      {
+        "id": "B-28",
+        "name": "注入未失焦输入（工作感想 / 今日一句 / 当前格正文）供关窗 flush",
+        "ok": true,
+        "detail": "workReflection=QA未失焦工作感想 / studyDayNote=QA未失焦今日一句 / _cells.work=QA当前格正文"
+      }
+    ]
+  },
+  "jsErrors": [],
+  "consoleMessages": [
+    {
+      "level": "1",
+      "message": "[页面运行时] 已落盘页面 JS：index,review,capsule,habit,settings",
+      "line": 267,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」",
+      "line": 283,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}",
+      "line": 62,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html"
+    },
+    {
+      "level": "2",
+      "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+      "line": 2,
+      "source": "node:electron/js2c/renderer_init"
+    },
+    {
+      "level": "1",
+      "message": "[退出 flush] 顺序完成：syncWorkReflection → syncStudyNote → persist → stopTimer（来源：close）",
+      "line": 83,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/flush.js"
+    }
+  ]
+}

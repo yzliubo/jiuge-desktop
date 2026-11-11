@@ -1,0 +1,93 @@
+# 依赖与构建产物
+node_modules/
+build/
+dist/
+*.log
+npm-debug.log*
+
+# 本机运行数据（绝不能入库）
+store.json
+store.json.bak
+store.json.tmp
+store.pre-import-*.json
+window-state.json
+
+# 移植工具生成的校验清单（可选入库，默认忽略）
+*.sha256.json
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 多版本构建产物（v1 之外的打包目录）
+build-v2/
+build-v2b/
+renderer-v2/dist/
+renderer-v2/node_modules/
+tests/e2e/node_modules/
+
+# 打包可执行文件（发布走 GitHub Releases，不进仓库）
+*.exe
+
+# 测试运行时截图
+tests/**/__shots/
+
+# Electron 测试用 profile（每次跑 E2E 由 Chromium 重新生成，含缓存与登录态）
+tests/**/.*userdata*/
+tests/**/.e2e-*/
+tests/**/GPUCache/
+tests/**/Code Cache/
+tests/**/DawnGraphiteCache/
+tests/**/DawnWebGPUCache/
+tests/**/Cache/
+tests/**/blob_storage/
+tests/**/Local Storage/
+tests/**/Session Storage/
+
+# 手工备份文件
+*.bak
+*.bak-*
+
+# 误重定向产生的 Chromium/Electron 日志（文件名即 fd 号）
+# 文件保留在磁盘，仅不入库
+/2300
+/2400
+/2512
+/2592
+/2672
+/2712
+/2736
+/2804
+/2812
+/2828
+/2868
+/2880
+/2888
+/2892
+/2904
+/2908
+/2912
+/2924
+/2932
+/2948
+/2952
+/2960
+/2964
+/3056
+/3172
+/3200
+/3240
+/3260
+/3276
+/3284
+/3316
+/3328
+/3344
+/3348
+/3352
+/3368
+/3388
+/3408
+/3452

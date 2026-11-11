@@ -1,0 +1,123 @@
+<view class="theme-root theme-{{theme}} page">
+    <view class="page-head">
+        <text class="eyebrow eyebrow--latin">KEEP GOING</text>
+        <text class="page-title">坚持</text>
+        <text class="page-sub">写日记像飞机起飞，进入稳定飞行前要闯过三道考验期。</text>
+    </view>
+
+    <view class="stat-card">
+        <view class="stat-main">
+            <text class="stat-num">{{streak}}</text>
+            <text class="stat-unit">天</text>
+            <text class="stat-caption">连续记录</text>
+        </view>
+        <view class="stat-side">
+            <view class="stat-side-item">
+                <text class="stat-side-num">{{total}}</text>
+                <text class="stat-side-label">累计篇数</text>
+            </view>
+            <view class="stat-side-item">
+                <text class="stat-side-num">{{startedDays}}</text>
+                <text class="stat-side-label">启程天数</text>
+            </view>
+        </view>
+    </view>
+
+    <view class="card gentle-card">
+        <view class="gentle-row">
+            <text class="gentle-label">最长连续</text>
+            <text class="gentle-value">{{bestStreak}} 天</text>
+        </view>
+        <view class="gentle-row">
+            <text class="gentle-label">本周节奏</text>
+            <text class="gentle-value">{{weekCount}} / {{weekGoal}} 天</text>
+        </view>
+        <text class="gentle-note">{{gentle}}</text>
+    </view>
+
+    <view class="section-head">
+        <text class="section-title">奖励里程碑</text>
+        <text class="section-note">周期与奖励都能自己定</text>
+    </view>
+    <view class="card milestone-card">
+        <text wx:if="{{milestoneNext}}" class="milestone-lead">{{milestoneNext}}</text>
+        <view class="milestone-row" wx:for="{{milestones}}" wx:key="at"
+              data-index="{{index}}" bindtap="onOpenMilestone">
+            <view class="milestone-dot {{item.done ? 'milestone-done' : ''}}"></view>
+            <view class="milestone-main">
+                <view class="milestone-line">
+                    <text class="milestone-label">{{item.label}}</text>
+                    <text wx:if="{{item.hint}}" class="milestone-hint">{{item.hint}}</text>
+                </view>
+                <text class="milestone-reward">{{item.reward}}</text>
+            </view>
+            <text class="milestone-state {{item.done ? 'milestone-state-done' : ''}}">{{item.done ? '已达成' : '还差 ' + item.remain + ' 天'}}</text>
+        </view>
+        <text wx:if="{{!milestones.length}}" class="milestone-empty">还没有设置奖励。给自己定一个周期，再写一份想要的奖励。</text>
+        <view class="milestone-actions">
+            <text class="milestone-add" bindtap="onAddMilestone">+ 添加奖励</text>
+            <text class="milestone-reset" bindtap="onResetMilestones">恢复默认</text>
+        </view>
+    </view>
+
+    <view class="card challenge-card">
+        <view class="challenge-head">
+            <text class="tag">{{challengeTag}}</text>
+            <text class="challenge-title">{{challengeTitle}}</text>
+        </view>
+        <text class="challenge-desc">{{challengeDesc}}</text>
+        <view class="progress-track">
+            <view class="progress-fill" style="width:{{progressWidth}}"></view>
+        </view>
+        <text class="progress-note">千日目标 · 已记录 {{total}} / 1000 天</text>
+    </view>
+
+    <view wx:if="{{firstWeekActive}}" class="card firstweek-card">
+        <text class="firstweek-title">头 7 天 · 第 {{firstWeekDayNo}} 天 · 只写开心的事</text>
+        <text class="firstweek-desc">刚开始这几天，只写快乐的日记、记录开心的事，让自己元气加分。别急着反省。</text>
+        <text wx:if="{{firstWeekCelebration}}" class="firstweek-celebrate">{{firstWeekCelebration}}</text>
+    </view>
+
+    <view class="section-head">
+        <text class="section-title">更多</text>
+        <text class="section-note">本机 {{recordCount}} 篇</text>
+    </view>
+    <view class="card more-card" bindtap="onOpenSettings" hover-class="more-card-hover">
+        <view class="more-copy">
+            <text class="more-title">设置</text>
+            <text class="more-desc">界面皮肤 · 页面模板 · 功能模块 · 数据导出与导入 · 使用小贴士</text>
+        </view>
+        <text class="more-arrow">›</text>
+    </view>
+
+    <view wx:if="{{msOpen}}" class="mask" bindtap="onCloseMilestone"></view>
+    <view wx:if="{{msOpen}}" class="ms-sheet">
+        <text class="ms-title">{{msIndex >= 0 ? '编辑奖励' : '添加奖励'}}</text>
+        <text class="ms-desc">坚持到第几天，就兑现这份奖励。</text>
+
+        <view class="ms-field">
+            <text class="ms-label">周期（天）</text>
+            <input class="ms-input" type="number" value="{{msDays}}" placeholder="例如 30"
+                   placeholder-class="ms-ph" confirm-type="done" bindinput="onMsDays" />
+        </view>
+        <view class="ms-presets">
+            <text class="ms-preset {{msDays == item ? 'ms-preset-on' : ''}}"
+                  wx:for="{{msPresets}}" wx:key="*this"
+                  data-days="{{item}}" bindtap="onMsPreset">{{item}} 天</text>
+        </view>
+
+        <view class="ms-field">
+            <text class="ms-label">奖励内容</text>
+            <input class="ms-input" value="{{msReward}}" maxlength="30"
+                   placeholder="例如：一顿好的、一次短途旅行" placeholder-class="ms-ph"
+                   confirm-type="done" bindinput="onMsReward" />
+        </view>
+
+        <view class="ms-btns">
+            <text wx:if="{{msIndex >= 0}}" class="ms-btn ms-btn-del" bindtap="onDeleteMilestone">删除</text>
+            <text class="ms-btn ms-btn-ghost" bindtap="onCloseMilestone">取消</text>
+            <text class="ms-btn ms-btn-main" bindtap="onSaveMilestone">保存</text>
+        </view>
+    </view>
+
+</view>

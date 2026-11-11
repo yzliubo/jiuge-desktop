@@ -1,0 +1,744 @@
+.page-head {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 14px;
+}
+
+.stat-card {
+    display: flex;
+    box-sizing: border-box;
+    padding: 18px var(--sp-7);
+    border-radius: var(--radius-xl);
+    background: var(--grad-inverse);
+    color: var(--c-on-inverse-1);
+}
+
+.stat-main {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+
+.stat-num {
+    font-size: var(--fs-display);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-unit {
+    margin-left: var(--sp-2);
+    font-size: var(--fs-lg);
+}
+
+.stat-caption {
+    width: 100%;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    color: var(--c-on-inverse-2);
+}
+
+.stat-side {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-left: var(--sp-7);
+    border-left: var(--bw) solid var(--c-line-inverse);
+}
+
+.stat-side-item {
+    display: flex;
+    flex-direction: column;
+    margin: var(--sp-2) 0;
+}
+
+.stat-side-num {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-side-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    color: var(--c-on-inverse-2);
+}
+
+.gentle-card {
+    margin-top: var(--sp-5);
+    padding: var(--sp-6) var(--sp-7);
+    background: var(--c-surface);
+}
+
+.gentle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) 0;
+}
+
+.gentle-label {
+    font-size: var(--fs-base);
+    color: var(--c-ink-4);
+}
+
+.gentle-value {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.gentle-note {
+    display: block;
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-brand-ink);
+}
+
+.challenge-card {
+    margin-top: var(--sp-5);
+}
+
+.challenge-head {
+    display: flex;
+    align-items: center;
+}
+
+.challenge-title {
+    margin-left: var(--sp-4);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-deep);
+}
+
+.challenge-desc {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.progress-track {
+    height: 8px;
+    margin-top: var(--sp-6);
+    border-radius: var(--radius-pill);
+    background: var(--c-line);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--grad-progress);
+}
+
+.progress-note {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.firstweek-card {
+    margin-top: var(--sp-5);
+    background: var(--c-gold-soft);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.firstweek-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-gold-ink);
+}
+
+.firstweek-desc {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-gold-ink-2);
+}
+
+.firstweek-celebrate {
+    display: block;
+    margin-top: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-gold-ink-2);
+}
+
+.principle-list {
+    padding: var(--sp-2) var(--sp-7);
+}
+
+.principle-row {
+    display: flex;
+    padding: var(--sp-6) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.principle-row:last-child {
+    border-bottom: none;
+}
+
+.principle-no {
+    width: 31px;
+    flex-shrink: 0;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-4);
+}
+
+.principle-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+}
+
+.principle-name {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.principle-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.tactic-item {
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-6) 14px;
+}
+
+.tactic-head {
+    display: flex;
+    align-items: center;
+}
+
+.tactic-no {
+    width: 30px;
+    flex-shrink: 0;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.tactic-title-wrap {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+}
+
+.tactic-name {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.tactic-short {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+}
+
+.tactic-arrow {
+    width: 22px;
+    text-align: center;
+    font-size: var(--fs-xl);
+    color: var(--c-deco-3);
+}
+
+.tactic-detail {
+    display: block;
+    margin: var(--sp-5) 0 var(--sp-1) 30px;
+    padding-top: var(--sp-4);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+/* ---- 奖励里程碑：周期与奖励可自定义 ---- */
+.milestone-card {
+    padding: var(--sp-6) var(--sp-7) var(--sp-4);
+}
+
+.milestone-lead {
+    display: block;
+    padding-bottom: var(--sp-4);
+    border-bottom: var(--bw) solid var(--c-line);
+    font-size: var(--fs-md);
+    color: var(--c-brand-ink);
+}
+
+.milestone-row {
+    display: flex;
+    align-items: center;
+    padding: var(--sp-6) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.milestone-dot {
+    width: 9px;
+    height: 9px;
+    margin-right: var(--sp-4);
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--c-line-3);
+}
+
+.milestone-done {
+    background: var(--c-gold);
+}
+
+.milestone-main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    padding-right: var(--sp-4);
+}
+
+.milestone-line {
+    display: flex;
+    align-items: center;
+}
+
+.milestone-label {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.milestone-hint {
+    margin-left: var(--sp-2);
+    padding: 1px var(--sp-2);
+    border-radius: var(--radius-s);
+    background: var(--c-bg-tint);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.milestone-reward {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+}
+
+.milestone-state {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.milestone-state-done {
+    color: var(--c-gold-strong);
+    font-weight: var(--fw-semi);
+}
+
+.milestone-empty {
+    display: block;
+    padding: var(--sp-5) 0;
+    font-size: var(--fs-md);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.milestone-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: var(--sp-5);
+}
+
+.milestone-add {
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+}
+
+.milestone-reset {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+/* 里程碑编辑浮层 */
+.mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--c-scrim);
+    z-index: 10;
+}
+
+.ms-sheet {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 18%;
+    z-index: 11;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    padding: 18px var(--sp-7) var(--sp-7);
+    border-radius: var(--radius-xl);
+    background: var(--c-surface);
+    animation: ms-in 0.22s ease;
+}
+
+@keyframes ms-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.ms-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-deep);
+}
+
+.ms-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.ms-field {
+    margin-top: var(--sp-6);
+}
+
+.ms-label {
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-4);
+}
+
+.ms-input {
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-surface-4);
+    border: var(--bw) solid var(--c-line-2);
+    font-size: var(--fs-lg);
+    color: var(--c-ink-2);
+}
+
+.ms-ph {
+    color: var(--c-deco-3);
+}
+
+.ms-presets {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-4);
+}
+
+.ms-preset {
+    margin: 0 var(--sp-3) var(--sp-3) 0;
+    padding: var(--sp-2) var(--sp-5);
+    border-radius: var(--radius-pill);
+    background: var(--c-bg-tint);
+    color: var(--c-ink-4);
+    font-size: var(--fs-sm);
+}
+
+.ms-preset-on {
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-weight: var(--fw-semi);
+}
+
+.ms-btns {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-7);
+    padding-top: var(--sp-6);
+    border-top: var(--bw) solid var(--c-line);
+}
+
+.ms-btn {
+    flex: 1;
+    margin-left: var(--sp-4);
+    padding: var(--sp-5) 0;
+    border-radius: var(--radius-l);
+    text-align: center;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+}
+
+.ms-btn:first-child {
+    margin-left: 0;
+}
+
+.ms-btn-del {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    /* 原 padding 10px + 14px 字 ≈ 37px 高，补到 44px 与旁边两个按钮齐平 */
+    min-height: 44px;
+    padding: var(--sp-5) var(--sp-7);
+    background: var(--c-down-soft);
+    color: var(--c-down);
+}
+
+.ms-btn-ghost {
+    background: var(--c-bg-tint);
+    color: var(--c-ink-4);
+}
+
+.ms-btn-main {
+    background: var(--c-btn-bg);
+    color: var(--c-btn-ink);
+}
+
+/* ---- 原「方法」栏样式，合并进「坚持」页 ---- */
+.intro {
+    background: linear-gradient(135deg, var(--c-brand-tint-2) 0%, var(--c-gold-tint) 100%);
+}
+
+.intro-quote {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-deep);
+}
+
+.intro-text {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-3);
+}
+
+.benefit-grid {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.benefit-card {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    width: calc((100% - 8px) / 2);
+    margin-right: var(--sp-4);
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-6) var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-1);
+}
+
+.benefit-card:nth-child(2n) {
+    margin-right: 0;
+}
+
+.benefit-index {
+    align-self: flex-start;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--radius-s);
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+
+.benefit-title {
+    margin-top: var(--sp-4);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.benefit-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.diff-list {
+    padding: var(--sp-2) var(--sp-7);
+}
+
+.diff-row {
+    display: flex;
+    padding: var(--sp-5) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.diff-row:last-child {
+    border-bottom: none;
+}
+
+.diff-no {
+    width: 26px;
+    flex-shrink: 0;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.diff-text {
+    flex: 1;
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-ink-3);
+}
+
+.wake-list,
+.step-list {
+    padding: var(--sp-2) var(--sp-7);
+}
+
+.wake-row,
+.step-row {
+    display: flex;
+    padding: var(--sp-6) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.wake-row:last-child,
+.step-row:last-child {
+    border-bottom: none;
+}
+
+.wake-no,
+.step-no {
+    width: 32px;
+    flex-shrink: 0;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-4);
+}
+
+.wake-body,
+.step-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+}
+
+.wake-name,
+.step-name {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.wake-desc,
+.step-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.note-card {
+    margin-top: var(--sp-4);
+    background: var(--c-gold-soft);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.note-title {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-bold);
+    color: var(--c-gold-ink);
+}
+
+.note-text {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    line-height: var(--lh-relaxed);
+    color: var(--c-gold-ink-2);
+    white-space: pre-wrap;
+}
+
+.dq-card {
+    padding: var(--sp-3) var(--sp-7);
+}
+
+.dq-row {
+    display: flex;
+    align-items: center;
+    padding: var(--sp-5) 0;
+}
+
+.dq-dot {
+    width: 6px;
+    height: 6px;
+    margin-right: var(--sp-4);
+    border-radius: 50%;
+    background: var(--c-gold);
+}
+
+.dq-text {
+    font-size: var(--fs-base);
+    color: var(--c-ink-3);
+}
+
+.dq-footer {
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-5);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+/* ---------- 更多：设置入口 ----------
+   皮肤 / 模板 / 模块 / 数据管理 / 小贴士 全部收进独立设置页，
+   坚持页主区回到「数据与操作」，这里只留一个入口。 */
+.more-card {
+    display: flex;
+    align-items: center;
+}
+
+.more-card-hover {
+    opacity: 0.82;
+}
+
+.more-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    padding-right: var(--sp-5);
+}
+
+.more-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.more-desc {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.more-arrow {
+    font-size: var(--fs-xl);
+    color: var(--c-ink-4);
+}

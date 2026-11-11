@@ -1,0 +1,122 @@
+/* 令牌层：page 兜底 + 四套 .theme-* 令牌 + 科技蓝/儿童版的 .card 描边。
+   放第一行，保证后面所有规则里的 var() 都能解析到值。
+   注意：`page { ... }` 与整套标准版令牌值都在 theme.wxss 里（标准版值挂在 .theme-root 上，
+   作为"未知主题"的兜底），这里不再重复定义。 */
+/* [wxss2css] @import "./styles/theme.wxss";  → 由 index.html 的 <link> 顺序加载，运行时不再 @import */
+
+button {
+    border-radius: var(--radius-l);
+}
+
+button::after {
+    border: none;
+}
+
+.page {
+    box-sizing: border-box;
+    min-height: 100vh;
+    padding: var(--sp-7) 14px 80px;
+}
+
+.card {
+    box-sizing: border-box;
+    background: var(--c-surface);
+    border-radius: var(--radius-xl);
+    padding: var(--sp-7);
+    box-shadow: var(--shadow-1);
+}
+
+.eyebrow {
+    /* 品牌绿 c-brand 白底仅 3.96:1，文字改用深一档 c-brand-ink（白底 5.66:1） */
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-bold);
+    letter-spacing: var(--ls-eyebrow);
+}
+
+/* 拉丁 eyebrow 的字距用 em（跟着字号缩放），中文用 --ls-eyebrow 的 rpx */
+.eyebrow--latin {
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.page-title {
+    margin-top: var(--sp-3);
+    font-size: var(--fs-2xl);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-snug);
+    letter-spacing: var(--ls-2);
+}
+
+.page-sub {
+    margin-top: var(--sp-2);
+    color: var(--c-ink-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+}
+
+.section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: var(--sp-8) var(--sp-1) var(--sp-4);
+}
+
+.section-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-ink-1);
+}
+
+.section-note {
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+}
+
+/* 主按钮：最小 58px（≈58px）可点高度，与改前视觉高度一致，同时远超 44px/44pt 的可点下限。
+   说明：改前高度来自微信 button 默认 line-height 2.5555（15px×2.5555≈38.35px）+ 上下 padding 20px ≈ 58.35px；
+   现在显式把 line-height 收到 1.2，内容高只有 18px，若不抬 min-height 会从 58px 掉到 44px（达标但变小）。 */
+.btn-primary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-height: 58px;
+    background: var(--c-btn-bg);
+    color: var(--c-btn-ink);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    line-height: var(--lh-snug);
+    padding: var(--sp-5) 0;
+}
+
+/* 次按钮同样拉到 58px：一是「清空 / 保存」同处一行，等高才不歪；二是不低于改前高度（改前约 36px） */
+.btn-ghost {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-height: 58px;
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-lg);
+    line-height: var(--lh-snug);
+}
+
+.tag {
+    display: inline-block;
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+}
+
+.divider {
+    height: 1px;
+    background: var(--c-line);
+}
+
+.muted {
+    color: var(--c-ink-4);
+}

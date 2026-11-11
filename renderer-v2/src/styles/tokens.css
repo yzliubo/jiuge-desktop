@@ -1,0 +1,76 @@
+/* 两层设计令牌：--palette-*（四套皮肤色相） × --surface-*（明/暗基底）
+   V1.0 只出四套皮肤；V2 跟随系统深浅色时只需切 data-surface，不重做样式。
+   禁止在皮肤上叠 filter / 透明度。 */
+:root {
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --font-sans: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  --space-1: 8px;
+  --space-2: 12px;
+  --space-3: 16px;
+  --space-4: 24px;
+}
+
+[data-skin="forest"] {
+  --palette-primary: #0f6e56;
+  --palette-accent: #1d9e75;
+  --palette-soft: #e1f5ee;
+  --palette-border: #9fe1cb;
+  --palette-on: #ffffff;
+}
+[data-skin="night"] {
+  --palette-primary: #185fa5;
+  --palette-accent: #378add;
+  --palette-soft: #e6f1fb;
+  --palette-border: #b5d4f4;
+  --palette-on: #ffffff;
+}
+[data-skin="sakura"] {
+  --palette-primary: #993556;
+  --palette-accent: #d4537e;
+  --palette-soft: #fbeaf0;
+  --palette-border: #f4c0d1;
+  --palette-on: #ffffff;
+}
+[data-skin="candy"] {
+  --palette-primary: #854f0b;
+  --palette-accent: #ef9f27;
+  --palette-soft: #faeeda;
+  --palette-border: #fac775;
+  --palette-on: #ffffff;
+}
+
+[data-surface="light"] {
+  --surface-bg: #ffffff;
+  --surface-panel: #f7f8f6;
+  --surface-raised: #ffffff;
+  --surface-text: #2c2c2a;
+  --surface-muted: #5f5e5a;
+  --surface-border: #d3d1c7;
+  /* 语义色：只用于「逾期 / 停滞 / 缺失」这类需要点名的状态，不参与皮肤色相 */
+  --state-warn: #b3261e;
+  --state-warn-soft: #fdeceb;
+}
+[data-surface="dark"] {
+  --surface-bg: #1e1f1d;
+  --surface-panel: #262724;
+  --surface-raised: #2f302d;
+  --surface-text: #f1efe8;
+  --surface-muted: #b4b2a9;
+  --surface-border: #444441;
+  --state-warn: #f2b8b5;
+  --state-warn-soft: #3a201f;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--surface-text);
+  background: var(--surface-bg);
+}
+button, input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; }

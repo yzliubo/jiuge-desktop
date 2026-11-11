@@ -1,0 +1,349 @@
+{
+  "label": "after-final",
+  "generatedAt": "2026-11-07T06:35:55.236Z",
+  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.d01-userdata",
+  "checks": [
+    {
+      "id": "D01-00",
+      "name": "回看 / 今日 / 设置 三个 Page 实例存在",
+      "ok": true,
+      "detail": "review=true index=true settings=true"
+    },
+    {
+      "id": "D01-01",
+      "name": "setData({tabIndex:N}) 后 .rv-tab-on 与 tabIndex 一致（N=1,2,0,1 四次）",
+      "ok": true,
+      "detail": "setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ] ; setData({tabIndex:2}) → .rv-tab-on 落在第 3 个（0 基 2），三个标签 class 实录=[rv-tab  ][ rv-tab  ][ rv-tab rv-tab-on] ; setData({tabIndex:0}) → .rv-tab-on 落在第 1 个（0 基 0），三个标签 class 实录=[rv-tab rv-tab-on ][ rv-tab  ][ rv-tab ] ; setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ]"
+    },
+    {
+      "id": "D01-02",
+      "name": "点击第 3 个标签（真实 bindtap 链路）后 .rv-tab-on 与 tabIndex 一致",
+      "ok": true,
+      "detail": "tabIndex=2 / .rv-tab-on=2 / class=[rv-tab  ][ rv-tab  ][ rv-tab rv-tab-on]"
+    },
+    {
+      "id": "D01-03",
+      "name": "四套皮肤切换后 .skin-cell-on / aria-checked / aria-label 与 theme 三者一致",
+      "ok": true,
+      "detail": "standard → data.theme=standard，期望第 1 张卡（standard），实际 .skin-cell-on=第 1 张，aria-checked=true 的第 [1] 张，aria-label 含「已选中」的第 [1] 张；aria-label 实录=标准版，森绿米白，已选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中 ;; tech → data.theme=tech，期望第 2 张卡（tech），实际 .skin-cell-on=第 2 张，aria-checked=true 的第 [2] 张，aria-label 含「已选中」的第 [2] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，已选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中 ;; girl → data.theme=girl，期望第 3 张卡（girl），实际 .skin-cell-on=第 3 张，aria-checked=true 的第 [3] 张，aria-label 含「已选中」的第 [3] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，已选中 ‖ 儿童版，糖果积木，未选中 ;; kids → data.theme=kids，期望第 4 张卡（kids），实际 .skin-cell-on=第 4 张，aria-checked=true 的第 [4] 张，aria-label 含「已选中」的第 [4] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，已选中"
+    },
+    {
+      "id": "D01-04",
+      "name": "B-05 · 连刷 clockText × 6 后 DOM 节点引用不变",
+      "ok": true,
+      "detail": "同一节点=true / 节点仍挂载=true"
+    },
+    {
+      "id": "D01-05",
+      "name": "B-05 · 连刷 clockText × 6 后输入框保持焦点",
+      "ok": true,
+      "detail": "activeElement===textarea : true / activeElement=sheet-input"
+    },
+    {
+      "id": "D01-06",
+      "name": "B-05 · 连刷 clockText × 6 后选区（start/end）不变",
+      "ok": true,
+      "detail": "修复前 5/5 → 现在 5/5"
+    },
+    {
+      "id": "D01-07",
+      "name": "B-05 · 连刷 clockText × 6 后输入框内容未被回写覆盖",
+      "ok": true,
+      "detail": "内容长度 34 → 34 / 内容一致=true"
+    },
+    {
+      "id": "D01-08",
+      "name": "B-05 · 同时 clockText 确实局部刷新到视图（值级 diff 仍生效）",
+      "ok": true,
+      "detail": ".clock-value=12:35 / 6 次 setData 共 3.5ms / 浮层可见=true"
+    },
+    {
+      "id": "D01-14",
+      "name": "今日页（每秒时钟刷新真实场景，输入框保持聚焦）60 次 setData 平均耗时 ≤ 16ms",
+      "ok": true,
+      "detail": "平均 0.547ms / P50 0.5ms / P95 1ms / 最大 1.1ms / 60 次合计 32.8ms · 场景=今日页（编辑浮层打开 + 输入框聚焦） / 372 格 / 22 个 wx:for / 26 个循环项"
+    },
+    {
+      "id": "D01-09",
+      "name": "点开一行后 .dg-row-open 出现，且与 digestOpen[item.key] 一致",
+      "ok": true,
+      "detail": "key=work / 点前 class=[dg-row  ] / 点后 class=[dg-row  dg-row-open] / digestOpen.work=true"
+    },
+    {
+      "id": "D01-10",
+      "name": "同节点 wx:if 正文（.dg-last）与行样式同步，不出现「正文展开了、行样式没变」",
+      "ok": true,
+      "detail": ".dg-last 存在=true / display=(空) / 正文可见=true / 行样式已开=true / 两者一致=true / 文本=探针最近一句"
+    },
+    {
+      "id": "D01-11",
+      "name": "再次点击收起后 .dg-row-open 移除且正文隐藏",
+      "ok": true,
+      "detail": "class=[dg-row  ] / digestOpen.work=false / .dg-last display=none"
+    },
+    {
+      "id": "D01-12",
+      "name": "372 格年历下 60 次 setData 平均耗时 ≤ 16ms（一帧预算内）",
+      "ok": true,
+      "detail": "平均 0.44ms / P50 0.4ms / P95 0.8ms / 最大 0.9ms / 60 次合计 26.4ms · 场景=review 页（372 格年历） / 372 格 / 34 个 wx:for / 447 个循环项"
+    },
+    {
+      "id": "D01-13",
+      "name": "被删掉的嵌套 wx:for 循环实例从 ctx.loops 回收（不再对脱离 DOM 的子树求值）",
+      "ok": true,
+      "detail": "清空前 loops=34 / 清空后 loops=22 / 本次回收 12 个 / 仍留在注册表但已脱离 DOM 的 loop=0 / DOM 年历格 372 → 0"
+    },
+    {
+      "id": "D01-15",
+      "name": "今日页金钱分类 .money-cat-on 与 data.moneyCategory 一致（点 2/3/1 三轮）",
+      "ok": true,
+      "detail": "点第 2 个 → data.moneyCategory=transport（0 基 1）/.money-cat-on 落在 0 基 1 ; 点第 3 个 → data.moneyCategory=daily（0 基 2）/.money-cat-on 落在 0 基 2 ; 点第 1 个 → data.moneyCategory=food（0 基 0）/.money-cat-on 落在 0 基 0"
+    },
+    {
+      "id": "D01-16",
+      "name": "坚持页里程碑预设 .ms-preset-on 与 data.msDays 一致（点 2/1 两轮）",
+      "ok": true,
+      "detail": "点第 2 个 → data.msDays=30（0 基 1）/.ms-preset-on 落在 0 基 1 ; 点第 1 个 → data.msDays=7（0 基 0）/.ms-preset-on 落在 0 基 0 / 预设值=[7,30,90,180,365,1000]"
+    }
+  ],
+  "facts": {
+    "tabSteps": [
+      "setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ]",
+      "setData({tabIndex:2}) → .rv-tab-on 落在第 3 个（0 基 2），三个标签 class 实录=[rv-tab  ][ rv-tab  ][ rv-tab rv-tab-on]",
+      "setData({tabIndex:0}) → .rv-tab-on 落在第 1 个（0 基 0），三个标签 class 实录=[rv-tab rv-tab-on ][ rv-tab  ][ rv-tab ]",
+      "setData({tabIndex:1}) → .rv-tab-on 落在第 2 个（0 基 1），三个标签 class 实录=[rv-tab  ][ rv-tab rv-tab-on ][ rv-tab ]"
+    ],
+    "skinSteps": [
+      "standard → data.theme=standard，期望第 1 张卡（standard），实际 .skin-cell-on=第 1 张，aria-checked=true 的第 [1] 张，aria-label 含「已选中」的第 [1] 张；aria-label 实录=标准版，森绿米白，已选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中",
+      "tech → data.theme=tech，期望第 2 张卡（tech），实际 .skin-cell-on=第 2 张，aria-checked=true 的第 [2] 张，aria-label 含「已选中」的第 [2] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，已选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，未选中",
+      "girl → data.theme=girl，期望第 3 张卡（girl），实际 .skin-cell-on=第 3 张，aria-checked=true 的第 [3] 张，aria-label 含「已选中」的第 [3] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，已选中 ‖ 儿童版，糖果积木，未选中",
+      "kids → data.theme=kids，期望第 4 张卡（kids），实际 .skin-cell-on=第 4 张，aria-checked=true 的第 [4] 张，aria-label 含「已选中」的第 [4] 张；aria-label 实录=标准版，森绿米白，未选中 ‖ 科技蓝，冷调夜航，未选中 ‖ 少女版，樱花奶油，未选中 ‖ 儿童版，糖果积木，已选中"
+    ],
+    "skinIds": [
+      "standard",
+      "tech",
+      "girl",
+      "kids"
+    ],
+    "b05": {
+      "sixSetDataMs": 3.5,
+      "sameNode": true,
+      "focused": true,
+      "selKept": true,
+      "valueKept": true,
+      "clockText": "12:35",
+      "sheetVisible": true
+    },
+    "timingIndex": {
+      "page": "今日页（编辑浮层打开 + 输入框聚焦）",
+      "pixels": 372,
+      "loops": 22,
+      "loopItems": 26,
+      "iterations": 60,
+      "avgMs": 0.547,
+      "p50Ms": 0.5,
+      "p95Ms": 1,
+      "maxMs": 1.1,
+      "minMs": 0.3,
+      "totalMs": 32.8,
+      "samples": [
+        0.6,
+        0.7,
+        0.7,
+        0.5,
+        0.5,
+        0.6,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.4,
+        0.5,
+        0.6,
+        0.6,
+        0.5,
+        0.4,
+        0.6,
+        0.4,
+        0.4,
+        0.4,
+        0.5,
+        0.6,
+        1.1,
+        0.6,
+        0.5,
+        0.5,
+        0.4,
+        0.6,
+        0.5,
+        0.4,
+        1.1,
+        0.5,
+        0.7,
+        0.5,
+        0.5,
+        0.4,
+        0.6,
+        0.4,
+        0.6,
+        0.5,
+        0.5,
+        0.3,
+        0.7,
+        1.1,
+        1,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.4,
+        0.5,
+        0.4,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "digest": {
+      "key": "work",
+      "s0": {
+        "found": true,
+        "className": "dg-row  ",
+        "open": false,
+        "bodyExists": true,
+        "bodyDisplay": "none",
+        "bodyText": "探针最近一句"
+      },
+      "s1": {
+        "found": true,
+        "className": "dg-row  dg-row-open",
+        "open": true,
+        "bodyExists": true,
+        "bodyDisplay": "",
+        "bodyText": "探针最近一句"
+      },
+      "s2": {
+        "found": true,
+        "className": "dg-row  ",
+        "open": false,
+        "bodyExists": true,
+        "bodyDisplay": "none",
+        "bodyText": "探针最近一句"
+      }
+    },
+    "timing": {
+      "page": "review 页（372 格年历）",
+      "pixels": 372,
+      "loops": 34,
+      "loopItems": 447,
+      "iterations": 60,
+      "avgMs": 0.44,
+      "p50Ms": 0.4,
+      "p95Ms": 0.8,
+      "maxMs": 0.9,
+      "minMs": 0.2,
+      "totalMs": 26.4,
+      "samples": [
+        0.8,
+        0.3,
+        0.4,
+        0.6,
+        0.5,
+        0.4,
+        0.5,
+        0.3,
+        0.5,
+        0.4,
+        0.4,
+        0.9,
+        0.5,
+        0.4,
+        0.4,
+        0.4,
+        0.4,
+        0.4,
+        0.8,
+        0.4,
+        0.2,
+        0.4,
+        0.3,
+        0.5,
+        0.4,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.5,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.5,
+        0.3,
+        0.6,
+        0.5,
+        0.7,
+        0.4,
+        0.5,
+        0.5,
+        0.6,
+        0.5,
+        0.5,
+        0.4,
+        0.8,
+        0.4,
+        0.3,
+        0.4,
+        0.4,
+        0.3,
+        0.3,
+        0.4,
+        0.3,
+        0.3
+      ]
+    },
+    "loopReclaim": {
+      "loopsBefore": 34,
+      "loopsAfter": 22,
+      "reclaimed": 12,
+      "staleStillRegistered": 0
+    }
+  },
+  "failed": [],
+  "jsErrors": [],
+  "consoleMessages": [
+    {
+      "level": "1",
+      "message": "[页面运行时] 已落盘页面 JS：index,review,capsule,habit,settings",
+      "line": 267,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」",
+      "line": 283,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+    },
+    {
+      "level": "1",
+      "message": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}",
+      "line": 62,
+      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html"
+    },
+    {
+      "level": "2",
+      "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+      "line": 2,
+      "source": "node:electron/js2c/renderer_init"
+    }
+  ]
+}

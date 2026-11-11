@@ -1,0 +1,718 @@
+<view class="theme-root theme-{{theme}} page today-page">
+    <view class="hero">
+        <view class="hero-sun"></view>
+        <view class="hero-top">
+            <view class="hero-left">
+                <text class="eyebrow">九格手记</text>
+                <text class="hero-date">{{dateLabel}}</text>
+            </view>
+            <!-- 只显示此刻时间（24 小时制），不做倒计时 -->
+            <view class="clock">
+                <text class="clock-value">{{clockText}}</text>
+                <text class="clock-label">{{clockPeriod}}</text>
+            </view>
+        </view>
+        <!-- 星期行与连续记录统计同行：统计靠右，正好落在时钟卡片下方 -->
+        <view class="hero-sub">
+            <text class="hero-meta">{{weekLabel}} · 今年第 {{dayOfYear}} 天</text>
+            <view class="hero-streak" wx:if="{{streak > 0 || weekCount > 0}}">
+                <text class="streak-dot"></text>
+                <text wx:if="{{streak > 0}}">已连续 {{streak}} 天 · </text>
+                <text>本周 {{weekCount}}/{{weekTotal}} 天</text>
+            </view>
+        </view>
+        <!-- 时令问候：左侧两行文案，右侧按时段变换动作的火柴人 -->
+        <view class="hero-greeting">
+            <view class="greeting-copy">
+                <text class="greeting-text">{{greeting.text}}</text>
+                <text class="greeting-hint">{{greeting.hint}}</text>
+            </view>
+            <view class="stick-figure sf-{{motion}}">
+                <view class="sf-seal"></view>
+                <view class="sf-shadow"></view>
+                <view class="sf-figure">
+                    <view class="sf-limb sf-torso">
+                        <view class="sf-seg sf-chest"></view>
+                        <view class="sf-seg sf-waist"></view>
+                        <view class="sf-limb sf-arm-l">
+                            <view class="sf-seg sf-upper"></view>
+                            <view class="sf-seg sf-fore"></view>
+                        </view>
+                        <view class="sf-limb sf-arm-r">
+                            <view class="sf-seg sf-upper"></view>
+                            <view class="sf-seg sf-fore"></view>
+                        </view>
+                        <view class="sf-head"></view>
+                    </view>
+                    <view class="sf-limb sf-leg-l">
+                        <view class="sf-seg sf-thigh"></view>
+                        <view class="sf-seg sf-shin"></view>
+                    </view>
+                    <view class="sf-limb sf-leg-r">
+                        <view class="sf-seg sf-thigh"></view>
+                        <view class="sf-seg sf-shin"></view>
+                    </view>
+                </view>
+            </view>
+        </view>
+    </view>
+
+    <!-- ⚠️ 首屏顺序约定：hero → 补记状态 → 九宫格标题 → 九宫格。
+         名言 / 头七天引导 / 去年今日 / 胶囊提醒 / 今日状态一律排在九宫格之后，
+         目的是让 375×667 的机器一屏之内就能看见格子。
+         下面这些区块的显示条件与点击事件都是从原位置原样搬过来的，条件一处未改。 -->
+
+    <view wx:if="{{isBackfill}}" class="backfill-bar">
+        <view class="backfill-body">
+            <text class="backfill-label">正在补记</text>
+            <text class="backfill-date">{{backfillLabel}}</text>
+        </view>
+        <text class="backfill-back" bindtap="onBackToToday">回到今天 ›</text>
+    </view>
+
+    <view class="section-head">
+        <text class="section-title">九宫格 · {{isBackfill ? '补记' : '今日'}}</text>
+        <text class="section-note section-link" bindtap="onOpenSettings">{{templateName}} · 设置{{skinTip ? ' · 新' : ''}} ›</text>
+    </view>
+
+    <view class="grid">
+        <view wx:for="{{gridCells}}" wx:key="key"
+              class="grid-cell {{item.center ? 'grid-center' : ''}} {{item.filled ? 'grid-filled' : ''}}"
+              data-key="{{item.key}}" bindtap="openCell">
+            <view class="cell-head">
+                <text class="cell-label">{{item.label}}</text>
+                <text wx:if="{{item.taskStat}}" class="cell-task">{{item.taskStat}}</text>
+                <text wx:elif="{{item.moneyStat}}" class="cell-money">{{item.moneyStat}}</text>
+                <text wx:elif="{{item.studyStat}}" class="cell-study">{{item.studyStat}}</text>
+            </view>
+            <text wx:if="{{item.filled}}" class="cell-text">{{item.preview}}</text>
+            <text wx:else class="cell-prompt">{{item.prompt}}</text>
+        </view>
+    </view>
+
+    <!-- ↓↓↓ 九宫格之后：次级信息，先放与「写字」直接相关的一行，再放阅读类内容 ↓↓↓ -->
+
+    <!-- 今日状态：与格子同一件事（今天什么天气/身体/心情），紧跟格子；首次点格子会先弹出收集 -->
+    <view class="intake-bar" bindtap="onOpenIntake">
+        <text class="intake-bar-dot {{intakeDone ? 'intake-bar-dot-done' : ''}}"></text>
+        <text class="intake-bar-label">今日状态</text>
+        <text class="intake-bar-value">{{intakeSummary}}</text>
+        <text class="intake-bar-arrow">修改 ›</text>
+    </view>
+
+    <view wx:if="{{firstWeek.active && !isBackfill}}" class="card firstweek-card">
+        <view class="fw-head">
+            <text class="fw-tag">头 7 天 · 第 {{firstWeek.dayNo}} 天</text>
+            <text class="fw-close" bindtap="onEndFirstWeek">结束引导</text>
+        </view>
+        <text class="fw-title">只写开心的事</text>
+        <text class="fw-desc">刚开始不必求全，前七天只写让你开心的小事就好；习惯稳了，再慢慢加反思也不迟。</text>
+        <text wx:if="{{firstWeek.celebration}}" class="fw-celebrate">{{firstWeek.celebration}}</text>
+    </view>
+
+    <view wx:if="{{previous && !isBackfill}}" class="prev-bar" bindtap="onViewPrevious">
+        <view class="prev-body">
+            <text class="prev-label">写之前 · {{previous.year}} 年的今天</text>
+            <text class="prev-text">{{previous.excerpt}}</text>
+        </view>
+        <text class="prev-arrow">去看看 ›</text>
+    </view>
+
+    <!-- 胶囊已独立成栏：今日页只做导流提醒，读写都在「胶囊」tab -->
+    <view wx:if="{{capsuleDueCount > 0}}" class="capsule-notice" bindtap="onGoCapsule">
+        <text class="capsule-notice-text">有 {{capsuleDueCount}} 封来自过去的信，到今天可以打开了</text>
+        <text class="capsule-notice-arrow">去拆开 ›</text>
+    </view>
+
+    <!-- 每日名言：名言库按日期稳定取一条，点卡片或「换一句」随机换，不重复上一条。
+         原先在首屏 hero 正下方占约 150px，挡住九宫格；整体下移到格子之后，内容与交互不变 -->
+    <view class="quote-block">
+        <view class="quote-inner" hover-class="quote-inner-hover" bindtap="onNextQuote">
+            <text class="quote-text {{dailyQuote.long ? 'quote-text-long' : ''}}">{{dailyQuote.text}}</text>
+            <text wx:if="{{dailyQuote.author}}" class="quote-author">— {{dailyQuote.author}}</text>
+        </view>
+        <view class="quote-foot">
+            <text class="quote-tag">每日名言 · 名言库 {{quoteTotal}} 条</text>
+            <text class="quote-next" catchtap="onNextQuote">换一句 ↻</text>
+        </view>
+        <view class="quote-divider"></view>
+    </view>
+
+    <view class="card quick-card">
+        <text class="quick-title">写不出来？留一句也算一篇</text>
+        <view class="quick-row">
+            <view class="quick-chip" data-text="今天无事，留个记号。" bindtap="onQuickNote">今天无事</view>
+            <view class="quick-chip" data-text="今天没有什么大事，我还是想把今天留下来。" bindtap="onQuickNote">留一句给今天</view>
+        </view>
+        <text class="quick-note">日记里也有只写「无事」二字的时候；写得很少，依然算数。</text>
+    </view>
+
+    <view class="actions">
+        <button class="btn-primary" bindtap="finishToday">{{isBackfill ? '保存这篇补记' : '完成今日日记'}}</button>
+        <text class="actions-tip">已填 {{filledCount}} / 9 格 · 不强求填满，保持固定形式最重要</text>
+    </view>
+
+    <view class="mask" wx:if="{{editing}}" bindtap="closeCell"></view>
+    <view class="sheet {{editing ? 'sheet-open' : ''}} {{editPanel ? 'sheet-' + editPanel : ''}}">
+        <view class="sheet-head">
+            <view>
+                <text class="sheet-title">{{editLabel}}</text>
+                <text class="sheet-hint">{{editHint}}</text>
+            </view>
+            <view class="sheet-head-right">
+                <text class="sheet-history" bindtap="onOpenInsight">历史 ›</text>
+                <text class="sheet-close" bindtap="closeCell">×</text>
+            </view>
+        </view>
+
+        <!-- 工作模块：只在九宫格「工作」格内出现，首页不再单独占卡片 -->
+        <view wx:if="{{editPanel === 'work'}}" class="work-panel">
+            <view class="work-head">
+                <view class="work-head-left">
+                    <text class="work-title">今日任务</text>
+                    <text class="work-sub">{{workDateHint}} · 这一格的任务与感想</text>
+                </view>
+                <text class="work-summary-link" bindtap="onOpenWorkSummary">工作感想汇总 ›</text>
+            </view>
+
+            <view class="work-progress-row">
+                <text class="work-progress-text">已完成 {{workDoneCount}} / {{workTotal}} 项</text>
+                <view class="work-progress-track"><view class="work-progress-fill" style="width:{{workPct}}%"></view></view>
+            </view>
+
+            <view class="work-add">
+                <input class="work-input" value="{{workInput}}" placeholder="加一条今天要完成的事，可加 #标签"
+                       placeholder-class="input-ph" bindinput="onWorkInput"
+                       bindconfirm="onAddWorkTask" maxlength="60" confirm-type="done" />
+                <text class="work-add-btn" bindtap="onAddWorkTask">＋ 添加</text>
+            </view>
+
+            <view wx:if="{{workTagChips.length}}" class="work-tag-row">
+                <text class="work-tag-hint">常用标签</text>
+                <text class="work-tag-chip" wx:for="{{workTagChips}}" wx:key="tag"
+                      data-tag="{{item.tag}}" bindtap="onPickWorkTag">{{item.label}}</text>
+            </view>
+
+            <view wx:if="{{workTasks.length}}" class="work-list">
+                <view wx:for="{{workTasks}}" wx:key="id" class="work-task {{item.cls}}"
+                      data-id="{{item.id}}" bindtap="onToggleWorkTask">
+                    <view class="work-check {{item.done ? 'work-check-done' : ''}}"></view>
+                    <view class="work-task-main">
+                        <text class="work-task-text">{{item.title}}</text>
+                        <view wx:if="{{item.tags.length}}" class="work-task-tags">
+                            <text class="work-task-tag" wx:for="{{item.tags}}" wx:for-item="tg"
+                                  wx:for-index="ti" wx:key="*this">#{{tg}}</text>
+                        </view>
+                    </view>
+                    <text class="work-task-del" data-id="{{item.id}}" catchtap="onRemoveWorkTask">×</text>
+                </view>
+            </view>
+            <view wx:else class="work-empty">还没有任务，写一条也算今天的推进</view>
+
+            <view class="work-reflect">
+                <text class="work-reflect-label">今日工作感想</text>
+                <!-- 今日引导与感想合并：提问与「换一题」就在输入框上方，不再单列一块 -->
+                <view class="work-reflect-prompt">
+                    <view class="work-reflect-prompt-copy">
+                        <text class="work-reflect-prompt-label">今日引导</text>
+                        <text class="work-reflect-prompt-text">{{editPrompt}}</text>
+                    </view>
+                    <text class="work-reflect-prompt-rotate" bindtap="onRotatePrompt">换一题 ↻</text>
+                </view>
+                <textarea class="work-reflect-input" value="{{workReflection}}"
+                          placeholder="跟着引导写一句就好" placeholder-class="input-ph"
+                          bindinput="onWorkReflectionInput" bindblur="onWorkReflectionBlur"
+                          maxlength="500" auto-height show-confirm-bar="{{false}}" />
+                <text class="work-reflect-note">每天一条，会自动汇入「工作感想」；数据只存本机</text>
+            </view>
+        </view>
+
+        <!-- 金钱模块：只在九宫格「金钱」格内出现，首页不另占卡片 -->
+        <view wx:if="{{editPanel === 'money'}}" class="money-panel">
+            <view class="money-head">
+                <view class="money-head-left">
+                    <text class="money-title">今日收支</text>
+                    <text class="money-sub">三秒记一笔 · 只存本机</text>
+                </view>
+                <text class="money-count">{{moneyCount}} 笔</text>
+            </view>
+
+            <view class="money-total">
+                <view class="money-total-item">
+                    <text class="money-total-label">收入</text>
+                    <text class="money-total-num money-in">{{moneyIncomeText}}</text>
+                </view>
+                <view class="money-total-item">
+                    <text class="money-total-label">支出</text>
+                    <text class="money-total-num money-out">{{moneyExpenseText}}</text>
+                </view>
+                <view class="money-total-item">
+                    <text class="money-total-label">结余</text>
+                    <text class="money-total-num">{{moneyBalanceText}}</text>
+                </view>
+            </view>
+
+            <view class="money-type-switch">
+                <view class="money-type {{moneyType === 'expense' ? 'money-type-on' : ''}}"
+                      data-type="expense" bindtap="onSwitchMoneyType">支出</view>
+                <view class="money-type {{moneyType === 'income' ? 'money-type-on' : ''}}"
+                      data-type="income" bindtap="onSwitchMoneyType">收入</view>
+            </view>
+
+            <view class="money-form">
+                <view class="money-amount-row">
+                    <text class="money-currency">¥</text>
+                    <input class="money-amount-input" type="digit" value="{{moneyAmount}}"
+                           placeholder="0.00" placeholder-class="money-ph"
+                           bindinput="onMoneyAmountInput" bindconfirm="onAddMoneyEntry"
+                           maxlength="12" confirm-type="done" />
+                </view>
+                <view class="money-cats">
+                    <view wx:for="{{moneyCategories}}" wx:key="id"
+                          class="money-cat {{moneyCategory === item.id ? 'money-cat-on' : ''}}"
+                          data-id="{{item.id}}" bindtap="onPickMoneyCategory">
+                        <text class="money-cat-glyph">{{item.glyph}}</text>
+                        <text class="money-cat-label">{{item.label}}</text>
+                    </view>
+                </view>
+                <view class="money-note-row">
+                    <input class="money-note-input" value="{{moneyNote}}"
+                           placeholder="一句话备注（可留空）" placeholder-class="input-ph"
+                           bindinput="onMoneyNoteInput" maxlength="40" />
+                    <text class="money-add-btn" bindtap="onAddMoneyEntry">记一笔</text>
+                </view>
+            </view>
+
+            <view wx:if="{{moneyEntries.length}}" class="money-list">
+                <view wx:for="{{moneyEntries}}" wx:key="id" class="money-entry">
+                    <text class="money-entry-glyph {{item.type === 'income' ? 'money-glyph-in' : ''}}">{{item.glyph}}</text>
+                    <view class="money-entry-copy">
+                        <text class="money-entry-cat">{{item.label}}</text>
+                        <text wx:if="{{item.note}}" class="money-entry-note">{{item.note}}</text>
+                    </view>
+                    <text class="money-entry-amount {{item.cls}}">{{item.sign}}¥{{item.amountText}}</text>
+                    <text class="money-entry-del" data-id="{{item.id}}" catchtap="onRemoveMoneyEntry">×</text>
+                </view>
+            </view>
+            <view wx:else class="money-empty">今天还没有记账，写一笔就好，金额不必精确。</view>
+            <text class="money-foot">收支随当天日记一起保存与导出；去「回看」可看汇总。</text>
+        </view>
+        <text wx:if="{{editKey === 'money'}}" class="work-body-label">这一格的日记正文（可留空；收支已单独保存）</text>
+        <!-- 学习模块：只在九宫格「学习成长」格内出现，首页不另占卡片 -->
+        <view wx:if="{{editPanel === 'growth'}}" class="study-panel">
+            <view class="study-head">
+                <view class="study-head-left">
+                    <text class="study-title">学习进展</text>
+                    <text class="study-sub">书 · 影 · 画 · 课 · 只存本机</text>
+                </view>
+                <text class="study-summary-link" bindtap="onOpenStudySummary">学习汇总 ›</text>
+            </view>
+
+            <view class="study-overview">
+                <view class="study-ov-item">
+                    <text class="study-ov-num">{{studyOverall.total}}</text>
+                    <text class="study-ov-label">在库条目</text>
+                </view>
+                <view class="study-ov-item">
+                    <text class="study-ov-num">{{studyOverall.finished}}</text>
+                    <text class="study-ov-label">已完成</text>
+                </view>
+                <view class="study-ov-item">
+                    <text class="study-ov-num">{{studyOverall.avgPct}}%</text>
+                    <text class="study-ov-label">整体推进</text>
+                </view>
+            </view>
+
+            <view class="study-tabs">
+                <view class="study-tab {{studyTab === 'items' ? 'study-tab-on' : ''}}"
+                      data-tab="items" bindtap="onStudyTab">条目</view>
+                <view class="study-tab {{studyTab === 'topics' ? 'study-tab-on' : ''}}"
+                      data-tab="topics" bindtap="onStudyTab">主题</view>
+                <view class="study-tab {{studyTab === 'today' ? 'study-tab-on' : ''}}"
+                      data-tab="today" bindtap="onStudyTab">今日 {{studyDayCount}}</view>
+            </view>
+
+            <view wx:if="{{studyTab === 'items'}}" class="study-items-tab">
+                <view class="study-filters">
+                    <view class="study-chip {{studyKindFilter === '' ? 'study-chip-on' : ''}}"
+                          data-kind="" bindtap="onStudyKindFilter">全部</view>
+                    <view wx:for="{{studyKinds}}" wx:key="id"
+                          class="study-chip {{studyKindFilter === item.id ? 'study-chip-on' : ''}}"
+                          data-kind="{{item.id}}" bindtap="onStudyKindFilter">{{item.label}} {{studyKindCounts[item.id]}}</view>
+                </view>
+                <scroll-view scroll-x class="study-topic-row">
+                    <view class="study-chip {{studyTopicFilter === '' ? 'study-chip-on' : ''}}"
+                          data-topic="" bindtap="onStudyTopicFilter">全部主题</view>
+                    <view wx:for="{{studyTopics}}" wx:key="id"
+                          class="study-chip {{studyTopicFilter === item.id ? 'study-chip-on' : ''}}"
+                          data-topic="{{item.id}}" bindtap="onStudyTopicFilter">{{item.title}}</view>
+                </scroll-view>
+
+                <view class="study-form">
+                    <view class="study-kind-row">
+                        <view wx:for="{{studyKinds}}" wx:key="id"
+                              class="study-kind-pick {{studyNewKind === item.id ? 'study-kind-pick-on' : ''}}"
+                              data-kind="{{item.id}}" bindtap="onPickStudyNewKind">
+                            <text class="study-kind-glyph {{item.cls}}">{{item.glyph}}</text>
+                            <text class="study-kind-label">{{item.label}}</text>
+                        </view>
+                    </view>
+                    <view class="study-add-row">
+                        <input class="study-title-input" value="{{studyTitle}}"
+                               placeholder="书名 / 片名 / 画名 / 课程名" placeholder-class="input-ph"
+                               bindinput="onStudyTitleInput" maxlength="40" />
+                        <input class="study-total-input" type="number" value="{{studyTotal}}"
+                               placeholder="总量" placeholder-class="input-ph"
+                               bindinput="onStudyTotalInput" maxlength="4" />
+                    </view>
+                    <scroll-view scroll-x class="study-topic-row">
+                        <view class="study-chip {{studyNewTopicId === '' ? 'study-chip-on' : ''}}"
+                              data-topic="" bindtap="onPickStudyNewTopic">不归属</view>
+                        <view wx:for="{{studyTopics}}" wx:key="id"
+                              class="study-chip {{studyNewTopicId === item.id ? 'study-chip-on' : ''}}"
+                              data-topic="{{item.id}}" bindtap="onPickStudyNewTopic">{{item.title}}</view>
+                    </scroll-view>
+                    <view class="study-add-foot">
+                        <text class="study-form-hint">总量留空按类型给个默认值，之后随时能改</text>
+                        <text class="study-add-btn" bindtap="onAddStudyItem">＋ 加入</text>
+                    </view>
+                </view>
+
+                <view wx:if="{{studyItems.length}}" class="study-list">
+                    <view wx:for="{{studyItems}}" wx:key="id" class="study-item {{item.cls}}">
+                        <view class="study-item-head">
+                            <text class="study-item-glyph {{item.kindCls}}">{{item.kindGlyph}}</text>
+                            <view class="study-item-copy">
+                                <text class="study-item-title">{{item.title}}</text>
+                                <text class="study-item-meta">{{item.statusLabel}} · {{item.topicTitle ? item.topicTitle : '未归主题'}}</text>
+                            </view>
+                            <text class="study-item-del" data-id="{{item.id}}" catchtap="onStudyRemoveItem">×</text>
+                        </view>
+                        <view class="study-progress-row">
+                            <view class="study-progress-track"><view class="study-progress-fill" style="width:{{item.pct}}%"></view></view>
+                            <text class="study-progress-text">{{item.progressText}}</text>
+                        </view>
+                        <view class="study-item-actions">
+                            <text class="study-step" data-id="{{item.id}}" data-step="{{item.step}}" bindtap="onStudyRewind">−</text>
+                            <input class="study-done-input" type="number" value="{{item.done}}"
+                                   data-id="{{item.id}}" bindblur="onStudyProgressBlur" maxlength="4" />
+                            <text class="study-step" data-id="{{item.id}}" data-step="{{item.step}}" bindtap="onStudyAdvance">＋</text>
+                            <text class="study-done-btn {{item.finished ? 'study-done-btn-on' : ''}}"
+                                  data-id="{{item.id}}" bindtap="onStudyToggleFinished">{{item.finished ? '✓ 已完成' : '标完成'}}</text>
+                        </view>
+                        <input class="study-note-input" value="{{item.note}}" data-id="{{item.id}}"
+                               placeholder="一句心得（可留空）" placeholder-class="input-ph"
+                               bindblur="onStudyItemNoteBlur" maxlength="60" />
+                        <picker mode="selector" range="{{studyTopicOptions}}" range-key="title"
+                                value="{{item.topicIndex}}" data-id="{{item.id}}" bindchange="onStudyAssignTopic">
+                            <view class="study-topic-pick">主题：{{item.topicTitle ? item.topicTitle : '未归属'}} · 点击调整 ›</view>
+                        </picker>
+                    </view>
+                </view>
+                <view wx:else class="study-empty">这里还没有条目。上面加一本正在读的书，或一部想看的片子。</view>
+            </view>
+
+            <view wx:if="{{studyTab === 'topics'}}" class="study-topics-tab">
+                <view class="study-topic-form">
+                    <input class="study-topic-input" value="{{studyTopicTitle}}"
+                           placeholder="新主题，比如「宋画山水」" placeholder-class="input-ph"
+                           bindinput="onStudyTopicTitleInput" maxlength="24" />
+                    <text class="study-add-btn" bindtap="onAddStudyTopic">＋ 建主题</text>
+                </view>
+                <view wx:if="{{studyTopics.length}}" class="study-topic-list">
+                    <view wx:for="{{studyTopics}}" wx:key="id" class="study-topic-card">
+                        <view class="study-topic-head">
+                            <text class="study-topic-title">{{item.title}}</text>
+                            <text class="study-topic-del" data-id="{{item.id}}" catchtap="onStudyRemoveTopic">×</text>
+                        </view>
+                        <view class="study-progress-row">
+                            <view class="study-progress-track"><view class="study-progress-fill" style="width:{{item.pct}}%"></view></view>
+                            <text class="study-progress-text">{{item.pct}}%</text>
+                        </view>
+                        <text class="study-topic-stat">{{item.count}} 项内容 · {{item.progressText}}</text>
+                        <view class="study-topic-items">
+                            <text wx:for="{{item.items}}" wx:for-item="sub" wx:key="id"
+                                  class="study-topic-item">{{sub.finished ? '✓ ' : '○ '}}{{sub.kindLabel}}·{{sub.title}}</text>
+                        </view>
+                    </view>
+                </view>
+                <view wx:else class="study-empty">还没有主题。主题能把一本书、一门课、一张画串成一条线。</view>
+                <text class="study-topic-foot">在「条目」里用下方「主题：点击调整」把内容归入主题；删主题不会删掉条目。</text>
+            </view>
+
+            <view wx:if="{{studyTab === 'today'}}" class="study-today-tab">
+                <view class="study-today-head">
+                    <text class="study-today-title">今天记下的进展</text>
+                    <text class="study-today-count">{{studyDayCount}} 条 · 推进 {{studyDaySteps}}</text>
+                </view>
+                <view wx:if="{{studyDayLogs.length}}" class="study-log-list">
+                    <view wx:for="{{studyDayLogs}}" wx:key="id" class="study-log-row">
+                        <text class="study-log-kind {{item.kindCls}}">{{item.kindGlyph}}</text>
+                        <view class="study-log-copy">
+                            <text class="study-log-title">{{item.title}} · {{item.actionLabel}}</text>
+                            <text class="study-log-meta">{{item.progressText}}{{item.deltaText ? ' · ' + item.deltaText : ''}}{{item.topicTitle ? ' · ' + item.topicTitle : ''}}</text>
+                        </view>
+                        <text class="study-log-del" data-id="{{item.id}}" catchtap="onRemoveStudyLog">×</text>
+                    </view>
+                </view>
+                <view wx:else class="study-empty">今天还没记进展。回「条目」点一下 ＋，就会在这里留下一行。</view>
+                <view class="study-day-note">
+                    <text class="study-day-note-label">今日一句</text>
+                    <textarea class="study-day-note-input" value="{{studyDayNote}}"
+                              placeholder="今天学到的一句话，可留空" placeholder-class="input-ph"
+                              bindinput="onStudyDayNoteInput" bindblur="onStudyDayNoteBlur"
+                              maxlength="120" auto-height fixed="{{false}}" show-confirm-bar="{{false}}" />
+                </view>
+            </view>
+        </view>
+        <text wx:if="{{editPanel === 'growth'}}" class="work-body-label">这一格的日记正文（可留空；学习进展已单独保存）</text>
+
+        <text wx:if="{{editPanel === 'work'}}" class="work-body-label">这一格的日记正文（可留空；任务与感想已单独保存）</text>
+        <!-- 工作格的今日引导已并入「今日工作感想」；这里只给其它八格 -->
+        <view class="sheet-prompt" wx:if="{{editPanel !== 'work'}}">
+            <text class="sheet-prompt-label">今日引导</text>
+            <text class="sheet-prompt-text">{{editPrompt}}</text>
+            <text class="sheet-prompt-rotate" bindtap="onRotatePrompt">换一题 ↻</text>
+        </view>
+        <textarea class="sheet-input" value="{{editValue}}" placeholder="写下就好，一行也算数"
+                  placeholder-class="input-ph" bindinput="onEditInput"
+                  maxlength="500" auto-height fixed="{{editPlain}}" show-confirm-bar="{{false}}" />
+        <view class="sheet-actions">
+            <button class="btn-ghost sheet-clear" bindtap="clearCell">清空</button>
+            <button class="btn-primary sheet-save" bindtap="saveCell">保存这一格</button>
+        </view>
+    </view>
+
+    <!-- 单格历史内容分析汇总（只读，盖在编辑浮层之上） -->
+    <view wx:if="{{insightOpen}}" class="mask insight-mask" bindtap="closeInsight"></view>
+    <view wx:if="{{insightOpen}}" class="sheet sheet-open insight-sheet">
+        <view class="sheet-head">
+            <view>
+                <text class="sheet-title">{{insightTitle}} · 历史</text>
+                <text class="sheet-hint">{{insightAxis}}</text>
+            </view>
+            <text class="sheet-close" bindtap="closeInsight">×</text>
+        </view>
+
+        <scroll-view scroll-y class="insight-scroll">
+            <view wx:if="{{insight.empty}}" class="insight-empty">
+                <text class="insight-empty-title">还没有历史内容</text>
+                <text class="insight-empty-text">{{insight.insight}}</text>
+            </view>
+
+            <block wx:if="{{!insight.empty}}">
+                <view class="insight-metrics">
+                    <view wx:for="{{insight.metrics}}" wx:key="label" class="insight-metric">
+                        <text class="insight-metric-value">{{item.value}}<text class="insight-metric-unit">{{item.unit}}</text></text>
+                        <text class="insight-metric-label">{{item.label}}</text>
+                    </view>
+                </view>
+
+                <view class="insight-section">
+                    <text class="insight-section-title">近 30 天</text>
+                    <view class="heat-row">
+                        <view wx:for="{{insight.heat}}" wx:key="date" class="{{item.cls}}"></view>
+                    </view>
+                    <text class="insight-section-note">颜色越深，那天写得越多</text>
+                </view>
+
+                <view class="insight-section">
+                    <text class="insight-section-title">与上一个月对照</text>
+                    <view class="compare-row">
+                        <view class="compare-col">
+                            <text class="compare-label">填写天数</text>
+                            <text class="compare-value">{{insight.compare.daysNow}} / {{insight.compare.daysPrev}} 天</text>
+                        </view>
+                        <view class="compare-col">
+                            <text class="compare-label">累计字数</text>
+                            <text class="compare-value">{{insight.compare.charsNow}} / {{insight.compare.charsPrev}} 字</text>
+                        </view>
+                    </view>
+                    <text class="insight-section-note">左为近 30 天，右为前 30 天</text>
+                </view>
+
+                <view class="insight-section" wx:if="{{insight.phrases.length}}">
+                    <text class="insight-section-title">反复出现的字句</text>
+                    <view class="phrase-row">
+                        <text wx:for="{{insight.phrases}}" wx:key="word" class="phrase-chip">{{item.word}} · {{item.count}}</text>
+                    </view>
+                </view>
+
+                <view class="insight-section" wx:if="{{insight.coverage.length}}">
+                    <text class="insight-section-title">这一格写过哪些角度</text>
+                    <view wx:for="{{insight.coverage}}" wx:key="label" class="cov-row">
+                        <text class="cov-label">{{item.label}}</text>
+                        <view class="cov-track"><view class="cov-fill {{item.cls}}" style="width:{{item.pct}}%"></view></view>
+                        <text class="cov-pct">{{item.pct}}%</text>
+                    </view>
+                </view>
+
+                <view class="insight-section" wx:if="{{insight.moodMix.length}}">
+                    <text class="insight-section-title">当天选定的心情</text>
+                    <view class="phrase-row">
+                        <text wx:for="{{insight.moodMix}}" wx:key="label" class="phrase-chip">{{item.label}} · {{item.count}}</text>
+                    </view>
+                </view>
+
+                <view class="insight-section">
+                    <text class="insight-section-title">最近三条</text>
+                    <view wx:for="{{insight.excerpts}}" wx:key="date" class="excerpt">
+                        <text class="excerpt-date">{{item.date}}</text>
+                        <text class="excerpt-text">{{item.text}}</text>
+                    </view>
+                </view>
+
+                <view class="insight-callout">
+                    <text class="insight-callout-text">{{insight.insight}}</text>
+                </view>
+            </block>
+            <text class="insight-footnote">{{insight.note}}</text>
+        </scroll-view>
+    </view>
+
+    <!-- 首次写格子前：一次性收集今日状态（天气 / 身体 / 心情 + 纪念日选填） -->
+    <view wx:if="{{intakeOpen}}" class="mask" bindtap="closeIntake"></view>
+    <view wx:if="{{intakeOpen}}" class="sheet sheet-open intake-sheet">
+        <view class="sheet-head">
+            <view>
+                <text class="sheet-title">先记一下今天的状态</text>
+                <text class="sheet-hint">三项滑一下就好，也可以跳过</text>
+            </view>
+            <text class="sheet-close" bindtap="closeIntake">×</text>
+        </view>
+
+        <view class="intake-rows">
+            <view wx:for="{{intakeRows}}" wx:key="field" class="intake-row">
+                <view class="intake-row-head">
+                    <text class="intake-label">{{item.label}}</text>
+                    <view class="intake-row-right">
+                        <text class="intake-value intake-lv-{{item.lv}} {{item.selected ? '' : 'intake-value-empty'}}">{{item.selected ? item.value : '滑动选择'}}</text>
+                        <text wx:if="{{item.selected}}" class="intake-clear"
+                              data-field="{{item.field}}" catchtap="onIntakeClear">清除</text>
+                    </view>
+                </view>
+                <view class="intake-track" data-field="{{item.field}}"
+                      bindtouchstart="onIntakeSlide" catchtouchmove="onIntakeSlide" bindtouchend="onIntakeSlide">
+                    <view class="intake-fill intake-fill-lv-{{item.lv}}" style="width:{{item.pct}}%"></view>
+                    <view class="intake-thumb intake-thumb-lv-{{item.lv}}" style="left:{{item.pct}}%"></view>
+                </view>
+            </view>
+        </view>
+
+        <view class="intake-anniv">
+            <text class="intake-label">纪念日<text class="intake-optional">选填</text></text>
+            <input class="base-input" value="{{intakeAnniversary}}"
+                   placeholder="今天是什么特别的日子？" placeholder-class="input-ph"
+                   bindinput="onIntakeAnniversaryInput" maxlength="40" />
+        </view>
+
+        <text class="intake-note">按住线条左右滑动选择；今天记过一次后，再点格子就不会重复弹出。补记以往的日子不会打断。</text>
+
+        <view class="intake-actions">
+            <button class="btn-ghost intake-skip" bindtap="onSkipIntake">今天先跳过</button>
+            <button class="btn-primary intake-done-btn" bindtap="onSaveIntake">记下了，开始写</button>
+        </view>
+    </view>
+    <!-- 工作感想汇总浮层（跨日期，只读 + 复制） -->
+    <view wx:if="{{workSummaryOpen}}" class="mask" bindtap="closeWorkSummary"></view>
+    <view wx:if="{{workSummaryOpen}}" class="sheet sheet-open work-summary-sheet">
+        <view class="sheet-head">
+            <view>
+                <text class="sheet-title">工作感想</text>
+                <text class="sheet-hint">按日期汇总，只存本机</text>
+            </view>
+            <text class="sheet-close" bindtap="closeWorkSummary">×</text>
+        </view>
+        <scroll-view scroll-y class="work-summary-scroll">
+            <view wx:if="{{workSummaryData.empty}}" class="work-summary-empty">
+                <text class="work-summary-empty-title">还没有工作感想</text>
+                <text class="work-summary-empty-text">在工作模块写下一句，第二天回来看就有了。</text>
+            </view>
+            <block wx:else>
+                <view class="work-summary-metrics">
+                    <view class="work-summary-metric">
+                        <text class="work-summary-metric-value">{{workSummaryData.count}}<text class="work-summary-metric-unit">篇</text></text>
+                        <text class="work-summary-metric-label">累计感想</text>
+                    </view>
+                    <view class="work-summary-metric">
+                        <text class="work-summary-metric-value">{{workSummaryData.chars}}<text class="work-summary-metric-unit">字</text></text>
+                        <text class="work-summary-metric-label">累计字数</text>
+                    </view>
+                    <view class="work-summary-metric">
+                        <text class="work-summary-metric-value">{{workSummaryData.taskDone}}/{{workSummaryData.taskTotal}}</text>
+                        <text class="work-summary-metric-label">完成任务</text>
+                    </view>
+                </view>
+                <view class="work-summary-callout">
+                    <text class="work-summary-callout-text">{{workSummaryData.insight}}</text>
+                </view>
+                <view wx:for="{{workSummaryData.months}}" wx:key="key" class="work-summary-month">
+                    <text class="work-summary-month-title">{{item.label}}</text>
+                    <view wx:for="{{item.items}}" wx:for-item="entry" wx:key="date" class="work-summary-entry">
+                        <view class="work-summary-entry-head">
+                            <text class="work-summary-date">{{entry.dateLabel}}</text>
+                            <text wx:if="{{entry.hasTasks}}" class="work-summary-taskstat">任务 {{entry.taskDone}}/{{entry.taskTotal}}</text>
+                        </view>
+                        <text class="work-summary-text">{{entry.text}}</text>
+                        <view wx:if="{{entry.hasTasks}}" class="work-summary-tasks">
+                            <text wx:for="{{entry.tasks}}" wx:for-item="task" wx:key="id"
+                                  class="work-summary-task {{task.done ? 'work-summary-task-done' : ''}}">{{task.done ? '✓ ' : '○ '}}{{task.text}}</text>
+                        </view>
+                    </view>
+                </view>
+            </block>
+            <text class="work-summary-note">{{workSummaryData.note}}</text>
+        </scroll-view>
+        <view class="work-summary-actions">
+            <button class="btn-primary work-summary-copy" bindtap="onCopyWorkSummary">复制工作感想汇总</button>
+        </view>
+    </view>
+
+    <!-- 学习进展汇总浮层（全量，只读 + 复制；盖在编辑浮层之上） -->
+    <view wx:if="{{studySummaryOpen}}" class="mask" bindtap="closeStudySummary"></view>
+    <view wx:if="{{studySummaryOpen}}" class="sheet sheet-open study-summary-sheet">
+        <view class="sheet-head">
+            <view>
+                <text class="sheet-title">学习汇总</text>
+                <text class="sheet-hint">书 · 影 · 画 · 课 · 只存本机</text>
+            </view>
+            <text class="sheet-close" bindtap="closeStudySummary">×</text>
+        </view>
+        <scroll-view scroll-y class="study-summary-scroll">
+            <view class="study-summary-metrics">
+                <view class="study-summary-metric">
+                    <text class="study-summary-metric-value">{{studySummaryData.view.overall.total}}</text>
+                    <text class="study-summary-metric-label">在库条目</text>
+                </view>
+                <view class="study-summary-metric">
+                    <text class="study-summary-metric-value">{{studySummaryData.view.overall.finished}}</text>
+                    <text class="study-summary-metric-label">已完成</text>
+                </view>
+                <view class="study-summary-metric">
+                    <text class="study-summary-metric-value">{{studySummaryData.view.overall.avgPct}}%</text>
+                    <text class="study-summary-metric-label">整体推进</text>
+                </view>
+            </view>
+            <view wx:if="{{studySummaryData.view.topics.length}}" class="study-summary-block">
+                <text class="study-summary-block-title">主题进度</text>
+                <view wx:for="{{studySummaryData.view.topics}}" wx:key="id" class="study-summary-topic">
+                    <text class="study-summary-topic-title">{{item.title}} · {{item.progressText}}</text>
+                    <view class="study-progress-track"><view class="study-progress-fill" style="width:{{item.pct}}%"></view></view>
+                </view>
+            </view>
+            <view class="study-summary-block">
+                <text class="study-summary-block-title">四类条目</text>
+                <view wx:for="{{studySummaryData.view.items}}" wx:key="id" class="study-summary-item">
+                    <text class="study-summary-item-title">{{item.finished ? '✓ ' : '○ '}}{{item.kindGlyph}} {{item.title}}</text>
+                    <text class="study-summary-item-meta">{{item.progressText}}{{item.topicTitle ? ' · ' + item.topicTitle : ''}}</text>
+                </view>
+                <text wx:if="{{!studySummaryData.view.items.length}}" class="study-empty">还没有条目，去加一本正在读的书吧。</text>
+            </view>
+            <text class="study-summary-note">{{studySummaryData.note}}</text>
+        </scroll-view>
+        <view class="study-summary-actions">
+            <button class="btn-primary study-summary-copy" bindtap="onCopyStudySummary">复制学习汇总</button>
+        </view>
+    </view>
+
+</view>

@@ -1,0 +1,380 @@
+.capsule-page {
+    padding-bottom: 60px;
+}
+
+.hero {
+    box-sizing: border-box;
+    margin-bottom: var(--sp-2);
+    padding: var(--sp-8) var(--sp-7) var(--sp-7);
+    border-radius: var(--radius-xl);
+    background: var(--grad-hero-warm);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.hero-title {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-2xl);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-snug);
+    color: var(--c-gold-ink-deep);
+}
+
+.hero-sub {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-gold-ink-deep);
+}
+
+.hero-stats {
+    display: flex;
+    margin-top: var(--sp-7);
+    padding-top: var(--sp-6);
+    border-top: var(--bw) solid var(--c-hero-line-warm);
+}
+
+.hero-stat {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+}
+
+.hero-stat-num {
+    font-size: var(--fs-2xl);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    color: var(--c-gold-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.hero-stat-label {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    color: var(--c-gold-ink-deep);
+}
+
+/* 分类一：待开启 */
+.due-card {
+    padding: var(--sp-3) var(--sp-7);
+    background: var(--c-gold-soft);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.due-row {
+    display: flex;
+    align-items: center;
+    padding: var(--sp-6) 0;
+    border-bottom: var(--bw) solid var(--c-hero-line-warm);
+}
+
+.due-row:last-child {
+    border-bottom: none;
+}
+
+.due-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    margin-right: var(--sp-4);
+}
+
+.due-from {
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    color: var(--c-gold-ink-2);
+}
+
+.due-state {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
+    color: var(--c-gold-ink-2);
+}
+
+.due-btn {
+    flex-shrink: 0;
+    padding: var(--sp-3) var(--sp-7);
+    border-radius: var(--radius-pill);
+    background: var(--c-gold);
+    color: var(--c-on-gold);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+}
+
+/* 写新胶囊 */
+.compose-card {
+    padding: var(--sp-7);
+}
+
+.compose-desc {
+    display: block;
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.compose-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 85px;
+    margin-top: var(--sp-5);
+    padding: var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-1);
+}
+
+.compose-label {
+    display: block;
+    margin-top: var(--sp-6);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-4);
+}
+
+.preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+}
+
+.preset {
+    margin: 0 var(--sp-3) var(--sp-3) 0;
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-pill);
+    background: var(--c-bg-tint);
+    border: var(--bw) solid var(--c-line-2);
+    color: var(--c-ink-4);
+    font-size: var(--fs-md);
+}
+
+.preset-on {
+    background: var(--c-brand-ink);
+    border-color: var(--c-brand-ink);
+    color: var(--c-surface);
+    font-weight: var(--fw-semi);
+}
+
+.compose-custom {
+    margin-top: var(--sp-1);
+    padding: var(--sp-3) 0;
+    font-size: var(--fs-md);
+    color: var(--c-brand-ink);
+}
+
+.compose-send {
+    margin-top: var(--sp-5);
+    font-size: var(--fs-lg);
+}
+
+/* 分类二：封存中 + 倒计时 */
+.sealed-card {
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-6) 14px;
+}
+
+.sealed-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+}
+
+.sealed-date {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.sealed-count {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.sealed-track {
+    height: 6px;
+    margin-top: var(--sp-5);
+    border-radius: var(--radius-pill);
+    background: var(--c-line);
+    overflow: hidden;
+}
+
+.sealed-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--grad-progress);
+}
+
+.sealed-meta {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.sealed-locked {
+    display: block;
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+/* 分类三：已开启 */
+.opened-card {
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-6) 14px;
+    background: var(--c-surface-4);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.opened-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.opened-date {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-3);
+}
+
+.opened-tag {
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-line);
+    color: var(--c-ink-2);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+}
+
+.opened-text {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.opened-more {
+    display: block;
+    margin-top: var(--sp-4);
+    text-align: right;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.empty-hint {
+    display: block;
+    padding: var(--sp-6) var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-bg-tint);
+    font-size: var(--fs-md);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+.source-note {
+    display: block;
+    margin-top: var(--sp-8);
+    text-align: center;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+}
+
+/* 阅读层 */
+.mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--c-scrim);
+    z-index: 10;
+}
+
+.reader {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 16%;
+    z-index: 11;
+    box-sizing: border-box;
+    max-height: 66vh;
+    padding: 18px var(--sp-7) var(--sp-7);
+    border-radius: var(--radius-xl);
+    background: var(--c-surface);
+    display: flex;
+    flex-direction: column;
+    animation: reader-in 0.22s ease;
+}
+
+@keyframes reader-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.reader-meta {
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-2);
+    color: var(--c-brand-ink);
+}
+
+.reader-scroll {
+    flex: 1;
+    margin-top: var(--sp-5);
+    max-height: 46vh;
+}
+
+.reader-text {
+    font-size: var(--fs-lg);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-2);
+    white-space: pre-wrap;
+}
+
+.reader-close {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    /* 原为一行 12px 小字（约 24.5px 高），撑到 44px 才好点；右对齐与上方正文一致 */
+    min-height: 44px;
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-3);
+    border-top: var(--bw) solid var(--c-line);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+/* 同上：胶囊 hero 里的品牌小标走 chip 文字令牌 */
+.hero .eyebrow {
+    color: var(--c-hero-chip-ink);
+}
+
+/* 科技蓝的胶囊 hero 是深底（深海军蓝渐变），暖金系文字（--c-gold-ink-deep 在冷色调里是深青）
+   压上去只有约 2.3:1。§5.11 的 hero 文字令牌就是为"文字压在渐变上"准备的，按主题改用它们；
+   标准版 / 少女版 / 儿童版 hero 仍是浅底，继续用暖金系，信笺感不变。 */
+.theme-tech .hero-title {
+    color: var(--c-hero-ink-1);
+}
+.theme-tech .hero-sub {
+    color: var(--c-hero-ink-2);
+}
+.theme-tech .hero-stat-num {
+    color: var(--c-hero-ink-1);
+}
+.theme-tech .hero-stat-label {
+    color: var(--c-hero-ink-2);
+}

@@ -1,0 +1,3423 @@
+.today-page {
+    padding-bottom: 90px;
+}
+
+.hero {
+    position: relative;
+    box-sizing: border-box;
+    overflow: hidden;
+    /* 原 20px 16px 17px：上下各收一档，给九宫格腾出首屏空间 */
+    padding: var(--sp-7) var(--sp-7) var(--sp-6);
+    border-radius: var(--radius-xl);
+    background: var(--grad-hero);
+}
+
+/* 科技蓝是唯一带"微光"气质的皮肤：--shadow-glow 只有它有值（其余三套显式 none）。
+   作用域限定在 tech，两个值在四套里都有定义，不会踩 §14.5「拼接后整条声明失效」那个坑。
+   胶囊页 .hero 走 --grad-hero-warm 暖底，青色外发光压暖底会跑调，故不在此列。 */
+.theme-tech .hero {
+    box-shadow: var(--shadow-2), var(--shadow-glow);
+}
+
+.hero-sun {
+    position: absolute;
+    top: -23px;
+    right: -15px;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: var(--glow-1);
+}
+
+.hero-top {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.hero-left {
+    display: flex;
+    flex-direction: column;
+}
+
+.hero-date {
+    margin-top: var(--sp-3);
+    font-size: var(--fs-3xl);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-tight);
+    color: var(--c-hero-ink-1);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 星期行与记录统计同行；统计靠右，落在时钟卡片下方 */
+.hero-sub {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-2);
+}
+
+.hero-meta {
+    font-size: var(--fs-md);
+    color: var(--c-hero-ink-2);
+    white-space: nowrap;
+}
+
+/* 右上角只报「此刻几点」，不计已写时长，避免被计时的压力感 */
+.clock {
+    display: flex;
+    min-width: 84px;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--radius-l);
+    background: var(--c-hero-chip-bg);
+}
+
+.clock-value {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    line-height: var(--lh-tight);
+    letter-spacing: var(--ls-2);
+    color: var(--c-hero-chip-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.clock-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-hero-ink-2);
+}
+
+/* hero 内是随日期 / 时段变化的问候与健康短句；下方 .quote-block 是名人名言库
+   日期 / 星期已由上方 .hero-date / .hero-meta 显示，这里不再重复，也不做点击交互 */
+.hero-greeting {
+    position: relative;
+    display: flex;
+    align-items: center;
+    /* 原 15px / 10px：收一档，hero 整体更低，火柴人尺寸不动（rpx 绝对定位，缩放会散架） */
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-4);
+    border-top: var(--bw) solid var(--c-hero-line);
+}
+
+.greeting-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.greeting-text {
+    display: block;
+    font-size: var(--fs-lg);
+    line-height: var(--lh-base);
+    letter-spacing: var(--ls-0);
+    color: var(--c-hero-ink-3);
+}
+
+/* 中国印风格八段锦小人：朱砂印章圆底 + 分段圆头笔画人形。
+   躯干拆胸/腰、手臂拆上臂/前臂、腿拆大腿/小腿，父段旋转即肩髋、末段再旋转即肘膝，
+   线条可折可弯。借鉴篆刻笔意与舞动人形姿态，为原创图形，不复刻任何奥运标志。
+   纯 WXSS transform 动画，无图片 / GIF / Lottie / canvas。 */
+.stick-figure {
+    position: relative;
+    flex-shrink: 0;
+    align-self: center;
+    width: 56px;
+    height: 56px;
+    margin-left: var(--sp-4);
+}
+
+.sf-seal {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    right: 2px;
+    bottom: 2px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%,
+        var(--c-seal-paper-a) 0%, var(--c-seal-paper-b) 100%);
+    border: var(--bw) solid var(--c-seal-line);
+    box-shadow: inset 0 0 0 1.5px var(--c-seal-ring);
+}
+
+.sf-figure {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.sf-shadow {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    width: 20px;
+    height: 2.5px;
+    margin-left: -10px;
+    border-radius: 50%;
+    background: var(--c-seal-shadow);
+}
+
+/* 关节容器：宽 3px 的一条链，子段绝对定位，父旋转带动整条链 */
+.sf-limb {
+    position: absolute;
+    width: 3px;
+    transform-origin: 50% 2px;
+}
+
+.sf-seg {
+    position: absolute;
+    left: 0;
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: linear-gradient(180deg, var(--c-seal) 0%, var(--c-seal-2) 100%);
+}
+
+.sf-head {
+    position: absolute;
+    top: -11px;
+    left: 50%;
+    box-sizing: border-box;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border: 2.5px solid var(--c-seal);
+    border-radius: 50%;
+    background: var(--c-seal-paper-b);
+    transform-origin: 50% 100%;
+    transform: rotate(0deg);
+}
+
+/* 躯干：绕髋部前后俯仰；腰段再绕胸腰交界折叠 */
+.sf-torso {
+    top: 16px;
+    left: 50%;
+    height: 17px;
+    margin-left: -1.5px;
+    transform-origin: 50% 100%;
+    transform: rotate(0deg);
+}
+
+.sf-chest { top: 0; height: 9px; }
+.sf-waist {
+    top: 9px;
+    height: 8px;
+    transform-origin: 50% 0;
+    transform: rotate(0deg);
+}
+
+/* 手臂：肩 → 上臂 → 肘 → 前臂 */
+.sf-arm-l, .sf-arm-r {
+    top: 1px;
+    left: 50%;
+    height: 15px;
+    margin-left: -1.5px;
+}
+.sf-arm-l { transform: rotate(12deg); }
+.sf-arm-r { transform: rotate(-12deg); }
+.sf-upper { top: 0; height: 8px; }
+.sf-fore {
+    top: 8px;
+    height: 7px;
+    transform-origin: 50% 0;
+    transform: rotate(6deg);
+}
+
+/* 腿：髋 → 大腿 → 膝 → 小腿 */
+.sf-leg-l, .sf-leg-r {
+    top: 32px;
+    left: 50%;
+    height: 17px;
+    margin-left: -1.5px;
+}
+.sf-leg-l { transform: rotate(9deg); }
+.sf-leg-r { transform: rotate(-9deg); }
+.sf-thigh { top: 0; height: 9px; }
+.sf-shin {
+    top: 9px;
+    height: 8px;
+    transform-origin: 50% 0;
+    transform: rotate(4deg);
+}
+
+/* 八段锦动画：单一数据源生成，rpx 版与预览 px 版共用（位移用 px，避免 transform 中 rpx 不换算） */
+/* 两手托天理三焦 · 双手自腹前翻掌上托过顶，脚跟微提，肩肘依次伸展，舒展三焦。 */
+@keyframes sfTuotianFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfTuotianTorso {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(-4deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfTuotianArmL {
+    0% { transform: rotate(-42deg); }
+    50% { transform: rotate(-150deg); }
+    100% { transform: rotate(-42deg); }
+}
+@keyframes sfTuotianArmR {
+    0% { transform: rotate(42deg); }
+    50% { transform: rotate(150deg); }
+    100% { transform: rotate(42deg); }
+}
+@keyframes sfTuotianElbowL {
+    0% { transform: rotate(72deg); }
+    50% { transform: rotate(12deg); }
+    100% { transform: rotate(72deg); }
+}
+@keyframes sfTuotianElbowR {
+    0% { transform: rotate(-72deg); }
+    50% { transform: rotate(-12deg); }
+    100% { transform: rotate(-72deg); }
+}
+@keyframes sfTuotianLegL {
+    0% { transform: rotate(9deg); }
+    50% { transform: rotate(3deg); }
+    100% { transform: rotate(9deg); }
+}
+@keyframes sfTuotianLegR {
+    0% { transform: rotate(-9deg); }
+    50% { transform: rotate(-3deg); }
+    100% { transform: rotate(-9deg); }
+}
+@keyframes sfTuotianKneeL {
+    0% { transform: rotate(5deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(5deg); }
+}
+@keyframes sfTuotianKneeR {
+    0% { transform: rotate(-5deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(-5deg); }
+}
+@keyframes sfTuotianShadow {
+    0% { opacity:0.20; }
+    50% { opacity:0.11; }
+    100% { opacity:0.20; }
+}
+.sf-tuotian .sf-figure { animation: sfTuotianFigure 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-torso { animation: sfTuotianTorso 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-arm-l { animation: sfTuotianArmL 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-arm-r { animation: sfTuotianArmR 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-arm-l .sf-fore { animation: sfTuotianElbowL 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-arm-r .sf-fore { animation: sfTuotianElbowR 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-leg-l { animation: sfTuotianLegL 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-leg-r { animation: sfTuotianLegR 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-leg-l .sf-shin { animation: sfTuotianKneeL 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-leg-r .sf-shin { animation: sfTuotianKneeR 3.2s ease-in-out infinite; }
+.sf-tuotian .sf-shadow { animation: sfTuotianShadow 3.2s ease-in-out infinite; }
+
+/* 左右开弓似射雕 · 马步沉膝，一臂平举持弓、一臂屈肘拉弦，左右交替，转头望弓。 */
+@keyframes sfKaigongFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-1px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfKaigongTorso {
+    0% { transform: rotate(-6deg); }
+    50% { transform: rotate(6deg); }
+    100% { transform: rotate(-6deg); }
+}
+@keyframes sfKaigongHead {
+    0% { transform: rotate(-18deg); }
+    50% { transform: rotate(18deg); }
+    100% { transform: rotate(-18deg); }
+}
+@keyframes sfKaigongArmL {
+    0% { transform: rotate(86deg); }
+    50% { transform: rotate(-70deg); }
+    100% { transform: rotate(86deg); }
+}
+@keyframes sfKaigongArmR {
+    0% { transform: rotate(-86deg); }
+    50% { transform: rotate(70deg); }
+    100% { transform: rotate(-86deg); }
+}
+@keyframes sfKaigongElbowL {
+    0% { transform: rotate(4deg); }
+    50% { transform: rotate(74deg); }
+    100% { transform: rotate(4deg); }
+}
+@keyframes sfKaigongElbowR {
+    0% { transform: rotate(-74deg); }
+    50% { transform: rotate(-4deg); }
+    100% { transform: rotate(-74deg); }
+}
+@keyframes sfKaigongLegL {
+    0% { transform: rotate(27deg); }
+    50% { transform: rotate(27deg); }
+    100% { transform: rotate(27deg); }
+}
+@keyframes sfKaigongLegR {
+    0% { transform: rotate(-27deg); }
+    50% { transform: rotate(-27deg); }
+    100% { transform: rotate(-27deg); }
+}
+@keyframes sfKaigongKneeL {
+    0% { transform: rotate(-38deg); }
+    50% { transform: rotate(-38deg); }
+    100% { transform: rotate(-38deg); }
+}
+@keyframes sfKaigongKneeR {
+    0% { transform: rotate(38deg); }
+    50% { transform: rotate(38deg); }
+    100% { transform: rotate(38deg); }
+}
+@keyframes sfKaigongShadow {
+    0% { opacity:0.20; }
+    50% { opacity:0.16; }
+    100% { opacity:0.20; }
+}
+.sf-kaigong .sf-figure { animation: sfKaigongFigure 3s ease-in-out infinite; }
+.sf-kaigong .sf-torso { animation: sfKaigongTorso 3s ease-in-out infinite; }
+.sf-kaigong .sf-head { animation: sfKaigongHead 3s ease-in-out infinite; }
+.sf-kaigong .sf-arm-l { animation: sfKaigongArmL 3s ease-in-out infinite; }
+.sf-kaigong .sf-arm-r { animation: sfKaigongArmR 3s ease-in-out infinite; }
+.sf-kaigong .sf-arm-l .sf-fore { animation: sfKaigongElbowL 3s ease-in-out infinite; }
+.sf-kaigong .sf-arm-r .sf-fore { animation: sfKaigongElbowR 3s ease-in-out infinite; }
+.sf-kaigong .sf-leg-l { animation: sfKaigongLegL 3s ease-in-out infinite; }
+.sf-kaigong .sf-leg-r { animation: sfKaigongLegR 3s ease-in-out infinite; }
+.sf-kaigong .sf-leg-l .sf-shin { animation: sfKaigongKneeL 3s ease-in-out infinite; }
+.sf-kaigong .sf-leg-r .sf-shin { animation: sfKaigongKneeR 3s ease-in-out infinite; }
+.sf-kaigong .sf-shadow { animation: sfKaigongShadow 3s ease-in-out infinite; }
+
+/* 调理脾胃须单举 · 一手上托、一手下按，腰侧微弯，左右交替以调理脾胃。 */
+@keyframes sfDanjvFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-1px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfDanjvTorso {
+    0% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
+    100% { transform: rotate(-3deg); }
+}
+@keyframes sfDanjvWaist {
+    0% { transform: rotate(-5deg); }
+    50% { transform: rotate(5deg); }
+    100% { transform: rotate(-5deg); }
+}
+@keyframes sfDanjvArmL {
+    0% { transform: rotate(-160deg); }
+    50% { transform: rotate(24deg); }
+    100% { transform: rotate(-160deg); }
+}
+@keyframes sfDanjvArmR {
+    0% { transform: rotate(24deg); }
+    50% { transform: rotate(160deg); }
+    100% { transform: rotate(24deg); }
+}
+@keyframes sfDanjvElbowL {
+    0% { transform: rotate(6deg); }
+    50% { transform: rotate(-18deg); }
+    100% { transform: rotate(6deg); }
+}
+@keyframes sfDanjvElbowR {
+    0% { transform: rotate(-18deg); }
+    50% { transform: rotate(-6deg); }
+    100% { transform: rotate(-18deg); }
+}
+@keyframes sfDanjvLegL {
+    0% { transform: rotate(9deg); }
+    50% { transform: rotate(9deg); }
+    100% { transform: rotate(9deg); }
+}
+@keyframes sfDanjvLegR {
+    0% { transform: rotate(-9deg); }
+    50% { transform: rotate(-9deg); }
+    100% { transform: rotate(-9deg); }
+}
+.sf-danjv .sf-figure { animation: sfDanjvFigure 3s ease-in-out infinite; }
+.sf-danjv .sf-torso { animation: sfDanjvTorso 3s ease-in-out infinite; }
+.sf-danjv .sf-waist { animation: sfDanjvWaist 3s ease-in-out infinite; }
+.sf-danjv .sf-arm-l { animation: sfDanjvArmL 3s ease-in-out infinite; }
+.sf-danjv .sf-arm-r { animation: sfDanjvArmR 3s ease-in-out infinite; }
+.sf-danjv .sf-arm-l .sf-fore { animation: sfDanjvElbowL 3s ease-in-out infinite; }
+.sf-danjv .sf-arm-r .sf-fore { animation: sfDanjvElbowR 3s ease-in-out infinite; }
+.sf-danjv .sf-leg-l { animation: sfDanjvLegL 3s ease-in-out infinite; }
+.sf-danjv .sf-leg-r { animation: sfDanjvLegR 3s ease-in-out infinite; }
+
+/* 五劳七伤往后瞧 · 双臂自然垂落，转头转体向后瞧，左右各一次，颈肩缓缓松开。 */
+@keyframes sfHouqiaoFigure {
+    0% { transform: translateY(0); }
+    25% { transform: translateY(-1px); }
+    50% { transform: translateY(0); }
+    75% { transform: translateY(-1px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfHouqiaoTorso {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(-8deg); }
+    50% { transform: rotate(0deg); }
+    75% { transform: rotate(8deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfHouqiaoHead {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(-50deg); }
+    50% { transform: rotate(0deg); }
+    75% { transform: rotate(50deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfHouqiaoArmL {
+    0% { transform: rotate(12deg); }
+    25% { transform: rotate(18deg); }
+    50% { transform: rotate(12deg); }
+    75% { transform: rotate(6deg); }
+    100% { transform: rotate(12deg); }
+}
+@keyframes sfHouqiaoArmR {
+    0% { transform: rotate(-12deg); }
+    25% { transform: rotate(-6deg); }
+    50% { transform: rotate(-12deg); }
+    75% { transform: rotate(-18deg); }
+    100% { transform: rotate(-12deg); }
+}
+@keyframes sfHouqiaoElbowL {
+    0% { transform: rotate(8deg); }
+    25% { transform: rotate(14deg); }
+    50% { transform: rotate(8deg); }
+    75% { transform: rotate(4deg); }
+    100% { transform: rotate(8deg); }
+}
+@keyframes sfHouqiaoElbowR {
+    0% { transform: rotate(-8deg); }
+    25% { transform: rotate(-4deg); }
+    50% { transform: rotate(-8deg); }
+    75% { transform: rotate(-14deg); }
+    100% { transform: rotate(-8deg); }
+}
+@keyframes sfHouqiaoLegL {
+    0% { transform: rotate(9deg); }
+    25% { transform: rotate(9deg); }
+    50% { transform: rotate(9deg); }
+    75% { transform: rotate(9deg); }
+    100% { transform: rotate(9deg); }
+}
+@keyframes sfHouqiaoLegR {
+    0% { transform: rotate(-9deg); }
+    25% { transform: rotate(-9deg); }
+    50% { transform: rotate(-9deg); }
+    75% { transform: rotate(-9deg); }
+    100% { transform: rotate(-9deg); }
+}
+.sf-houqiao .sf-figure { animation: sfHouqiaoFigure 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-torso { animation: sfHouqiaoTorso 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-head { animation: sfHouqiaoHead 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-arm-l { animation: sfHouqiaoArmL 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-arm-r { animation: sfHouqiaoArmR 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-arm-l .sf-fore { animation: sfHouqiaoElbowL 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-arm-r .sf-fore { animation: sfHouqiaoElbowR 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-leg-l { animation: sfHouqiaoLegL 3.6s ease-in-out infinite; }
+.sf-houqiao .sf-leg-r { animation: sfHouqiaoLegR 3.6s ease-in-out infinite; }
+
+/* 摇头摆尾去心火 · 马步沉胯，俯身摇头、左右摆尾，腰与膝同时折转，动作最柔。 */
+@keyframes sfYaotouFigure {
+    0% { transform: translateY(0); }
+    25% { transform: translateY(3px); }
+    50% { transform: translateY(0); }
+    75% { transform: translateY(3px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfYaotouTorso {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(40deg); }
+    50% { transform: rotate(0deg); }
+    75% { transform: rotate(-40deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfYaotouWaist {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(14deg); }
+    50% { transform: rotate(0deg); }
+    75% { transform: rotate(-14deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfYaotouHead {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(-24deg); }
+    50% { transform: rotate(0deg); }
+    75% { transform: rotate(24deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfYaotouArmL {
+    0% { transform: rotate(18deg); }
+    25% { transform: rotate(52deg); }
+    50% { transform: rotate(18deg); }
+    75% { transform: rotate(-16deg); }
+    100% { transform: rotate(18deg); }
+}
+@keyframes sfYaotouArmR {
+    0% { transform: rotate(-18deg); }
+    25% { transform: rotate(16deg); }
+    50% { transform: rotate(-18deg); }
+    75% { transform: rotate(-52deg); }
+    100% { transform: rotate(-18deg); }
+}
+@keyframes sfYaotouElbowL {
+    0% { transform: rotate(10deg); }
+    25% { transform: rotate(28deg); }
+    50% { transform: rotate(10deg); }
+    75% { transform: rotate(4deg); }
+    100% { transform: rotate(10deg); }
+}
+@keyframes sfYaotouElbowR {
+    0% { transform: rotate(-10deg); }
+    25% { transform: rotate(-4deg); }
+    50% { transform: rotate(-10deg); }
+    75% { transform: rotate(-28deg); }
+    100% { transform: rotate(-10deg); }
+}
+@keyframes sfYaotouLegL {
+    0% { transform: rotate(26deg); }
+    25% { transform: rotate(30deg); }
+    50% { transform: rotate(26deg); }
+    75% { transform: rotate(30deg); }
+    100% { transform: rotate(26deg); }
+}
+@keyframes sfYaotouLegR {
+    0% { transform: rotate(-26deg); }
+    25% { transform: rotate(-30deg); }
+    50% { transform: rotate(-26deg); }
+    75% { transform: rotate(-30deg); }
+    100% { transform: rotate(-26deg); }
+}
+@keyframes sfYaotouKneeL {
+    0% { transform: rotate(-36deg); }
+    25% { transform: rotate(-44deg); }
+    50% { transform: rotate(-36deg); }
+    75% { transform: rotate(-44deg); }
+    100% { transform: rotate(-36deg); }
+}
+@keyframes sfYaotouKneeR {
+    0% { transform: rotate(36deg); }
+    25% { transform: rotate(44deg); }
+    50% { transform: rotate(36deg); }
+    75% { transform: rotate(44deg); }
+    100% { transform: rotate(36deg); }
+}
+.sf-yaotou .sf-figure { animation: sfYaotouFigure 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-torso { animation: sfYaotouTorso 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-waist { animation: sfYaotouWaist 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-head { animation: sfYaotouHead 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-arm-l { animation: sfYaotouArmL 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-arm-r { animation: sfYaotouArmR 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-arm-l .sf-fore { animation: sfYaotouElbowL 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-arm-r .sf-fore { animation: sfYaotouElbowR 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-leg-l { animation: sfYaotouLegL 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-leg-r { animation: sfYaotouLegR 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-leg-l .sf-shin { animation: sfYaotouKneeL 3.8s ease-in-out infinite; }
+.sf-yaotou .sf-leg-r .sf-shin { animation: sfYaotouKneeR 3.8s ease-in-out infinite; }
+
+/* 两手攀足固肾腰 · 脊柱逐节前俯、双臂顺躯干下探攀足，膝保持舒展，再缓缓起身。 */
+@keyframes sfPanzuFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(4px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfPanzuTorso {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(48deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfPanzuWaist {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(16deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfPanzuHead {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(26deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfPanzuArmL {
+    0% { transform: rotate(14deg); }
+    50% { transform: rotate(62deg); }
+    100% { transform: rotate(14deg); }
+}
+@keyframes sfPanzuArmR {
+    0% { transform: rotate(-14deg); }
+    50% { transform: rotate(-62deg); }
+    100% { transform: rotate(-14deg); }
+}
+@keyframes sfPanzuElbowL {
+    0% { transform: rotate(8deg); }
+    50% { transform: rotate(4deg); }
+    100% { transform: rotate(8deg); }
+}
+@keyframes sfPanzuElbowR {
+    0% { transform: rotate(-8deg); }
+    50% { transform: rotate(-4deg); }
+    100% { transform: rotate(-8deg); }
+}
+@keyframes sfPanzuLegL {
+    0% { transform: rotate(6deg); }
+    50% { transform: rotate(4deg); }
+    100% { transform: rotate(6deg); }
+}
+@keyframes sfPanzuLegR {
+    0% { transform: rotate(-6deg); }
+    50% { transform: rotate(-4deg); }
+    100% { transform: rotate(-6deg); }
+}
+@keyframes sfPanzuKneeL {
+    0% { transform: rotate(3deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(3deg); }
+}
+@keyframes sfPanzuKneeR {
+    0% { transform: rotate(-3deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(-3deg); }
+}
+.sf-panzu .sf-figure { animation: sfPanzuFigure 3.8s ease-in-out infinite; }
+.sf-panzu .sf-torso { animation: sfPanzuTorso 3.8s ease-in-out infinite; }
+.sf-panzu .sf-waist { animation: sfPanzuWaist 3.8s ease-in-out infinite; }
+.sf-panzu .sf-head { animation: sfPanzuHead 3.8s ease-in-out infinite; }
+.sf-panzu .sf-arm-l { animation: sfPanzuArmL 3.8s ease-in-out infinite; }
+.sf-panzu .sf-arm-r { animation: sfPanzuArmR 3.8s ease-in-out infinite; }
+.sf-panzu .sf-arm-l .sf-fore { animation: sfPanzuElbowL 3.8s ease-in-out infinite; }
+.sf-panzu .sf-arm-r .sf-fore { animation: sfPanzuElbowR 3.8s ease-in-out infinite; }
+.sf-panzu .sf-leg-l { animation: sfPanzuLegL 3.8s ease-in-out infinite; }
+.sf-panzu .sf-leg-r { animation: sfPanzuLegR 3.8s ease-in-out infinite; }
+.sf-panzu .sf-leg-l .sf-shin { animation: sfPanzuKneeL 3.8s ease-in-out infinite; }
+.sf-panzu .sf-leg-r .sf-shin { animation: sfPanzuKneeR 3.8s ease-in-out infinite; }
+
+/* 攒拳怒目增气力 · 马步稳立，拳自腰间螺旋冲出、左右交替，收拳时肘明显折叠。 */
+@keyframes sfZanquanFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-1px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfZanquanTorso {
+    0% { transform: rotate(-5deg); }
+    50% { transform: rotate(5deg); }
+    100% { transform: rotate(-5deg); }
+}
+@keyframes sfZanquanArmL {
+    0% { transform: rotate(86deg); }
+    50% { transform: rotate(-22deg); }
+    100% { transform: rotate(86deg); }
+}
+@keyframes sfZanquanArmR {
+    0% { transform: rotate(-22deg); }
+    50% { transform: rotate(-86deg); }
+    100% { transform: rotate(-22deg); }
+}
+@keyframes sfZanquanElbowL {
+    0% { transform: rotate(2deg); }
+    50% { transform: rotate(76deg); }
+    100% { transform: rotate(2deg); }
+}
+@keyframes sfZanquanElbowR {
+    0% { transform: rotate(-76deg); }
+    50% { transform: rotate(-2deg); }
+    100% { transform: rotate(-76deg); }
+}
+@keyframes sfZanquanLegL {
+    0% { transform: rotate(26deg); }
+    50% { transform: rotate(26deg); }
+    100% { transform: rotate(26deg); }
+}
+@keyframes sfZanquanLegR {
+    0% { transform: rotate(-26deg); }
+    50% { transform: rotate(-26deg); }
+    100% { transform: rotate(-26deg); }
+}
+@keyframes sfZanquanKneeL {
+    0% { transform: rotate(-36deg); }
+    50% { transform: rotate(-36deg); }
+    100% { transform: rotate(-36deg); }
+}
+@keyframes sfZanquanKneeR {
+    0% { transform: rotate(36deg); }
+    50% { transform: rotate(36deg); }
+    100% { transform: rotate(36deg); }
+}
+@keyframes sfZanquanShadow {
+    0% { opacity:0.20; }
+    50% { opacity:0.17; }
+    100% { opacity:0.20; }
+}
+.sf-zanquan .sf-figure { animation: sfZanquanFigure 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-torso { animation: sfZanquanTorso 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-arm-l { animation: sfZanquanArmL 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-arm-r { animation: sfZanquanArmR 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-arm-l .sf-fore { animation: sfZanquanElbowL 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-arm-r .sf-fore { animation: sfZanquanElbowR 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-leg-l { animation: sfZanquanLegL 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-leg-r { animation: sfZanquanLegR 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-leg-l .sf-shin { animation: sfZanquanKneeL 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-leg-r .sf-shin { animation: sfZanquanKneeR 2.6s ease-in-out infinite; }
+.sf-zanquan .sf-shadow { animation: sfZanquanShadow 2.6s ease-in-out infinite; }
+
+/* 背后七颠百病消 · 并腿提踵、轻轻落下，膝微屈缓冲，地面阴影同步收放。 */
+@keyframes sfQidianFigure {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+    100% { transform: translateY(0); }
+}
+@keyframes sfQidianTorso {
+    0% { transform: rotate(0deg); }
+    50% { transform: rotate(-2deg); }
+    100% { transform: rotate(0deg); }
+}
+@keyframes sfQidianArmL {
+    0% { transform: rotate(16deg); }
+    50% { transform: rotate(11deg); }
+    100% { transform: rotate(16deg); }
+}
+@keyframes sfQidianArmR {
+    0% { transform: rotate(-16deg); }
+    50% { transform: rotate(-11deg); }
+    100% { transform: rotate(-16deg); }
+}
+@keyframes sfQidianElbowL {
+    0% { transform: rotate(10deg); }
+    50% { transform: rotate(6deg); }
+    100% { transform: rotate(10deg); }
+}
+@keyframes sfQidianElbowR {
+    0% { transform: rotate(-10deg); }
+    50% { transform: rotate(-6deg); }
+    100% { transform: rotate(-10deg); }
+}
+@keyframes sfQidianLegL {
+    0% { transform: rotate(7deg); }
+    50% { transform: rotate(2deg); }
+    100% { transform: rotate(7deg); }
+}
+@keyframes sfQidianLegR {
+    0% { transform: rotate(-7deg); }
+    50% { transform: rotate(-2deg); }
+    100% { transform: rotate(-7deg); }
+}
+@keyframes sfQidianKneeL {
+    0% { transform: rotate(6deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(6deg); }
+}
+@keyframes sfQidianKneeR {
+    0% { transform: rotate(-6deg); }
+    50% { transform: rotate(0deg); }
+    100% { transform: rotate(-6deg); }
+}
+@keyframes sfQidianShadow {
+    0% { transform: scaleX(1);opacity:0.20; }
+    50% { transform: scaleX(0.6);opacity:0.08; }
+    100% { transform: scaleX(1);opacity:0.20; }
+}
+.sf-qidian .sf-figure { animation: sfQidianFigure 1.6s ease-in-out infinite; }
+.sf-qidian .sf-torso { animation: sfQidianTorso 1.6s ease-in-out infinite; }
+.sf-qidian .sf-arm-l { animation: sfQidianArmL 1.6s ease-in-out infinite; }
+.sf-qidian .sf-arm-r { animation: sfQidianArmR 1.6s ease-in-out infinite; }
+.sf-qidian .sf-arm-l .sf-fore { animation: sfQidianElbowL 1.6s ease-in-out infinite; }
+.sf-qidian .sf-arm-r .sf-fore { animation: sfQidianElbowR 1.6s ease-in-out infinite; }
+.sf-qidian .sf-leg-l { animation: sfQidianLegL 1.6s ease-in-out infinite; }
+.sf-qidian .sf-leg-r { animation: sfQidianLegR 1.6s ease-in-out infinite; }
+.sf-qidian .sf-leg-l .sf-shin { animation: sfQidianKneeL 1.6s ease-in-out infinite; }
+.sf-qidian .sf-leg-r .sf-shin { animation: sfQidianKneeR 1.6s ease-in-out infinite; }
+.sf-qidian .sf-shadow { animation: sfQidianShadow 1.6s ease-in-out infinite; }
+
+/* 收势 · 气沉丹田 · 双手叠于腹前，肘膝微曲，只做极轻的呼吸起伏；深夜不演练，配合劝早睡文案。 */
+@keyframes sfCalmFigure {
+    0% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-1px) scale(1.015); }
+    100% { transform: translateY(0) scale(1); }
+}
+@keyframes sfCalmArmL {
+    0% { transform: rotate(-24deg); }
+    50% { transform: rotate(-30deg); }
+    100% { transform: rotate(-24deg); }
+}
+@keyframes sfCalmArmR {
+    0% { transform: rotate(24deg); }
+    50% { transform: rotate(30deg); }
+    100% { transform: rotate(24deg); }
+}
+@keyframes sfCalmElbowL {
+    0% { transform: rotate(62deg); }
+    50% { transform: rotate(68deg); }
+    100% { transform: rotate(62deg); }
+}
+@keyframes sfCalmElbowR {
+    0% { transform: rotate(-62deg); }
+    50% { transform: rotate(-68deg); }
+    100% { transform: rotate(-62deg); }
+}
+@keyframes sfCalmLegL {
+    0% { transform: rotate(9deg); }
+    50% { transform: rotate(9deg); }
+    100% { transform: rotate(9deg); }
+}
+@keyframes sfCalmLegR {
+    0% { transform: rotate(-9deg); }
+    50% { transform: rotate(-9deg); }
+    100% { transform: rotate(-9deg); }
+}
+@keyframes sfCalmKneeL {
+    0% { transform: rotate(5deg); }
+    50% { transform: rotate(7deg); }
+    100% { transform: rotate(5deg); }
+}
+@keyframes sfCalmKneeR {
+    0% { transform: rotate(-5deg); }
+    50% { transform: rotate(-7deg); }
+    100% { transform: rotate(-5deg); }
+}
+@keyframes sfCalmShadow {
+    0% { opacity:0.18; }
+    50% { opacity:0.10; }
+    100% { opacity:0.18; }
+}
+.sf-calm .sf-figure { animation: sfCalmFigure 3.2s ease-in-out infinite; }
+.sf-calm .sf-arm-l { animation: sfCalmArmL 3.2s ease-in-out infinite; }
+.sf-calm .sf-arm-r { animation: sfCalmArmR 3.2s ease-in-out infinite; }
+.sf-calm .sf-arm-l .sf-fore { animation: sfCalmElbowL 3.2s ease-in-out infinite; }
+.sf-calm .sf-arm-r .sf-fore { animation: sfCalmElbowR 3.2s ease-in-out infinite; }
+.sf-calm .sf-leg-l { animation: sfCalmLegL 3.2s ease-in-out infinite; }
+.sf-calm .sf-leg-r { animation: sfCalmLegR 3.2s ease-in-out infinite; }
+.sf-calm .sf-leg-l .sf-shin { animation: sfCalmKneeL 3.2s ease-in-out infinite; }
+.sf-calm .sf-leg-r .sf-shin { animation: sfCalmKneeR 3.2s ease-in-out infinite; }
+.sf-calm .sf-shadow { animation: sfCalmShadow 3.2s ease-in-out infinite; }
+
+.greeting-hint {
+    display: block;
+    margin-top: var(--sp-1);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-hero-ink-2);
+}
+
+.hero-streak {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    font-size: var(--fs-sm);
+    color: var(--c-hero-chip-ink);
+    font-weight: var(--fw-semi);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.streak-dot {
+    width: 7px;
+    height: 7px;
+    margin-right: var(--sp-2);
+    border-radius: 50%;
+    background: var(--c-gold);
+}
+
+/* 头七天开心日记引导 */
+.firstweek-card {
+    margin-top: var(--sp-5);
+    background: var(--c-gold-soft);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.fw-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.fw-tag {
+    padding: var(--sp-1) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-gold);
+    color: var(--c-on-gold);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+
+.fw-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+    /* 头七天引导卡里的「结束引导」：可点区 44px，卡片高度不变 */
+    margin: -12px -6px -12px 0;
+    font-size: var(--fs-md);
+    color: var(--c-gold-ink-2);
+}
+
+.fw-title {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-gold-ink);
+}
+
+.fw-desc {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-gold-ink-2);
+}
+
+.fw-celebrate {
+    display: block;
+    margin-top: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-gold-ink-2);
+}
+
+/* 写前回看去年今日 */
+.prev-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-5);
+    padding: var(--sp-6) 14px;
+    border-radius: var(--radius-l);
+    background: var(--c-brand-soft);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.prev-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    margin-right: var(--sp-4);
+}
+
+.prev-label {
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.prev-text {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-ink-3);
+}
+
+.prev-arrow {
+    flex-shrink: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+/* 今日状态：不再单独占一栏，只留一行入口；首次点格子时弹出收集浮层 */
+.intake-bar {
+    display: flex;
+    align-items: center;
+    margin: var(--sp-5) var(--sp-1) 0;
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-glass);
+    border: var(--bw) solid var(--c-line-2);
+}
+
+.intake-bar-dot {
+    width: 7px;
+    height: 7px;
+    margin-right: var(--sp-3);
+    border-radius: 50%;
+    background: var(--c-deco-3);
+}
+
+.intake-bar-dot-done {
+    background: var(--c-brand);
+}
+
+.intake-bar-label {
+    flex-shrink: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-3);
+}
+
+.intake-bar-value {
+    flex: 1;
+    margin: 0 var(--sp-3);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+}
+
+.intake-bar-arrow {
+    flex-shrink: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.intake-sheet {
+    z-index: 21;
+    max-height: 86vh;
+    overflow-y: auto;
+}
+
+.intake-rows {
+    margin-top: var(--sp-7);
+}
+
+.intake-row {
+    margin-bottom: var(--sp-7);
+}
+
+.intake-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.intake-row-right {
+    display: flex;
+    align-items: center;
+}
+
+.intake-label {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-3);
+}
+
+.intake-optional {
+    margin-left: var(--sp-2);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-reg);
+    color: var(--c-ink-4);
+}
+
+.intake-value {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+}
+
+.intake-value-empty {
+    font-size: var(--fs-md);
+    font-weight: var(--fw-reg);
+}
+
+.intake-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+    /* 「清除」两字太窄，撑到 44px 才好点；负边距保持与右侧标签的对齐 */
+    margin: -14px -7px -14px var(--sp-4);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.intake-track {
+    position: relative;
+    height: 8px;
+    margin-top: var(--sp-5);
+    border-radius: var(--radius-pill);
+    background: var(--c-line);
+}
+
+.intake-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    border-radius: var(--radius-pill);
+    opacity: 0.7;
+}
+
+.intake-thumb {
+    position: absolute;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    margin: -8px 0 0 -8px;
+    border: 2px solid var(--c-deco-3);
+    border-radius: 50%;
+    background: var(--c-surface);
+    box-shadow: var(--shadow-2);
+}
+
+/* ---- 今日状态 5 档：色阶与文字色彻底分开 ----
+   色阶（--c-scale-*）只做圆点描边与轨道填充，一个字都不压在上面；
+   文字色按档位映射到 ink 令牌，四套主题下都是 AA。
+   原来的做法是同一个色值既当填充又当文字色，白底只有 1.6–2.1:1，读不出来。 */
+.intake-fill-lv-0 { background: var(--c-deco-3); }
+.intake-fill-lv-1 { background: var(--c-scale-1); }
+.intake-fill-lv-2 { background: var(--c-scale-2); }
+.intake-fill-lv-3 { background: var(--c-scale-3); }
+.intake-fill-lv-4 { background: var(--c-scale-4); }
+.intake-fill-lv-5 { background: var(--c-scale-5); }
+
+.intake-thumb-lv-0 { border-color: var(--c-deco-3); }
+.intake-thumb-lv-1 { border-color: var(--c-scale-1); }
+.intake-thumb-lv-2 { border-color: var(--c-scale-2); }
+.intake-thumb-lv-3 { border-color: var(--c-scale-3); }
+.intake-thumb-lv-4 { border-color: var(--c-scale-4); }
+.intake-thumb-lv-5 { border-color: var(--c-scale-5); }
+
+.intake-lv-0 { color: var(--c-ink-4); }
+.intake-lv-1 { color: var(--c-ink-3); }
+.intake-lv-2 { color: var(--c-ink-3); }
+.intake-lv-3 { color: var(--c-ink-2); }
+.intake-lv-4 { color: var(--c-brand-ink); }
+.intake-lv-5 { color: var(--c-brand-ink); }
+
+.intake-anniv {
+    display: flex;
+    align-items: center;
+    padding-top: var(--sp-5);
+    border-top: var(--bw) solid var(--c-line);
+}
+
+.intake-anniv .base-input {
+    margin-left: var(--sp-5);
+}
+
+.intake-note {
+    display: block;
+    margin-top: var(--sp-5);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.intake-actions {
+    display: flex;
+    margin-top: 14px;
+}
+
+.intake-skip {
+    width: 120px;
+    margin-right: var(--sp-5);
+}
+
+.intake-done-btn {
+    flex: 1;
+}
+
+.base-input {
+    flex: 1;
+    font-size: var(--fs-base);
+    color: var(--c-ink-1);
+}
+
+.input-ph {
+    color: var(--c-deco-3);
+}
+
+.section-link {
+    color: var(--c-brand-ink);
+    font-weight: var(--fw-semi);
+}
+
+.grid {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.grid-cell {
+    box-sizing: border-box;
+    width: calc((100% - 12px) / 3);
+    height: 95px;
+    margin-right: var(--sp-3);
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-5) var(--sp-4);
+    border-radius: var(--radius-l);
+    border: var(--bw) solid var(--c-line-2);
+    background: var(--c-surface);
+    display: flex;
+    flex-direction: column;
+}
+
+.grid-cell:nth-child(3n) {
+    margin-right: 0;
+}
+
+.grid-center {
+    background: var(--c-gold-soft);
+    border-color: var(--c-gold-line);
+}
+
+.grid-filled {
+    border-color: var(--c-line-3);
+    background: var(--c-surface-4);
+}
+
+.grid-center.grid-filled {
+    background: var(--c-gold-warm);
+    border-color: var(--c-gold-line-2);
+}
+
+.cell-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.cell-label {
+    font-size: var(--fs-base);
+    /* 固定行高，让标签行稳定占 15px；不固定时 iOS 上 normal 约 1.4 倍，会把提问文字挤出格子 */
+    line-height: var(--lh-snug);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.grid-center .cell-label {
+    color: var(--c-gold-ink);
+}
+
+.cell-required {
+    padding: 1px var(--sp-2);
+    border-radius: var(--radius-s);
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-xs);
+}
+
+.cell-text {
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    line-height: var(--lh-snug);
+    color: var(--c-ink-3);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+}
+
+/* 提问文字是产品核心内容：原 10.5px / c-ink-4（白底仅 2.48:1）读不清，
+   提到 12px / c-ink-4（白底 4.61:1，达 WCAG AA 4.5:1）。
+   放大后要保证 3 行仍装得进格子，逐个数字算过：
+     格子内容高 = 190 - 40(padding) - 4(border) = 73px
+     标签行 15px（.cell-label 12.5px × 1.2）+ 上间距 4px + 三行文字 3×24×1.4 = 50.4px
+     合计 69.4px < 73px，余 3.6px，不撑破。
+   容量：格子内宽 91.5px ÷ 12px ≈ 7 字/行 × 3 行 = 21 字，
+   index.js 把提问截到 18 字 + 省略号（最长 19 字），仍装得下。 */
+.cell-prompt {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-snug);
+    color: var(--c-ink-4);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+}
+
+/* 一键留一句 */
+.quick-card {
+    margin-top: var(--sp-5);
+    padding: 14px;
+}
+
+.quick-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.quick-row {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-4);
+}
+
+.quick-chip {
+    margin: 0 var(--sp-3) var(--sp-3) 0;
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-tint);
+    border: var(--bw) solid var(--c-brand-line);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+}
+
+.quick-note {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.actions {
+    margin-top: 18px;
+}
+
+.actions-tip {
+    display: block;
+    margin-top: var(--sp-4);
+    text-align: center;
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--c-scrim);
+    z-index: 10;
+}
+
+.sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 11;
+    box-sizing: border-box;
+    /* 底部 30px 之外再加上 iPhone 底部横条的安全区，否则横条会压住「保存」按钮。
+       注意：不能把 env() 写进 padding 简写——简写里只要有一个值不被识别，
+       整条声明会被整条丢弃，老客户端上四边内边距会全部归零（内容贴边）。
+       所以拆成「兜底长写 + 支持 env 的客户端覆盖」两行，顺序不能反。 */
+    padding: 18px var(--sp-7) 30px;
+    padding-bottom: calc(30px + env(safe-area-inset-bottom));
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+    background: var(--c-surface);
+    /* 裸浮层（无 work/money/study 面板类）原本既没有限高也没有滚动：
+       写到 500 字时总高约 845px，顶部标题和关闭键会被顶出屏幕。
+       这里与 .sheet-work / .sheet-money / .sheet-study 的口径对齐（88vh + 纵向滚动）。 */
+    max-height: 88vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    transform: translateY(110%);
+    transition: transform 0.24s ease;
+}
+
+.sheet-open {
+    transform: translateY(0);
+}
+
+.sheet-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.sheet-title {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-bold);
+}
+
+.sheet-hint {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+}
+
+/* 关闭键：可点区 88×44px，负边距把多出来的 20px 抵掉，视觉位置与表头高度都不变 */
+.sheet-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    margin: -10px -5px -10px 0;
+    font-size: var(--fs-2xl);
+    line-height: var(--lh-tight);
+    color: var(--c-ink-4);
+}
+
+.sheet-prompt {
+    position: relative;
+    margin-top: var(--sp-6);
+    padding: var(--sp-5) var(--sp-6) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-brand-tint);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.sheet-prompt-label {
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-3);
+    color: var(--c-brand-ink);
+}
+
+.sheet-prompt-text {
+    display: block;
+    margin-top: var(--sp-2);
+    padding-right: 65px;
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-brand-strong);
+}
+
+.sheet-prompt-rotate {
+    position: absolute;
+    right: 11px;
+    bottom: 11px;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-surface);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+
+.sheet-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 100px;
+    margin-top: var(--sp-6);
+    padding: var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    font-size: var(--fs-lg);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-1);
+}
+
+/* 「清空 / 保存」这一格吸在滚动区底部：
+   浮层加了 max-height:88vh + 纵向滚动后，写 300 字以上按钮会被滚出视野。
+   sticky 会跟随滚动容器（.sheet 的 overflow-y:auto）吸底，不改父容器定位。 */
+.sheet-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    margin-top: 14px;
+    /* 白底盖住从下面滚过去的正文；与 .sheet 浮层实际底色一致 */
+    background: var(--c-surface);
+    padding-top: var(--sp-4);
+    /* 同样不能把 env() 写进简写：先兜底，再让支持的客户端覆盖 */
+    padding-bottom: var(--sp-4);
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+
+.sheet-clear {
+    width: 100px;
+    margin-right: var(--sp-5);
+}
+
+.sheet-save {
+    flex: 1;
+}
+
+/* 补记历史某天 */
+.backfill-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-5);
+    padding: var(--sp-5) 14px;
+    border-radius: var(--radius-l);
+    background: var(--c-brand-soft);
+    border: var(--bw) solid var(--c-brand-line-2);
+}
+
+.backfill-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.backfill-label {
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-3);
+    color: var(--c-brand-ink);
+}
+
+.backfill-date {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-deep);
+}
+
+.backfill-back {
+    padding: var(--sp-2) var(--sp-6);
+    border-radius: var(--radius-pill);
+    background: var(--c-surface);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+}
+
+/* 胶囊独立成栏后：今日页只保留一条导流提醒，读与写都在「胶囊」tab */
+.capsule-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-5);
+    padding: var(--sp-6) 14px;
+    border-radius: var(--radius-l);
+    background: var(--c-gold-soft);
+    border: var(--bw) solid var(--c-gold-line);
+}
+
+.capsule-notice-text {
+    flex: 1;
+    margin-right: var(--sp-4);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-gold-ink);
+}
+
+.capsule-notice-arrow {
+    flex-shrink: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-gold-ink-2);
+}
+
+
+/* 每日名言 · 格志式：左侧细竖线 + 灰正文 + 右对齐署名 + 底部细分割线 */
+.quote-block {
+    margin: var(--sp-7) var(--sp-1) 0;
+}
+.quote-inner {
+    box-sizing: border-box;
+    padding: var(--sp-2) var(--sp-1) var(--sp-2) 14px;
+    border-left: 3px solid var(--c-line-2);
+}
+.quote-inner-hover {
+    background: var(--c-brand-veil-soft);
+}
+.quote-text {
+    display: block;
+    font-size: var(--fs-lg);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-3);
+    letter-spacing: var(--ls-0);
+}
+.quote-text-long {
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+}
+.quote-author {
+    display: block;
+    margin-top: var(--sp-6);
+    text-align: right;
+    font-size: var(--fs-base);
+    color: var(--c-ink-2);
+    letter-spacing: var(--ls-1);
+}
+.quote-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-6);
+}
+.quote-tag {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+    letter-spacing: var(--ls-1);
+}
+.quote-next {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 44px;
+    /* 「换一句」：原 12px 字、约 20px 高，撑到 44px；负边距不吃掉行高 */
+    margin: -10px -4px -10px 0;
+    padding-left: var(--sp-6);
+    font-size: var(--fs-md);
+    color: var(--c-brand-ink);
+}
+.quote-divider {
+    height: 1px;
+    margin-top: var(--sp-5);
+    background: var(--c-line);
+}
+
+/* ---- 编辑浮层表头：历史分析入口 ---- */
+.sheet-head-right {
+    display: flex;
+    align-items: center;
+}
+
+.sheet-history {
+    margin-right: var(--sp-5);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-tint);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+}
+
+/* ---- 单格历史内容分析浮层 ---- */
+.insight-mask {
+    z-index: 20;
+}
+
+.insight-sheet {
+    z-index: 21;
+    max-height: 86vh;
+    overflow: hidden;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+}
+
+.insight-scroll {
+    height: 62vh;
+    margin-top: var(--sp-6);
+}
+
+.insight-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 35px 0;
+}
+
+.insight-empty-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.insight-empty-text {
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+    text-align: center;
+}
+
+.insight-metrics {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.insight-metric {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 33.33%;
+    padding: var(--sp-4) var(--sp-2);
+}
+
+.insight-metric-value {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.insight-metric-unit {
+    margin-left: var(--sp-1);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-reg);
+    color: var(--c-ink-4);
+}
+
+.insight-metric-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.insight-section {
+    margin-top: var(--sp-7);
+    padding-top: var(--sp-6);
+    border-top: var(--bw) solid var(--c-line);
+}
+
+.insight-section-title {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.insight-section-note {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.heat-row {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-4);
+}
+
+.heat-cell {
+    width: 10px;
+    height: 10px;
+    margin: 0 var(--sp-1) var(--sp-1) 0;
+    border-radius: var(--radius-s);
+    background: var(--c-line);
+}
+
+.heat-lv1 { background: var(--c-lv-1); }
+.heat-lv2 { background: var(--c-lv-2); }
+.heat-lv3 { background: var(--c-brand); }
+
+.compare-row {
+    display: flex;
+    margin-top: var(--sp-4);
+}
+
+.compare-col {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    margin-right: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+}
+
+.compare-col:last-child {
+    margin-right: 0;
+}
+
+.compare-label {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.compare-value {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.phrase-row {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-4);
+}
+
+.phrase-chip {
+    margin: 0 var(--sp-3) var(--sp-3) 0;
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-gold-tint);
+    color: var(--c-gold-ink-2);
+    font-size: var(--fs-sm);
+}
+
+.cov-row {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-4);
+}
+
+.cov-label {
+    flex-shrink: 0;
+    width: 85px;
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.cov-track {
+    flex: 1;
+    height: 7px;
+    overflow: hidden;
+    border-radius: var(--radius-pill);
+    background: var(--c-line);
+}
+
+.cov-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--c-brand);
+}
+
+.cov-fill.cov-mid { background: var(--c-lv-2); }
+.cov-fill.cov-low { background: var(--c-deco-3); }
+
+.cov-pct {
+    width: 35px;
+    text-align: right;
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+    font-variant-numeric: tabular-nums;
+}
+
+.excerpt {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+}
+
+.excerpt-date {
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.excerpt-text {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-ink-3);
+}
+
+.insight-callout {
+    margin-top: 14px;
+    padding: var(--sp-5) var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-brand-tint);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.insight-callout-text {
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-brand-strong);
+}
+
+.insight-footnote {
+    display: block;
+    margin-top: var(--sp-5);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+/* ---- 工作模块：任务框 / 完成态 / 感想 / 汇总 ---- */
+.cell-task {
+    padding: 1px var(--sp-2);
+    border-radius: var(--radius-s);
+    background: var(--c-brand-soft);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-xs);
+}
+
+/* 工作模块面板：只出现在「工作」格的编辑浮层内，首页不再单独占卡片 */
+.work-panel {
+    margin-top: var(--sp-6);
+    padding: var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-surface-2);
+    border: var(--bw) solid var(--c-line-2);
+}
+
+/* 工作格浮层内容较长（任务 + 感想 + 日记正文），允许整体滚动。
+   该态下两个 textarea 都不用 fixed，避免原生组件脱离滚动流。 */
+.sheet-work {
+    max-height: 88vh;
+    overflow-y: auto;
+}
+
+.work-body-label {
+    display: block;
+    margin-top: var(--sp-6);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.work-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.work-head-left {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.work-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.work-sub {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.work-summary-link {
+    flex-shrink: 0;
+    margin-left: var(--sp-4);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-tint);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+
+.work-progress-row {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-6);
+}
+
+.work-progress-text {
+    flex-shrink: 0;
+    margin-right: var(--sp-4);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.work-progress-track {
+    flex: 1;
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-pill);
+    background: var(--c-line);
+}
+
+.work-progress-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--c-brand);
+    transition: width 0.2s ease;
+}
+
+.work-add {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-6);
+    padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    border: var(--bw) solid var(--c-line-2);
+}
+
+.work-input {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    font-size: var(--fs-base);
+    color: var(--c-ink-1);
+}
+
+.work-add-btn {
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    padding: var(--sp-3) var(--sp-5);
+    border-radius: var(--radius-m);
+    background: var(--c-brand-ink);
+    color: var(--c-surface);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+}
+
+.work-list {
+    margin-top: var(--sp-4);
+}
+
+/* 任务框：整框可点，点击后由 .work-task-done 加删除线并让文字变浅 */
+.work-task {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-4) var(--sp-4);
+    border-radius: var(--radius-l);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-line-2);
+}
+
+.work-task-done {
+    background: var(--c-surface-4);
+    border-color: var(--c-line);
+}
+
+.work-check {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: 16px;
+    height: 16px;
+    margin-right: var(--sp-4);
+    border: var(--bw-thick) solid var(--c-line-3);
+    border-radius: 50%;
+}
+
+.work-check-done {
+    border-color: var(--c-brand);
+    background: var(--c-brand);
+    box-shadow: inset 0 0 0 3px var(--c-surface);
+}
+
+.work-task-text {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-base);
+    line-height: var(--lh-snug);
+    color: var(--c-ink-2);
+}
+
+/* 完成态：删除线 + 浅色文字，一眼区分「做完了」和「还没做」 */
+.work-task-done .work-task-text {
+    text-decoration: line-through;
+    color: var(--c-deco-2);
+}
+
+.work-task-del {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    /* 行内只占 20px 高，任务行不会被撑高；右侧负边距让 × 仍贴着行内边 */
+    margin: -12px -7px -12px 0;
+    font-size: var(--fs-lg);
+    line-height: var(--lh-tight);
+    color: var(--c-ink-4);
+}
+
+.work-empty {
+    margin-top: var(--sp-5);
+    padding: var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    font-size: var(--fs-md);
+    color: var(--c-ink-4);
+    text-align: center;
+}
+
+.work-reflect {
+    margin-top: var(--sp-6);
+    padding-top: var(--sp-6);
+    border-top: var(--bw) solid var(--c-line);
+}
+
+.work-reflect-label {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.work-reflect-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 60px;
+    margin-top: var(--sp-4);
+    padding: var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-ink-2);
+}
+
+.work-reflect-note {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+/* ---- 工作感想汇总浮层 ---- */
+.work-summary-sheet {
+    z-index: 21;
+    max-height: 86vh;
+    overflow: hidden;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+}
+
+.work-summary-scroll {
+    height: 62vh;
+    margin-top: var(--sp-6);
+}
+
+.work-summary-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 35px 0;
+}
+
+.work-summary-empty-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-strong);
+}
+
+.work-summary-empty-text {
+    margin-top: var(--sp-3);
+    font-size: var(--fs-md);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-4);
+    text-align: center;
+}
+
+.work-summary-metrics {
+    display: flex;
+}
+
+.work-summary-metric {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--sp-4) var(--sp-2);
+    border-radius: var(--radius-l);
+    background: var(--c-bg);
+    margin-right: var(--sp-3);
+}
+
+.work-summary-metric:last-child {
+    margin-right: 0;
+}
+
+.work-summary-metric-value {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-strong);
+}
+
+.work-summary-metric-unit {
+    margin-left: var(--sp-1);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-reg);
+    color: var(--c-ink-4);
+}
+
+.work-summary-metric-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.work-summary-callout {
+    margin-top: var(--sp-5);
+    padding: var(--sp-5) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-brand-tint);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.work-summary-callout-text {
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    color: var(--c-brand-strong);
+}
+
+.work-summary-month {
+    margin-top: var(--sp-7);
+}
+
+.work-summary-month-title {
+    display: block;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-bold);
+    color: var(--c-brand-ink);
+}
+
+.work-summary-entry {
+    margin-top: var(--sp-4);
+    padding: var(--sp-5) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-surface-4);
+    border: var(--bw) solid var(--c-line);
+}
+
+.work-summary-entry-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.work-summary-date {
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.work-summary-taskstat {
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.work-summary-text {
+    display: block;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-base);
+    line-height: var(--lh-relaxed);
+    color: var(--c-ink-2);
+}
+
+.work-summary-tasks {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+}
+
+.work-summary-task {
+    margin: 0 var(--sp-2) var(--sp-2) 0;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-tint);
+    color: var(--c-ink-4);
+    font-size: var(--fs-xs);
+}
+
+.work-summary-task-done {
+    color: var(--c-deco-2);
+    text-decoration: line-through;
+}
+
+.work-summary-note {
+    display: block;
+    margin-top: var(--sp-6);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.work-summary-actions {
+    margin-top: var(--sp-5);
+}
+
+.work-summary-copy {
+    width: 100%;
+}
+
+/* ---- 今日引导并入「今日工作感想」：提问 + 换一题 紧贴输入框上方 ---- */
+.work-reflect-prompt {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    margin-top: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
+    border-radius: var(--radius-m);
+    background: var(--c-brand-tint);
+    border: var(--bw) solid var(--c-brand-line);
+}
+
+.work-reflect-prompt-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.work-reflect-prompt-label {
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    letter-spacing: var(--ls-3);
+    color: var(--c-brand-ink);
+}
+
+.work-reflect-prompt-text {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-base);
+    line-height: var(--lh-base);
+    color: var(--c-brand-strong);
+}
+
+.work-reflect-prompt-rotate {
+    flex-shrink: 0;
+    margin-top: var(--sp-1);
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--radius-pill);
+    background: var(--c-surface);
+    color: var(--c-brand-ink);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+/* ---- 金钱模块：九宫格金钱格内的简单收支登记 ---- */
+.cell-money {
+    padding: 1px var(--sp-2);
+    border-radius: var(--radius-s);
+    background: var(--c-down-soft);
+    color: var(--c-down-ink);
+    font-size: var(--fs-badge);
+}
+
+/* 金钱格浮层内容较长（收支面板 + 日记正文），允许整体滚动 */
+.sheet-money {
+    max-height: 88vh;
+    overflow-y: auto;
+}
+
+.money-panel {
+    margin-top: var(--sp-6);
+    padding: var(--sp-6);
+    border-radius: var(--radius-l);
+    background: var(--c-paper);
+    border: var(--bw) solid var(--c-paper-line);
+}
+
+.money-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.money-head-left {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.money-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-paper-ink-2);
+}
+
+.money-sub {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    color: var(--c-paper-ink-3);
+}
+
+.money-count {
+    flex-shrink: 0;
+    margin-left: var(--sp-4);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-pill);
+    background: var(--c-paper-chip);
+    color: var(--c-paper-ink-2);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+}
+
+.money-total {
+    display: flex;
+    margin-top: var(--sp-5);
+    padding: var(--sp-5) var(--sp-2);
+    border-radius: var(--radius-l);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-paper-line-2);
+}
+
+.money-total-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.money-total-label {
+    font-size: var(--fs-xs);
+    color: var(--c-paper-ink-3);
+}
+
+.money-total-num {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-paper-ink-1);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 低压力配色：收入沿用主绿，支出用柔和陶土色，不用警示红 */
+.money-in {
+    color: var(--c-brand-ink);
+}
+
+.money-out {
+    color: var(--c-down-ink);
+}
+
+.money-type-switch {
+    display: flex;
+    margin-top: var(--sp-5);
+    padding: var(--sp-1);
+    border-radius: var(--radius-m);
+    background: var(--c-paper-2);
+}
+
+.money-type {
+    flex: 1;
+    padding: var(--sp-3) 0;
+    border-radius: var(--radius-m);
+    text-align: center;
+    font-size: var(--fs-base);
+    color: var(--c-paper-ink-3);
+}
+
+.money-type-on {
+    background: var(--c-surface);
+    color: var(--c-paper-ink-2);
+    font-weight: var(--fw-semi);
+    box-shadow: var(--shadow-paper);
+}
+
+.money-form {
+    margin-top: var(--sp-5);
+}
+
+.money-amount-row {
+    display: flex;
+    align-items: center;
+    padding: var(--sp-3) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-paper-line);
+}
+
+.money-currency {
+    margin-right: var(--sp-3);
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    color: var(--c-down-ink);
+}
+
+.money-amount-input {
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    font-size: var(--fs-2xl);
+    font-weight: var(--fw-semi);
+    color: var(--c-paper-ink-1);
+    font-variant-numeric: tabular-nums;
+}
+
+.money-ph {
+    color: var(--c-paper-deco-2);
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-reg);
+}
+
+.money-cats {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-4);
+}
+
+.money-cat {
+    box-sizing: border-box;
+    width: 20%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--sp-3) 0;
+}
+
+.money-cat-glyph {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 原 line-height: 30px; 把行高当固定高度用来居中；改成 flex 居中后行高回到字阶体系 */
+    line-height: var(--lh-snug);
+    text-align: center;
+    border-radius: 50%;
+    background: var(--c-paper-2);
+    color: var(--c-paper-ink-3);
+    font-size: var(--fs-base);
+}
+
+.money-cat-label {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--c-paper-ink-3);
+}
+
+/* 选中态用 --c-paper-accent-deep 而不是 --c-paper-accent：
+   后者是"浅底提醒色"，白字形压上去四套只有 2.38–3.51；deep 档四套白字 4.90–8.87。
+   字形块是 30px 面积块，但里面装的是单字，按"图形内文字"算 4.5 更稳。 */
+.money-cat-on .money-cat-glyph {
+    background: var(--c-paper-accent-deep);
+    color: var(--c-surface);
+}
+
+.money-cat-on .money-cat-label {
+    color: var(--c-paper-ink-3);
+    font-weight: var(--fw-bold);
+}
+
+.money-note-row {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-4);
+    padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-paper-line);
+}
+
+.money-note-input {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    font-size: var(--fs-base);
+    color: var(--c-paper-ink-1);
+}
+
+/* 与 .money-cat-on .money-cat-glyph 同一根因：--c-paper-accent 是"浅底提醒色"，
+   压白字只有 2.00–3.34，这颗是带文字的按钮，必须走 4.5，所以用 deep 档。 */
+.money-add-btn {
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-m);
+    background: var(--c-paper-accent-deep);
+    color: var(--c-surface);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+}
+
+.money-list {
+    margin-top: var(--sp-5);
+}
+
+.money-entry {
+    display: flex;
+    align-items: center;
+    margin-bottom: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-paper-line-2);
+}
+
+.money-entry-glyph {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 原 line-height: 24px; 把行高当固定高度用来居中；改成 flex 居中后行高回到字阶体系 */
+    line-height: var(--lh-snug);
+    text-align: center;
+    border-radius: 50%;
+    background: var(--c-down-soft);
+    color: var(--c-down-ink);
+    font-size: var(--fs-sm);
+}
+
+.money-glyph-in {
+    background: var(--c-up-soft);
+    color: var(--c-brand-ink);
+}
+
+.money-entry-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    margin-left: var(--sp-4);
+}
+
+.money-entry-cat {
+    font-size: var(--fs-base);
+    color: var(--c-paper-ink-1);
+}
+
+.money-entry-note {
+    margin-top: var(--sp-1);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-xs);
+    color: var(--c-paper-ink-3);
+}
+
+.money-entry-amount {
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+}
+
+.money-entry-del {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    /* 行内只占 20px 高，收支行不会被撑高 */
+    margin: -12px -7px -12px 0;
+    font-size: var(--fs-lg);
+    color: var(--c-paper-ink-3);
+}
+
+.money-empty {
+    display: block;
+    margin-top: var(--sp-5);
+    padding: var(--sp-6);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+    font-size: var(--fs-md);
+    line-height: var(--lh-base);
+    text-align: center;
+    color: var(--c-paper-ink-3);
+}
+
+.money-foot {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-paper-ink-3);
+}
+/* ---- 学习模块：九宫格「学习成长」格内 ---- */
+.sheet-study {
+    max-height: 88vh;
+    overflow-y: auto;
+}
+
+.cell-study {
+    padding: 1px var(--sp-2);
+    border-radius: var(--radius-s);
+    background: var(--c-accent-movie-veil);
+    font-size: var(--fs-xs);
+    color: var(--c-accent-movie);
+}
+
+.study-panel {
+    margin-top: var(--sp-5);
+    padding: var(--sp-6) var(--sp-5);
+    border-radius: var(--radius-l);
+    background: var(--grad-panel);
+    border: var(--bw) solid var(--c-brand-veil);
+}
+
+.study-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.study-head-left {
+    display: flex;
+    flex-direction: column;
+}
+
+.study-title {
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-bold);
+    color: var(--c-ink-2);
+}
+
+.study-sub {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-summary-link {
+    padding-top: var(--sp-1);
+    font-size: var(--fs-sm);
+    color: var(--c-brand-ink);
+}
+
+.study-overview {
+    display: flex;
+    margin-top: var(--sp-5);
+    padding: var(--sp-4) 0;
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+}
+
+.study-ov-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-right: var(--bw) solid var(--c-line);
+}
+
+.study-ov-item:last-child {
+    border-right: none;
+}
+
+.study-ov-num {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.study-ov-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-tabs {
+    display: flex;
+    margin-top: var(--sp-5);
+    padding: var(--sp-1);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+}
+
+.study-tab {
+    flex: 1;
+    padding: var(--sp-3) 0;
+    border-radius: var(--radius-s);
+    font-size: var(--fs-md);
+    text-align: center;
+    color: var(--c-ink-4);
+}
+
+.study-tab-on {
+    background: var(--c-brand-ink);
+    color: var(--c-surface);
+    font-weight: var(--fw-semi);
+}
+
+.study-filters,
+.study-topic-row {
+    display: flex;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    margin-top: var(--sp-4);
+}
+
+.study-topic-row {
+    margin-top: var(--sp-3);
+}
+
+.study-chip {
+    flex-shrink: 0;
+    margin-right: var(--sp-2);
+    padding: var(--sp-2) var(--sp-4);
+    border-radius: var(--radius-l);
+    background: var(--c-glass);
+    border: var(--bw) solid var(--c-line-2);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.study-chip-on {
+    background: var(--c-brand-tint-2);
+    border-color: var(--c-brand-line-2);
+    color: var(--c-brand-ink);
+    font-weight: var(--fw-semi);
+}
+
+.study-form {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+}
+
+.study-kind-row {
+    display: flex;
+}
+
+.study-kind-pick {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    padding: var(--sp-3) 0;
+    margin-right: var(--sp-2);
+    border-radius: var(--radius-m);
+    border: var(--bw) solid var(--c-line-2);
+    background: var(--c-surface-4);
+}
+
+.study-kind-pick:last-child {
+    margin-right: 0;
+}
+
+.study-kind-pick-on {
+    border-color: var(--c-brand-line-2);
+    background: var(--c-brand-tint);
+}
+
+.study-kind-glyph {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.study-kind-book { color: var(--c-brand-ink); }
+.study-kind-movie { color: var(--c-accent-movie-bright); }
+.study-kind-art { color: var(--c-down-bright); }
+.study-kind-course { color: var(--c-accent-course-bright); }
+
+.study-item-glyph.study-kind-book,
+.study-log-kind.study-kind-book { color: var(--c-brand-ink); }
+.study-item-glyph.study-kind-movie,
+.study-log-kind.study-kind-movie { color: var(--c-accent-movie-bright); }
+.study-item-glyph.study-kind-art,
+.study-log-kind.study-kind-art { color: var(--c-down-bright); }
+.study-item-glyph.study-kind-course,
+.study-log-kind.study-kind-course { color: var(--c-accent-course-bright); }
+
+.study-kind-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-add-row {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-4);
+}
+
+.study-title-input {
+    flex: 1;
+    min-width: 0;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-2);
+    font-size: var(--fs-md);
+    color: var(--c-ink-2);
+}
+
+.study-total-input {
+    width: 55px;
+    margin-left: var(--sp-3);
+    padding: var(--sp-3) var(--sp-2);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-2);
+    font-size: var(--fs-md);
+    text-align: center;
+    color: var(--c-ink-2);
+}
+
+.study-add-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-3);
+}
+
+.study-form-hint {
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-add-btn {
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    padding: var(--sp-3) var(--sp-6);
+    border-radius: var(--radius-m);
+    background: var(--c-brand-ink);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-surface);
+}
+
+.study-list {
+    margin-top: var(--sp-4);
+}
+
+.study-item {
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-line);
+}
+
+.study-item-finished {
+    background: var(--c-surface-4);
+    border-color: var(--c-brand-line);
+}
+
+.study-item-head {
+    display: flex;
+    align-items: center;
+}
+
+.study-item-glyph {
+    flex-shrink: 0;
+    width: 23px;
+    height: 23px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 原 line-height: 23px; 把行高当固定高度用来居中；改成 flex 居中后行高回到字阶体系 */
+    line-height: var(--lh-snug);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-3);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    text-align: center;
+}
+
+.study-item-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    margin-left: var(--sp-3);
+}
+
+.study-item-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-2);
+}
+
+.study-item-meta {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-item-del,
+.study-topic-del,
+.study-log-del {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    /* 行内只占 20px 高；学习条目 / 主题 / 今日进展三处 × 统一口径 */
+    margin: -12px -5px -12px 0;
+    font-size: var(--fs-lg);
+    color: var(--c-paper-ink-3);
+}
+
+.study-progress-row {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-3);
+}
+
+.study-progress-track {
+    flex: 1;
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-s);
+    background: var(--c-line);
+}
+
+.study-progress-fill {
+    height: 100%;
+    border-radius: var(--radius-s);
+    background: linear-gradient(90deg, var(--c-up-bright) 0%, var(--c-brand) 100%);
+}
+
+.study-progress-text {
+    flex-shrink: 0;
+    margin-left: var(--sp-3);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+    font-variant-numeric: tabular-nums;
+}
+
+.study-item-actions {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-3);
+}
+
+.study-step {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 原 line-height: 24px; 把行高当固定高度用来居中；改成 flex 居中后行高回到字阶体系 */
+    line-height: var(--lh-snug);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-3);
+    font-size: var(--fs-lg);
+    text-align: center;
+    color: var(--c-ink-4);
+}
+
+.study-done-input {
+    width: 45px;
+    height: 26px;
+    margin: 0 var(--sp-2);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-2);
+    font-size: var(--fs-md);
+    text-align: center;
+    color: var(--c-ink-2);
+}
+
+.study-done-btn {
+    flex: 1;
+    margin-left: var(--sp-3);
+    padding: var(--sp-3) 0;
+    border-radius: var(--radius-m);
+    background: var(--c-surface-3);
+    font-size: var(--fs-sm);
+    text-align: center;
+    color: var(--c-ink-4);
+}
+
+.study-done-btn-on {
+    background: var(--c-brand-tint-2);
+    color: var(--c-brand-ink);
+    font-weight: var(--fw-semi);
+}
+
+.study-note-input {
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) var(--sp-3);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-2);
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.study-topic-pick {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-empty {
+    display: block;
+    margin-top: var(--sp-4);
+    padding: var(--sp-6);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    text-align: center;
+    color: var(--c-ink-4);
+}
+
+.study-topic-form {
+    display: flex;
+    align-items: center;
+    margin-top: var(--sp-4);
+}
+
+.study-topic-input {
+    flex: 1;
+    min-width: 0;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+    font-size: var(--fs-md);
+    color: var(--c-ink-2);
+}
+
+.study-topic-card {
+    margin-top: var(--sp-3);
+    padding: var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-surface);
+    border: var(--bw) solid var(--c-line);
+}
+
+.study-topic-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.study-topic-title {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-bold);
+    color: var(--c-ink-2);
+}
+
+.study-topic-stat {
+    display: block;
+    margin-top: var(--sp-2);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-topic-items {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--sp-2);
+}
+
+.study-topic-item {
+    margin: var(--sp-1) var(--sp-2) var(--sp-1) 0;
+    padding: var(--sp-1) var(--sp-3);
+    border-radius: var(--radius-s);
+    background: var(--c-surface-3);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-topic-foot {
+    display: block;
+    margin-top: var(--sp-4);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.study-today-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--sp-4);
+}
+
+.study-today-title {
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-2);
+}
+
+.study-today-count {
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-log-list {
+    margin-top: var(--sp-3);
+}
+
+.study-log-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: var(--sp-2);
+    padding: var(--sp-3);
+    border-radius: var(--radius-m);
+    background: var(--c-surface);
+}
+
+.study-log-kind {
+    flex-shrink: 0;
+    width: 21px;
+    height: 21px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 原 line-height: 21px; 把行高当固定高度用来居中；改成 flex 居中后行高回到字阶体系 */
+    line-height: var(--lh-snug);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-3);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    text-align: center;
+}
+
+.study-log-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    margin-left: var(--sp-3);
+}
+
+.study-log-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-sm);
+    color: var(--c-ink-2);
+}
+
+.study-log-meta {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-day-note {
+    margin-top: var(--sp-4);
+    padding: var(--sp-4);
+    border-radius: var(--radius-m);
+    background: var(--c-glass);
+}
+
+.study-day-note-label {
+    display: block;
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.study-day-note-input {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: var(--sp-2);
+    padding: var(--sp-3);
+    border-radius: var(--radius-m);
+    background: var(--c-surface-2);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-base);
+    color: var(--c-ink-2);
+}
+
+.study-summary-sheet {
+    max-height: 78vh;
+}
+
+.study-summary-scroll {
+    max-height: 62vh;
+}
+
+.study-summary-metrics {
+    display: flex;
+    margin: var(--sp-5) 0;
+    padding: var(--sp-5) 0;
+    border-radius: var(--radius-m);
+    background: var(--c-surface-3);
+}
+
+.study-summary-metric {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.study-summary-metric-value {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-semi);
+    color: var(--c-brand-ink);
+}
+
+.study-summary-metric-label {
+    margin-top: var(--sp-1);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-summary-block {
+    margin-top: var(--sp-6);
+}
+
+.study-summary-block-title {
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+    color: var(--c-ink-2);
+}
+
+.study-summary-topic {
+    margin-top: var(--sp-3);
+}
+
+.study-summary-topic-title {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-4);
+}
+
+.study-summary-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) 0;
+    border-bottom: var(--bw) solid var(--c-line);
+}
+
+.study-summary-item-title {
+    font-size: var(--fs-sm);
+    color: var(--c-ink-2);
+}
+
+.study-summary-item-meta {
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.study-summary-note {
+    display: block;
+    margin: var(--sp-6) 0;
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--c-ink-4);
+}
+
+.study-summary-actions {
+    padding-top: var(--sp-4);
+}
+
+.study-summary-copy {
+    width: 100%;
+    font-size: var(--fs-base);
+}
+
+/* .eyebrow 全局是 brand-ink（浅底页头上正确），但首页这处在 hero 渐变上：
+   科技蓝的 hero 是深底，brand-ink 压上去读不出来，改用按渐变校准的 chip 文字令牌。
+   字距 2px 是 §8.4 唯一保留的例外——这一处是品牌标签「九格手记」，不是普通 eyebrow。 */
+.hero .eyebrow {
+    color: var(--c-hero-chip-ink);
+    letter-spacing: 2px;
+}
+
+/* ---------- 工作任务标签（#分类）----------
+   任务文字里的 #标签 由 utils/work-board.js 解析，这里只管显示与快捷追加 */
+.work-tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: var(--sp-3);
+}
+
+.work-tag-hint {
+    margin-right: var(--sp-3);
+    font-size: var(--fs-xs);
+    color: var(--c-ink-4);
+}
+
+.work-tag-chip {
+    margin: 0 var(--sp-2) var(--sp-2) 0;
+    padding: 3px var(--sp-3);
+    border-radius: var(--radius-pill);
+    background: var(--c-brand-soft);
+    font-size: var(--fs-xs);
+    color: var(--c-brand-ink);
+}
+
+.work-tag-chip:active {
+    background: var(--c-brand-tint-2);
+}
+
+/* 正文与标签上下摞在一起，长任务不会把标签挤到右上角 */
+.work-task-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.work-task-main .work-task-text {
+    display: block;
+}
+
+.work-task-tags {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.work-task-tag {
+    margin-right: var(--sp-2);
+    padding: 1px 5px;
+    border-radius: var(--radius-s);
+    background: var(--c-brand-soft);
+    font-size: 10px;
+    color: var(--c-brand-ink);
+}
+
+.work-task-done .work-task-tag {
+    background: var(--c-surface-3);
+    color: var(--c-ink-4);
+}

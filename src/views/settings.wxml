@@ -1,0 +1,188 @@
+<view class="theme-root theme-{{theme}} page settings-page">
+    <view class="page-head">
+        <text class="eyebrow eyebrow--latin">SETTINGS</text>
+        <text class="page-title">设置</text>
+        <text class="page-sub">关掉的模块只是不显示，写过的一条都不会删。</text>
+    </view>
+
+    <!-- 1 · 界面皮肤 ----------------------------------------------------------
+         外观排在结构与数据之前：频次最高、零数据风险、完全可逆。
+         每张卡带 .theme-{{item.id}}，卡内的 --c-surface / --radius-l / --bw 全部解析成
+         【目标】主题的值 —— 卡片是那套主题的真实切片，不是用当前主题画的示意图。 -->
+    <view class="section-head">
+        <text class="section-title">界面皮肤</text>
+        <text class="section-note">四套 · 页签一起变</text>
+    </view>
+    <view class="skin-strip">
+        <view class="skin-grid" aria-role="radiogroup" aria-label="界面皮肤">
+            <view wx:for="{{skinList}}" wx:key="id"
+                  class="skin-cell theme-{{item.id}} {{theme === item.id ? 'skin-cell-on' : ''}}"
+                  aria-role="radio"
+                  aria-checked="{{theme === item.id ? 'true' : 'false'}}"
+                  aria-label="{{item.name}}，{{item.mood}}，{{theme === item.id ? '已选中' : '未选中'}}"
+                  data-id="{{item.id}}"
+                  hover-class="skin-cell-hover"
+                  hover-stay-time="80"
+                  bindtap="onPickSkin">
+
+                <view class="skin-preview">
+                    <view class="skin-hero"></view>
+                    <view class="skin-dots">
+                        <view class="skin-dot skin-dot-brand"></view>
+                        <view class="skin-dot skin-dot-gold"></view>
+                        <view class="skin-dot skin-dot-inverse"></view>
+                    </view>
+                </view>
+
+                <view class="skin-meta">
+                    <text class="skin-name">{{item.name}}</text>
+                    <text class="skin-mood">{{item.mood}}</text>
+                </view>
+
+                <!-- 选中勾：形状编码，不靠颜色（灰度屏 / 色盲用户也能认） -->
+                <view wx:if="{{theme === item.id}}" class="skin-check" aria-hidden="true"></view>
+            </view>
+        </view>
+    </view>
+    <text class="set-note">点一下就换，四个页签一起变；皮肤只改外观，不动任何记录。</text>
+
+    <!-- 2 · 页面模板 ---------------------------------------------------------- -->
+    <view class="section-head">
+        <text class="section-title">页面模板</text>
+        <text class="section-note">只换标签与提问</text>
+    </view>
+    <view class="set-row" bindtap="onSwitchTemplate" hover-class="set-row-hover">
+        <view class="set-row-copy">
+            <text class="set-row-label">{{templateName}}</text>
+            <text class="set-row-desc">{{templateNote}}</text>
+        </view>
+        <text class="set-row-action">切换 ›</text>
+    </view>
+
+    <!-- 3 · 功能模块 ----------------------------------------------------------
+         开关只控制展示，绝不碰数据：关掉后那几格退回普通写字格，旧内容仍在记录里。 -->
+    <view class="section-head">
+        <text class="section-title">功能模块</text>
+        <text class="section-note">关掉只是不显示</text>
+    </view>
+    <view wx:for="{{moduleList}}" wx:key="id" class="set-row">
+        <view class="set-row-copy">
+            <text class="set-row-label">{{item.label}}</text>
+            <text class="set-row-desc">{{item.desc}}</text>
+        </view>
+        <switch class="set-switch" checked="{{item.on}}" color="{{switchColor}}"
+                data-id="{{item.id}}" bindchange="onToggleModule" />
+    </view>
+    <text class="set-note">收起后，那几格就只是写字；想用时再打开，旧内容立刻回来。</text>
+
+    <!-- 4 · 头七天引导 -------------------------------------------------------- -->
+    <view class="section-head">
+        <text class="section-title">头七天引导</text>
+        <text class="section-note">前 7 篇</text>
+    </view>
+    <view class="set-row">
+        <view class="set-row-copy">
+            <text class="set-row-label">每天一组引导提问</text>
+            <text class="set-row-desc">前 7 篇用温和的引导代替空白格</text>
+        </view>
+        <switch class="set-switch" checked="{{firstWeek.enabled}}" color="{{switchColor}}"
+                bindchange="onToggleFirstWeek" />
+    </view>
+
+    <!-- 5 · 数据管理 ---------------------------------------------------------- -->
+    <view class="section-head">
+        <text class="section-title">数据管理</text>
+        <text class="section-note">本机存储 · 共 {{recordCount}} 篇</text>
+    </view>
+    <view class="card data-card">
+        <text class="data-lead">日记只存在这台手机上。换手机或清缓存前，先导出一份带走。</text>
+        <view class="data-btn" bindtap="onExportText" hover-class="data-btn-hover">
+            <view class="data-btn-body">
+                <text class="data-btn-title">导出可读文本</text>
+                <text class="data-btn-desc">按日期排版并附完整记录时间，可发到文件传输助手存档</text>
+            </view>
+            <text class="data-btn-arrow">›</text>
+        </view>
+        <view class="data-btn" bindtap="onExportMarkdown" hover-class="data-btn-hover">
+            <view class="data-btn-body">
+                <text class="data-btn-title">导出 Markdown</text>
+                <text class="data-btn-desc">标准 Markdown，可直接导入 Obsidian / Logseq / 思源笔记</text>
+            </view>
+            <text class="data-btn-arrow">›</text>
+        </view>
+        <view class="data-btn" bindtap="onExportBackup" hover-class="data-btn-hover">
+            <view class="data-btn-body">
+                <text class="data-btn-title">导出 JSON 备份</text>
+                <text class="data-btn-desc">完整数据（含未来胶囊），用于日后导入还原</text>
+            </view>
+            <text class="data-btn-arrow">›</text>
+        </view>
+        <view class="data-btn" bindtap="onImportBackup" hover-class="data-btn-hover">
+            <view class="data-btn-body">
+                <text class="data-btn-title">从剪贴板导入</text>
+                <text class="data-btn-desc">粘贴此前导出的 JSON，只补写缺失日期与胶囊，不覆盖已有数据</text>
+            </view>
+            <text class="data-btn-arrow">›</text>
+        </view>
+        <view class="data-btn" bindtap="onImportBackupFile" hover-class="data-btn-hover">
+            <view class="data-btn-body">
+                <text class="data-btn-title">导入小程序备份文件（v6/v7）</text>
+            </view>
+            <text class="data-btn-arrow">›</text>
+        </view>
+        <text class="data-warn">本小程序不联网、不上传。建议按 3-2-1 原则留存：本机一份、导出文件一份、另存一处。</text>
+    </view>
+
+    <!-- 6 · 使用小贴士 --------------------------------------------------------
+         默认收起：设置页的主职责是「改状态」，说明性内容不该抢在数据管理前面。 -->
+    <view class="section-head">
+        <text class="section-title">使用小贴士</text>
+        <text class="section-note">怎么写 · 怎么坚持 · 数据在哪</text>
+    </view>
+    <view class="card tips-card">
+        <view class="tips-toggle" bindtap="toggleTips">
+            <view class="tips-toggle-body">
+                <text class="tips-toggle-title">{{tipsOpen ? '收起小贴士' : '展开小贴士'}}</text>
+                <text class="tips-toggle-desc">四条写法 · 三条坚持法 · 数据在哪</text>
+            </view>
+            <text class="tips-toggle-arrow">{{tipsOpen ? '−' : '+'}}</text>
+        </view>
+
+        <view wx:if="{{tipsOpen}}" class="tips-body">
+            <view class="tips-h">
+                <text class="tips-h-title">怎么写</text>
+                <text class="tips-h-note">随意就好</text>
+            </view>
+            <view class="tip-row" wx:for="{{usageTips}}" wx:key="no">
+                <text class="tip-no">{{item.no}}</text>
+                <view class="tip-copy">
+                    <text class="tip-name">{{item.title}}</text>
+                    <text class="tip-desc">{{item.desc}}</text>
+                </view>
+            </view>
+
+            <view class="tips-h">
+                <text class="tips-h-title">怎么坚持</text>
+                <text class="tips-h-note">别给自己压力</text>
+            </view>
+            <view class="tip-row" wx:for="{{keepTips}}" wx:key="no">
+                <text class="tip-no">{{item.no}}</text>
+                <view class="tip-copy">
+                    <text class="tip-name">{{item.name}}</text>
+                    <text class="tip-desc">{{item.desc}}</text>
+                </view>
+            </view>
+        </view>
+    </view>
+
+    <!-- 7 · 关于 -------------------------------------------------------------- -->
+    <view class="section-head">
+        <text class="section-title">关于</text>
+        <text class="section-note">本机记录工具</text>
+    </view>
+    <view class="card about-card">
+        <text class="about-line">九格手记是本地记录工具，所有日记与信件仅保存在本机。</text>
+        <text class="about-line">支持导出 Markdown / 文本 / JSON 备份，方便自行留存与迁移。</text>
+        <text class="about-note">不联网、不上传、无账号，也不提供内容分发或社交功能。</text>
+    </view>
+</view>

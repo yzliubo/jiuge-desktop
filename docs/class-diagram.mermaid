@@ -1,0 +1,183 @@
+%% 九格手记 Windows 桌面版 · 数据结构与接口类图
+%% 图源备份；唯一权威文档为 docs/02-ARCHITECTURE.md §5.1
+classDiagram
+    class KvStore {
+        +Map~string,any~ data
+        +string storePath
+        +boolean dirty
+        +load() void
+        +get(key) any
+        +set(key,value) Result
+        +remove(key) Result
+        +keys() string[]
+        +flush() Result
+        +atomicWrite() void
+        +snapshotBeforeImport() void
+        +restoreFromBak() void
+    }
+    class IpcHandlers {
+        +registerSync(channel,handler) void
+        +registerAsync(channel,handler) void
+        +openBackup() OpenResult
+        +saveExport(req) SaveResult
+        +openDataDir() Result
+    }
+    class WxPolyfillPreload {
+        +getStorageSync(key) any
+        +setStorageSync(key,value) void
+        +removeStorageSync(key) void
+        +getStorageInfoSync() StorageInfo
+    }
+    class WxShimRenderer {
+        +showToast(opt) void
+        +showModal(opt) void
+        +showActionSheet(opt) void
+        +setClipboardData(opt) void
+        +getClipboardData(opt) void
+        +navigateTo(opt) void
+        +switchTab(opt) void
+        +createSelectorQuery() SelectorQuery
+        +getSystemInfoSync() SysInfo
+    }
+    class PreloadBridge {
+        +store DiaryStore
+        +theme Theme
+        +quotes Quotes
+        +greetings Greetings
+        +workBoard WorkBoard
+        +moneyBook MoneyBook
+        +studyLog StudyLog
+        +cellInsights CellInsights
+        +exposeInMainWorld() void
+    }
+    class DiaryStore {
+        +GRID_KEYS string[]
+        +CELL_MAX number
+        +BASE_MAX number
+        +SEARCH_LIMIT number
+        +WEEK_GOAL number
+        +BACKUP_VERSION number
+        +BACKUP_MIN_FULL number
+        +MODULE_DEFS ModuleDef[]
+        +memoAll any
+        +memoWritten any
+        +memoStats any
+        +memoFreq any
+        +invalidateMemo() void
+        +load(date) Result
+        +save(record) Result
+        +all() Result
+        +writtenDates() string[]
+        +stats() Result
+        +hasContent(record) boolean
+        +importBackup(text) Result
+        +exportBackup() Result
+        +exportText() Result
+        +exportMarkdown() Result
+        +search(kw,mood) Result
+        +yearPixels(year) Result
+        +capsuleGroups() Result
+        +moduleDigest(period) Result
+        +modules() Result
+        +setModule(id,on) Result
+        +saveStudyLibrary(lib) Library
+    }
+    class WorkBoard {
+        +MAX_TASKS number
+        +normalize(v) Board
+        +digest(records,period,today,tag) Result
+    }
+    class MoneyBook {
+        +CENTS_MAX number
+        +normalize(v) Book
+        +summarize(records,period,today) Result
+    }
+    class StudyLog {
+        +MAX_ITEMS number
+        +normalizeLibrary(v) Library
+        +summarize(records,lib,period,today) Result
+    }
+    class CellInsights {
+        +analyze(key) Result
+    }
+    class Quotes {
+        +size number
+        +featured number
+        +dailyIndex(date) number
+    }
+    class Greetings {
+        +compose(date,anniversary) string
+    }
+    class Theme {
+        +THEMES ThemeDef[]
+        +getThemeId() string
+        +setThemeId(id) Result
+        +list() ThemeItem[]
+        +applySystemChrome(id,force) void
+    }
+    class PageRuntime {
+        +pages Page[]
+        +App(options) void
+        +getApp() AppState
+        +Page(options) void
+        +getCurrentPages() Page[]
+        +setData(patch) void
+        +renderDiff(patch) void
+    }
+    class WxmlRuntime {
+        +compile(wxmlText) NodeTree
+        +evalExpr(expr,scope) any
+        +bindEvents(root,page) void
+        +escapeHtml(s) string
+    }
+    class AppState {
+        +backfillDate string
+        +reviewTab number
+    }
+    class NavShell {
+        +go(pageId,params) void
+        +onMenuAction(action) void
+    }
+    class UiFeedback {
+        +toast(title,duration) void
+        +modal(opt) void
+        +actionSheet(opt) void
+    }
+    class DesktopFeatures {
+        +importFromFile() void
+        +exportToFile(kind) void
+        +clipboardExport(kind) void
+        +openDataDir() void
+        +flushAll() void
+    }
+    class ThemeCss {
+        +apply(id) void
+        +cssVars() Record
+    }
+
+    KvStore <-- IpcHandlers : 唯一真源
+    IpcHandlers <..> WxPolyfillPreload : sendSync S1-S9
+    WxPolyfillPreload --> DiaryStore : global.wx 注入后 require
+    WxPolyfillPreload --> Theme : global.wx 注入后 require
+    DiaryStore *-- WorkBoard
+    DiaryStore *-- MoneyBook
+    DiaryStore *-- StudyLog
+    CellInsights ..> DiaryStore : require
+    PreloadBridge --> DiaryStore : contextBridge 暴露
+    PreloadBridge --> Theme : contextBridge 暴露
+    PreloadBridge --> Quotes
+    PreloadBridge --> Greetings
+    PreloadBridge ..> WxShimRenderer : __jiuge (隔离上下文)
+    WxShimRenderer --> PageRuntime : window.wx / window.require
+    PageRuntime *-- WxmlRuntime
+    PageRuntime --> AppState : getApp()
+    PageRuntime ..> DiaryStore : 页面 JS 经 __jiuge.store 调用
+    NavShell --> PageRuntime : onHide/onShow
+    NavShell --> AppState : 参数直传
+    NavShell --> ThemeCss : 切页不改主题
+    UiFeedback <.. WxShimRenderer : DOM 实现
+    DesktopFeatures ..> DiaryStore : importBackup / export*
+    DesktopFeatures ..> IpcHandlers : A1 A2 A3 S5
+    DesktopFeatures --> UiFeedback : 反馈文案
+    ThemeCss --> Theme : THEMES 色值
+    ThemeCss --> PageRuntime : 广播 applyTheme

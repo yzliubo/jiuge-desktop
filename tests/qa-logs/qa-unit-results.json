@@ -1,0 +1,468 @@
+{
+  "generatedAt": "2026-11-07T06:47:49.361Z",
+  "total": 46,
+  "passed": 46,
+  "failed": 0,
+  "results": [
+    {
+      "group": "A",
+      "id": "A-01",
+      "name": "九固定键顺序 GRID_KEYS",
+      "input": "读取 store.GRID_KEYS",
+      "expected": "work,money,health,relation,future,emotion,dream,growth,free",
+      "actual": "work,money,health,relation,future,emotion,dream,growth,free",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-02",
+      "name": "4 套模板来回切后历史 cells 九键不变",
+      "input": "写 1 篇历史日记→依次切换 4 套模板→standard",
+      "expected": "每步 load(2025-03-15).cells 九键值与原值完全一致",
+      "actual": "切换序列=standard→goal→emotion→simple→standard / 差异=无",
+      "pass": true,
+      "note": "模板数=4"
+    },
+    {
+      "group": "A",
+      "id": "A-03",
+      "name": "hasContent() 只认字符串（对象不算写过）",
+      "input": "cells.work={a:1} 其余全空 / 再置 free=\"一句话\"",
+      "expected": "对象→false；字符串→true",
+      "actual": "对象=false / 字符串=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-04",
+      "name": "对象型 cells 不计入 writtenDates",
+      "input": "注入 3 篇对象型脏记录 + 1 篇真字符串记录",
+      "expected": "writtenDates() 恰好 1 条且为真记录日期",
+      "actual": "writtenDates=[\"2025-02-09\"]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-05",
+      "name": "search() 注入 250 篇恰好截 200 条",
+      "input": "250 篇正文含「高频」→ search(\"高频\")",
+      "expected": "命中恰好 200 条（SEARCH_LIMIT=200）",
+      "actual": "注入=250 / 命中=200 / error=null",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-06",
+      "name": "非法 openAt 的胶囊被跳过且不出现「NaN 天」",
+      "input": "1 条 openAt=\"不是日期\" + 1 条合法未来日期",
+      "expected": "capsuleGroups().total=1，所有 countText 不含 NaN；源码 dayNumber 显式 return NaN",
+      "actual": "total=1 / countText=还有 355071 天 / 源码returnNaN=true",
+      "pass": true,
+      "note": "dayNumber 未导出，由 capsuleGroups 行为 + 源码逐字双重验证"
+    },
+    {
+      "group": "A",
+      "id": "A-07",
+      "name": "落盘裁剪 5000→2000 / 基础栏 500→200",
+      "input": "save() 写 5000 字正文 + 500 字天气",
+      "expected": "回读 cells.work 长度 2000 / base.weather 长度 200",
+      "actual": "cells.work=2000 / base.weather=200",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-08",
+      "name": "QUOTA_EXCEEDED 与两条原文失败提示",
+      "input": "让 setStorageSync 抛 \"exceed quota size limit\"",
+      "expected": "save() 返回 QUOTA_EXCEEDED；两条文案在产品代码中逐字存在",
+      "actual": "error=QUOTA_EXCEEDED / 提示1=true / 提示2=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-09",
+      "name": "学习库写失败 studySaveOk()===false，成功写后恢复",
+      "input": "对 md_study_library 注入写失败后写入，再清除失败写入",
+      "expected": "失败后 false；成功写后 true",
+      "actual": "写失败后=false / 成功写后=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-10",
+      "name": "模块开关：只认明确 false / 脏数据按开启 / 关闭不删数据 / 重开回显",
+      "input": "md_modules 脏对象 → 缺键 → 写一条工作任务 → 关 work → 开 work",
+      "expected": "脏数据与缺键均 3 模块 true；关闭后 workBoard 任务仍在且重开可读",
+      "actual": "脏数据={\"work\":true,\"money\":true,\"growth\":true} / 缺键={\"work\":true,\"money\":true,\"growth\":true} / 关闭=false / 重开=true / 任务数=1 感想=感想",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-11",
+      "name": "主题脏值回落 standard 且不写回",
+      "input": "skin_theme=\"NOT_A_THEME\" → getThemeId()",
+      "expected": "返回 standard；skin_theme 仍是 NOT_A_THEME（未写回）",
+      "actual": "getThemeId()=standard / skin_theme=NOT_A_THEME",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-12",
+      "name": "kv:keys() 无 UI 键 / 窗口状态 / 快照污染",
+      "input": "KvStore 写 2 个业务键，另建 window-state.json / store.json.bak / store.pre-import-*.json",
+      "expected": "keys() 仅 2 个业务键，不含任何文件名",
+      "actual": "keys=[\"morning_diary_2026-11-07\",\"skin_theme\"] / 污染=[]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "A",
+      "id": "A-13",
+      "name": "导入前快照保留最近 3 份",
+      "input": "预置 5 份合法快照 → snapshotBeforeImport() 触发裁剪",
+      "expected": "目录内 store.pre-import-*.json 恰好 3 份",
+      "actual": "snapshot.ok=true / 剩余快照=3 / store.pre-import-20260104-120004.json,store.pre-import-20260105-120005.json,store.pre-import-20261107-144748.json",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-01",
+      "name": "v7 完整导入：配置还原且 startedAt 不被第一篇写入日期覆盖",
+      "input": "version=7，含 startedAt/template/modules/milestones/reviews×2 + 2 篇正文，本机全空",
+      "expected": "error=null / partial=false / sourceVersion=7 / configImported=6 / startedAt=2020-01-01≠首篇 2024-06-01",
+      "actual": "error=null / {\"imported\":2,\"skipped\":0,\"capsulesImported\":0,\"studyImported\":0,\"partial\":false,\"sourceVersion\":7,\"configImported\":6,\"emptyShell\":0} / startedAt=2020-01-01",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-02",
+      "name": "v6 缺 5 个 v7 配置字段不报错、不判 INVALID_FORMAT",
+      "input": "version=6，只有主体字段 + 1 篇正文",
+      "expected": "error=null / partial=false / sourceVersion=6 / configImported=0 / imported=1",
+      "actual": "error=null / {\"imported\":1,\"skipped\":0,\"capsulesImported\":0,\"studyImported\":0,\"partial\":false,\"sourceVersion\":6,\"configImported\":0,\"emptyShell\":0}",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-03",
+      "name": "无版本号旧档 partial=true / sourceVersion=0",
+      "input": "无 version 字段 + 1 篇正文",
+      "expected": "partial=true / sourceVersion=0 / imported=1",
+      "actual": "error=null / {\"imported\":1,\"skipped\":0,\"capsulesImported\":0,\"studyImported\":0,\"partial\":true,\"sourceVersion\":0,\"configImported\":0,\"emptyShell\":0}",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-04",
+      "name": "非 JSON → INVALID_JSON 且不写数据",
+      "input": "文本 \"这不是JSON{\"",
+      "expected": "error=INVALID_JSON；导入前后 KV 键集合不变",
+      "actual": "error=INVALID_JSON / keysBefore=[\"skin_theme\"] / keysAfter=[\"skin_theme\"]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-05",
+      "name": "无 records 数组 → INVALID_FORMAT 且不写数据",
+      "input": "\"{}\" 与 {\"records\":\"x\"}",
+      "expected": "两者均 error=INVALID_FORMAT；KV 键集合不变",
+      "actual": "r1=INVALID_FORMAT / r2=INVALID_FORMAT / keys不变=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-06",
+      "name": "文件选择取消不写任何数据（桌面层运行时）",
+      "input": "dialog.openBackup() → {canceled:true}",
+      "expected": "importBackup 调用 0 / kv.flush 调用 0 / 不弹确认框",
+      "actual": "return={\"ok\":false,\"canceled\":true} / importBackup=0 / flush=0 / showModal=0",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-07",
+      "name": "确认框点取消不写任何数据（桌面层运行时）",
+      "input": "有效备份文本 → showModal confirm=false",
+      "expected": "importBackup 调用 0 / kv.flush 调用 0 / showModal 调用 1",
+      "actual": "showModal=1 / importBackup=0 / flush=0",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-08",
+      "name": "本机有正文才跳过、只是空壳允许备份补写",
+      "input": "本机 2024-01-01 有正文 + 2024-01-02 空壳；备份两天都有正文",
+      "expected": "imported=1 / skipped=1；有正文日仍是本机正文，空壳日为备份正文",
+      "actual": "imported=1 / skipped=1 / 01=本机正文 / 02=备份正文2",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-09",
+      "name": "重复导入不产生重复胶囊/学习库且不覆盖",
+      "input": "用真实 exportBackup() 造备份（1 篇日记 + 1 胶囊 + 1 学习库条目）→ 空环境导入两次",
+      "expected": "首次 capsulesImported=1/studyImported≥1/imported=1；二次全部为 0 且 skipped=1，胶囊/条目仍各 1",
+      "actual": "首次={\"i\":1,\"c\":1,\"s\":1} / 二次={\"i\":0,\"sk\":1,\"c\":0,\"s\":0} / 胶囊=1 条目=1 正文=原始正文",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-10",
+      "name": "空壳记录计 emptyShell + skipped，imported 只计真实正文",
+      "input": "备份含 1 篇正文 + 1 篇全空壳（合法日期）",
+      "expected": "imported=1 / emptyShell=1 / skipped=1",
+      "actual": "{\"imported\":1,\"skipped\":1,\"capsulesImported\":0,\"studyImported\":0,\"partial\":false,\"sourceVersion\":7,\"configImported\":0,\"emptyShell\":1}",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-11",
+      "name": "文件导入与剪贴板导入共用唯一 store.importBackup(text)，桌面层无第二份合并逻辑",
+      "input": "静态扫描 settings.js / desktop-features.js 的调用点与 importFromFile 函数体",
+      "expected": "两处各 1 次调用；importFromFile 体内无 records 遍历/去重/版本分支/直接写 KV",
+      "actual": "settings调用=1 / desktop调用=1 / 函数体长=1980 / 含合并逻辑=false",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-12",
+      "name": "BOM 容错（主进程读备份去 UTF-8 BOM）",
+      "input": "带 EF BB BF 的 UTF-8 JSON 文件 → readTextTolerantBom()",
+      "expected": "返回文本首字符非 U+FEFF 且 JSON.parse 成功，中文字段无损",
+      "actual": "首字符码=123 / note=中文内容 / stripBom解析=1",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-13",
+      "name": "导入后启程天数 / 年历 372 格 / 复盘答案与手机一致",
+      "input": "C-01 的 v7 备份导入后读 stats()/yearPixels(2024)/loadReview()",
+      "expected": "startedAt=2020-01-01 / 12 月 × 31 格=372 / 复盘首答=甲",
+      "actual": "startedAt=2020-01-01 / 月份=12 / 格数=372 / 复盘=[\"甲\",\"乙\",\"丙\"]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "C",
+      "id": "C-14",
+      "name": "导入同样执行落盘裁剪（5000→2000 / 基础栏 500→200）",
+      "input": "备份含 5000 字正文 + 500 字天气 → 导入后回读",
+      "expected": "cells.work=2000 / base.weather=200",
+      "actual": "cells.work=2000 / base.weather=200",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-01",
+      "name": "三种导出另存默认名 九格手记-备份-YYYY-MM-DD.*",
+      "input": "defaultExportName(text/markdown/backup, 2026-11-07)",
+      "expected": ".txt / .md / .json 三个名字逐字正确",
+      "actual": "九格手记-备份-2026-11-07.txt | 九格手记-备份-2026-11-07.md | 九格手记-备份-2026-11-07.json",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-02",
+      "name": "导出另存走 file:saveExport 主进程写文件；非主进程环境给明确错误不静默",
+      "input": "纯 Node 下调 FileIo.saveExport()；静态检查 fs.writeFileSync 只在 file-io.js",
+      "expected": "返回明确 error（含「文件对话框不可用」）；file-io.js 含 fs.writeFileSync，desktop-features 不含 fs",
+      "actual": "error=文件对话框不可用：当前不是 Electron 主进程环境 / 主进程writeFileSync=true / 渲染层无fs=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-03",
+      "name": "剪贴板三导出入口 + 剪贴板导入入口仍并存，文件导入入口新增",
+      "input": "扫描 settings.wxml 的 data-btn 文案与 settings.js 的 4 个剪贴板方法",
+      "expected": "5 个入口文案齐全（3 导出 + 从剪贴板导入 + 导入小程序备份文件）",
+      "actual": "缺失=[] / 剪贴板4方法=true / 使用剪贴板API=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-04",
+      "name": "桌面自身导出 version=7",
+      "input": "写入 1 篇日记 → exportBackup() → JSON.parse",
+      "expected": "version===7（由未改动 exportBackup 决定）",
+      "actual": "version=7",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-05",
+      "name": "菜单/快捷键 Ctrl+S / Ctrl+1~5 / Ctrl+E / Ctrl+I / Ctrl+, 与 open-data-dir",
+      "input": "扫描 menu.js 的 accelerator 与 action",
+      "expected": "9 类快捷键/动作全部登记",
+      "actual": "缺失=[]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-06",
+      "name": "窗口默认 1280×800 / 最小 1024×680",
+      "input": "扫描 window-state.js 常量与 main.js 建窗参数",
+      "expected": "DEFAULT_BOUNDS=1280×800、MIN_WIDTH=1024、MIN_HEIGHT=680",
+      "actual": "bounds1280x800=true / min1024x680=true / main引用=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-07",
+      "name": "数据目录落在 userData",
+      "input": "扫描 main.js dataDirOf()",
+      "expected": "path.join(app.getPath('userData'), 'jiuge-desktop')",
+      "actual": "userData引用=true / 子目录=true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "D",
+      "id": "D-08",
+      "name": "关窗 flush 顺序与链路齐全（静态，运行时由 Electron 探针复核）",
+      "input": "扫描 flush.js 顺序数组 + main.js 链路节点",
+      "expected": "syncWorkReflection → syncStudyNote → persist → stopTimer；before-flush / flush-done / kv:flush / quit 齐全",
+      "actual": "顺序=true / stopTimer=true / 缺失节点=[]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-01",
+      "name": "src/** 零网络关键字（无 http/https/net 请求、远程 URL、遥测、appid 残留）",
+      "input": "扫描 46 个源文件",
+      "expected": "命中 0 处",
+      "actual": "扫描文件=46 / 命中=0",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-02",
+      "name": "无表情包生成器相关功能或入口",
+      "input": "扫描 src/** 关键词",
+      "expected": "命中 0 处",
+      "actual": "命中=0",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-03",
+      "name": "源项目今天零改动（时间戳全扫）",
+      "input": "递归扫描源项目所有文件的 LastWriteTime",
+      "expected": "无文件修改时间落在今天；记录最晚修改时间",
+      "actual": "文件总数=233 / 今天=2026-11-07 / 今日改动=0 / 最晚=2026-11-06T05:17:35.450Z",
+      "pass": true,
+      "note": "QA 只读访问，未写入源项目"
+    },
+    {
+      "group": "F",
+      "id": "F-04",
+      "name": "8 个 utils 与源项目逐字节一致（QA 自算 SHA256）",
+      "input": "源 utils/*.js ↔ src/utils/*.js",
+      "expected": "8/8 哈希完全相同",
+      "actual": "diary-store=OK work-board=OK money-book=OK study-log=OK cell-insights=OK greetings=OK quotes=OK theme=OK",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-05",
+      "name": "8 份页面文件（4 页 JS+WXML）与源逐字节一致",
+      "input": "源 pages/*/*.js|wxml ↔ src/pages + src/views",
+      "expected": "8/8 哈希完全相同",
+      "actual": "index.js=OK index.wxml=OK review.js=OK review.wxml=OK capsule.js=OK capsule.wxml=OK habit.js=OK habit.wxml=OK",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-06",
+      "name": "settings.js 白名单改写：新增 23 行 / 源行零删零改 / 新增行无中文 UI 字面量",
+      "input": "行级子序列对拍（源每行按序在交付中命中）",
+      "expected": "新增 23 行；源 223 行零删零改；新增行字符串字面量不含中文",
+      "actual": "源行数=224 / 交付行数=247 / 新增=23 / 源缺失行=0 / 新增中文UI字面量=[]",
+      "pass": true,
+      "note": "注释里的中文说明不属于 UI 字面量，按白名单口径排除"
+    },
+    {
+      "group": "F",
+      "id": "F-07",
+      "name": "settings.wxml 新增 6 行且新增中文文案仅 1 条",
+      "input": "行级子序列对拍 + 提取新增行中的中文片段",
+      "expected": "新增 6 行；新增中文文案集合 === [\"导入小程序备份文件（v6/v7）\"]",
+      "actual": "源行数=183 / 交付行数=189 / 新增=6 / 源缺失=0 / 新增中文=[\"导入小程序备份文件（v6/v7）\"]",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-08",
+      "name": "5 页中文文案集合逐字保留（QA 自提取口径）",
+      "input": "源 5 页 JS+WXML 提取唯一中文片段 → 逐条检查交付对应文件包含",
+      "expected": "源片段 N 条全部命中交付文件，缺失 0",
+      "actual": "QA自提取唯一中文片段=971 / 交付缺失=0",
+      "pass": true,
+      "note": "与工程师脚本「255 条」为不同提取口径；此处按 QA 自提取逐字包含校验"
+    },
+    {
+      "group": "F",
+      "id": "F-09",
+      "name": "安全配置未降级",
+      "input": "扫描 main.js BrowserWindow webPreferences",
+      "expected": "contextIsolation:true / nodeIntegration:false / sandbox:false / webSecurity:true",
+      "actual": "四项=true,true,true,true",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-10",
+      "name": "F2 五条 P1 保持现状：Markdown 用该篇模板标签、搜索用标准栏目名（口径不一致原样保留）",
+      "input": "切到非 standard 模板 → 写 1 篇 → exportMarkdown() 与 search() 对拍",
+      "expected": "Markdown 含该模板标签；search 命中 label 为标准栏目名；二者不同",
+      "actual": "模板id=goal / 模板标签=本月计划 / 标准标签=工作 / Markdown含模板=true / search.label=工作",
+      "pass": true,
+      "note": ""
+    },
+    {
+      "group": "F",
+      "id": "F-11",
+      "name": "5 页运行时 CSS 零 rpx 残留",
+      "input": "扫描 src/renderer/styles/*.css",
+      "expected": "命中 0 处",
+      "actual": "CSS文件=8 / rpx命中=0",
+      "pass": true,
+      "note": ""
+    }
+  ]
+}

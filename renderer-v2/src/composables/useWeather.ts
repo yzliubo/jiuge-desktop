@@ -44,6 +44,13 @@ const state = reactive<WeatherState>({
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// 「记进今天」的落盘动作属于日记，不属于天气状态源；这里只留一个槽位，
+// 由 App.vue（持有当前 record 与 save）注册。天气条不用知道日记长什么样。
+let saveHandler: ((weather: string) => boolean | void | Promise<boolean | void>) | null = null;
+function onSaveToToday(fn: (weather: string) => boolean | void | Promise<boolean | void>): void {
+  saveHandler = fn;
+}
+
 // 定时器只服务于「开着」这一种状态：关掉就清掉，重新打开时再挂上。
 // 不做「留着空转但里面判断开关」——空转的句柄会让「关了就是真关」这句话打折扣。
 function ensureTimer(): void {
@@ -80,6 +87,25 @@ const placeLabel = computed(() => {
   if (state.city) return state.city;
   return '当前位置';
 });
+
+/**
+ * 可自动带入「今天概览」的 8 档天气。断网的判据用 error 而不是 stale：
+ * 温度 30 分钟就过期，但「今天下不下雨」这一档没那么容易变；
+ * 真正取不到（error / 关掉 / 还没取过）时返回空串，界面就转手填。
+ */
+const autoWeather = computed(() => {
+  if (!state.enabled || state.error || !state.report || !state.report.now) return '';
+  const w = String(state.report.now.baseWeather || '').trim();
+  return w || '';
+});
+
+/** 天气条浮层里点「记进今天」：一次点击直接落盘，不再回右栏点第二次保存 */
+async function saveToToday(): Promise<boolean> {
+  const w = autoWeather.value;
+  if (!w || !saveHandler) return false;
+  const r = await saveHandler(w);
+  return r !== false;
+}
 
 /** 温度显示：null 一律显示破折号，不要让界面出现 NaN° */
 function deg(v: number | null | undefined): string {
@@ -163,7 +189,10 @@ export function useWeather() {
   return {
     state,
     placeLabel,
+    autoWeather,
     deg,
+    onSaveToToday,
+    saveToToday,
     init,
     refresh,
     setEnabled,

@@ -7,6 +7,7 @@
 // 今日补充 / 三模块五块，再塞一块会把九格主角挤下去。右栏「只读 + 跳转」正好装它。
 import { computed, onMounted, ref, watch } from 'vue';
 import { callDomain } from '../../composables/useDomain';
+import { useWeather } from '../../composables/useWeather';
 import { GRID_KEYS, GRID_LABELS, localDate, type DiaryRecord, type ViewKey } from '../../types';
 
 const props = defineProps<{ record: DiaryRecord; total: number; written: number; tick?: number }>();
@@ -21,6 +22,15 @@ interface SoonRow { key: string; date: string; days: number; when: string; title
 const past = ref<PastRow[]>([]);
 const pastLoading = ref(true);
 const filled = computed(() => GRID_KEYS.filter(function (k) { return !!props.record.cells[k]; }));
+
+// 天气档位与首页联网天气同源时标一下出处：让人一眼看出「这是窗外带进来的」，
+// 而不是某天随手选的。手选的值与联网值不同就不标——那是有意写下的心情背景。
+const wx = useWeather();
+const wxTag = computed(() => {
+  const w = wx.autoWeather.value;
+  const saved = String((props.record.base || {}).weather || '');
+  return w && saved === w ? '联网' : '';
+});
 
 // --- 未来 7 天（只读）---
 const soon = ref<SoonRow[]>([]);
@@ -178,7 +188,7 @@ watch(function () { return props.tick; }, loadSoon);
          所以这里不叫「今日状态」，避免和那张可写的卡撞名。 -->
     <h2 class="ctx-title">今天概览</h2>
     <div class="ctx-chips">
-      <span class="chip" :class="{ 'chip-on': !!record.base.weather }">{{ record.base.weather || '天气未记' }}</span>
+      <span class="chip" :class="{ 'chip-on': !!record.base.weather }">{{ record.base.weather || '天气未记' }}<em v-if="wxTag" class="chip-src">{{ wxTag }}</em></span>
       <span class="chip" :class="{ 'chip-on': !!record.base.mood }">{{ record.base.mood || '心情未记' }}</span>
       <span class="chip" :class="{ 'chip-on': !!record.base.anniversary }">{{ record.base.anniversary || '无纪念日' }}</span>
     </div>
@@ -244,3 +254,16 @@ watch(function () { return props.tick; }, loadSoon);
     <p v-else-if="!past.length" class="ctx-muted">往年今天还没有记录。</p>
   </section>
 </template>
+
+<style scoped>
+/* 来源标只做一枚小角标，不抢「天气」两个字 */
+.chip-src {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--palette-soft);
+  color: var(--palette-primary);
+  font-size: 10px;
+  font-style: normal;
+}
+</style>

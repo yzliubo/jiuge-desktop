@@ -7,10 +7,12 @@
 //   2. 用 document.execCommand 而不是引第三方编辑器：根包要保住「零运行时依赖」，
 //      renderer 也不该为几个按钮背一个富文本框架。Chromium 31 上 execCommand 依旧可用。
 //   3. 粘贴一律降级为纯文本：外部 HTML 会带一堆行内样式，落进 Markdown 就是垃圾。
-//   4. 引导词来自 diary-store.promptFor(key, date, offset)，与小程序同一套词库：
-//      模板可覆盖、按日期确定性取词、offset 可换下一条、头七天走 FIRST_WEEK_PROMPTS。
+//   4. 引导词优先取渲染层原创语料库 promptLibrary（四套模板 × 九格 + 头七天，含
+//      桌面版新增的 leisure 格）；领域层 diary-store.promptFor 作自建模板 / 旧键的兜底：
+//      按日期确定性取词、offset 可换下一条，utils 逐字节对拍基线不动。
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { callDomain } from '../composables/useDomain';
+import { gridPrompt, knownTemplate } from '../composables/promptLibrary';
 import { escapeHtml, htmlToMarkdown, markdownLength, markdownToHtml } from '../composables/useRichText';
 
 const props = withDefaults(defineProps<{
@@ -149,7 +151,13 @@ function focusEnd(): void {
 
 async function loadPrompt(): Promise<void> {
   if (!props.promptKey) return;
-  const text = await callDomain<string>('promptFor', '', props.promptKey, props.date, promptOffset.value);
+  const rawTpl = String((await callDomain<string>('getTemplateId', 'standard')) || 'standard');
+  const fw = await callDomain<{ active?: boolean } | null>('firstWeekState', null);
+  const easy = !!(fw && fw.active) && promptOffset.value === 0;
+  let text = gridPrompt(props.promptKey, knownTemplate(rawTpl) ? rawTpl : '', props.date, promptOffset.value, easy);
+  // 自建模板、旧数据键（如 dream）或库里没有的格位，仍回退到与小程序同源的题库。
+  // 休闲娱乐（leisure）此前在这里只会拿到空串、显示「本格暂无引导词」，本轮由新库补全。
+  if (!text) text = await callDomain<string>('promptFor', '', props.promptKey, props.date, promptOffset.value);
   promptText.value = typeof text === 'string' ? text : '';
   promptLoaded.value = true;
 }

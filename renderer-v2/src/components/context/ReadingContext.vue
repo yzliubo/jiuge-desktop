@@ -44,7 +44,7 @@ watch(() => props.tick, () => { void load(); });
       <div class="ctx-kv"><span class="ctx-kv-label">已入九格</span><span class="ctx-kv-val">{{ data?.stats.pushed || 0 }}<span class="ctx-kv-unit">条</span></span></div>
       <div class="ctx-kv"><span class="ctx-kv-label">标签</span><span class="ctx-kv-val">{{ data?.stats.tagCount || 0 }}<span class="ctx-kv-unit">个</span></span></div>
     </div>
-    <p class="ctx-muted">主题阅读的书单仍由「学习成长」维护；这里只汇总两类阅读的笔记。</p>
+    <p class="ctx-muted">主题书单在「主题阅读」页自建，与休闲书共用书架；这里汇总两类阅读的笔记。</p>
   </section>
 
   <section class="ctx-card" aria-label="常用标签">
@@ -69,7 +69,7 @@ watch(() => props.tick, () => { void load(); });
   <section class="ctx-card" aria-label="相关去处">
     <h3 class="ctx-title">相关去处</h3>
     <div class="ctx-links">
-      <button class="ctx-link" @click="emit('open-cell', 'growth')">学习成长 · 书单</button>
+      <button class="ctx-link" @click="emit('open-cell', 'growth')">学习成长</button>
       <button class="ctx-link" @click="emit('open-cell', 'leisure')">休闲娱乐格</button>
       <button class="ctx-link" @click="emit('navigate', 'inspire')">语料库</button>
       <button class="ctx-link" @click="emit('navigate', 'data')">数据中心</button>

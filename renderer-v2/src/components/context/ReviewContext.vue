@@ -3,6 +3,7 @@
 // 复盘本身在中栏，右栏负责回答「我这一期到底写完了没有」。
 import { computed, onMounted, ref } from 'vue';
 import { callDomain } from '../../composables/useDomain';
+import { reviewTriplet } from '../../composables/promptLibrary';
 import type { ViewKey } from '../../types';
 
 const emit = defineEmits<{ (e: 'navigate', key: ViewKey): void }>();
@@ -40,7 +41,9 @@ async function load(): Promise<void> {
     ]);
     week.value = { key: wKey, filled: countFilled(wAns), total: 3 };
     month.value = { key: mKey, filled: countFilled(mAns), total: 3 };
-    prompts.value = Array.isArray(p) ? p.slice(0, 3) : ['', '', ''];
+    // 与中栏复盘同口径：右栏「本周三问」也取同一组原创题，避免两边文案打架。
+    const fresh = reviewTriplet('week', wKey);
+    prompts.value = fresh.length === 3 ? fresh : (Array.isArray(p) ? p.slice(0, 3) : ['', '', '']);
   } finally {
     loading.value = false;
   }

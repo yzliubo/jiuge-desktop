@@ -62,7 +62,7 @@ const emit = defineEmits<{
 // 界面减负：右栏头部只留模块标题，不再重复一遍「这一页有什么」的摘要。
 // 键保留是为了让视图路由保持显式，值统一为空。
 const HINTS: Record<string, string> = {
-  today: '', insight: '', timeline: '', review: '', capsule: '',
+  today: '', insight: '', timeline: '', review: '', capsule: '', free: '',
   habit: '', dream: '', data: '', bin: '', inspire: '', settings: '',
   life: '', relation: '', connect: '', long: '', reading: '', finance: ''
 };
@@ -71,7 +71,7 @@ const headTitle = computed(() => {
   if (props.view === 'cell') return '联动 · ' + (GRID_LABELS[props.cellKey] || '单格');
   if (props.view === 'insight') return '联动 · 单格洞察';
   return '联动 · ' + ({
-    today: '今天', timeline: '时间轴', review: '回顾', capsule: '胶囊',
+    today: '今天', timeline: '时间轴', review: '回顾', capsule: '胶囊', free: '自由记录',
     habit: '坚持', dream: '梦想', data: '数据中心', bin: '封存箱',
     inspire: '语料库', settings: '设置', life: '时间纵深',
     relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本'
@@ -139,7 +139,10 @@ const headHint = computed(() => HINTS[props.view] || '');
     />
     <TimelineContext v-else-if="view === 'timeline'" @navigate="emit('navigate', $event)" />
     <ReviewContext v-else-if="view === 'review'" @navigate="emit('navigate', $event)" />
+    <!-- 胶囊降级后右栏上下文留在「自由记录」页（三 tab 的①就是胶囊收录），
+         三组计数与「不泄露未开启正文」的老口径原样保留（GUI #94） -->
     <CapsuleContext v-else-if="view === 'capsule'" @navigate="emit('navigate', $event)" />
+    <CapsuleContext v-else-if="view === 'free'" @navigate="emit('navigate', $event)" />
     <HabitContext v-else-if="view === 'habit'" @navigate="emit('navigate', $event)" />
     <!-- 梦想：顶部常驻图片窗 + 选中那条的量化 / 账户 / 日期与总结（可写，只写选中的一条） -->
     <DreamContext

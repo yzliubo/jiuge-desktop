@@ -9,12 +9,14 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useWeather } from '../composables/useWeather';
 
-const { state, placeLabel, deg, refresh, useCity, useAuto, setEnabled } = useWeather();
+const { state, placeLabel, autoWeather, deg, refresh, useCity, useAuto, setEnabled, saveToToday } = useWeather();
 
 const open = ref(false);
 const cityInput = ref('');
 const cityMsg = ref('');
 const cityBusy = ref(false);
+const saving = ref(false);
+const saveMsg = ref('');
 const rootEl = ref<HTMLElement | null>(null);
 
 const now = computed(() => (state.report ? state.report.now : null));
@@ -54,6 +56,19 @@ async function submitCity(): Promise<void> {
   cityBusy.value = false;
   cityMsg.value = r.ok ? '已切到「' + q + '」' : (r.msg || '找不到这个城市');
   if (r.ok) cityInput.value = '';
+}
+
+// 一键把联网天气记进「今天概览」：不用再回右栏选一次档位、再点一次保存。
+async function doSaveToday(): Promise<void> {
+  if (saving.value) return;
+  saving.value = true;
+  saveMsg.value = '';
+  try {
+    const ok = await saveToToday();
+    saveMsg.value = ok ? '已记进今天的日记' : '这会儿没有可用的联网天气，请到今日状态里手填';
+  } finally {
+    saving.value = false;
+  }
 }
 
 async function backToAuto(): Promise<void> {
@@ -103,6 +118,15 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
       <div v-if="today && today.rainProb !== null" class="wx-sub">今日降水概率 {{ Math.round(today.rainProb) }}%</div>
       <p v-if="state.error" class="wx-err">{{ state.error.msg }}</p>
       <p v-else-if="state.stale" class="wx-err">这是上次取到的数据，可能已过期。</p>
+
+      <!-- 联网天气不是只能看：一次点击直接记进「今天概览」的天气档位 -->
+      <div v-if="autoWeather" class="wx-row wx-save-row">
+        <button class="wx-link" type="button" :disabled="saving" @click="doSaveToday">
+          {{ saving ? '正在记…' : '记进今天' }}
+        </button>
+        <span class="wx-sub">{{ autoWeather }} · 写进今日状态</span>
+      </div>
+      <p v-if="saveMsg" class="wx-sub">{{ saveMsg }}</p>
 
       <div class="wx-row">
         <button class="wx-link" type="button" :disabled="state.loading" @click="doRefresh">
@@ -182,6 +206,9 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
   color: var(--palette-primary); font-size: 11px; cursor: pointer;
 }
 .wx-link:hover { text-decoration: underline; }
+/* 主操作单独一行，别和「刷新 / 定位 / 关闭」挤成一排分不出轻重 */
+.wx-save-row { padding-top: 8px; border-top: 0.5px dashed var(--surface-border); }
+.wx-save-row .wx-link { font-size: 12px; font-weight: 600; }
 .wx-link:disabled { color: var(--surface-muted); cursor: default; text-decoration: none; }
 .wx-in {
   flex: 1; min-width: 0;

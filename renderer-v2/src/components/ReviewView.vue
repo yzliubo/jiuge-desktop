@@ -5,6 +5,7 @@
 // 原「概览」六卡已并入单格洞察模块下方的全局概览区块（InsightView.vue）。
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { asArray, callDomain } from '../composables/useDomain';
+import { reviewTriplet } from '../composables/promptLibrary';
 import { labelText } from '../composables/useReviewFormat';
 import { stripMarkdown } from '../composables/useRichText';
 import { GRID_KEYS, localDate } from '../types';
@@ -40,7 +41,10 @@ async function loadRetro(): Promise<void> {
   // reviewPeriodKey 只接受 period：周取本周起始日、月取 YYYY-MM。
   // 旧写法多传了一个日期，导致「月复盘」被存到周键下，切周期就会读到错的内容。
   reviewKey.value = await callDomain<string>('reviewPeriodKey', '', period.value);
-  reviewPrompts.value = await callDomain<string[]>('reviewPrompts', ['', '', ''], period.value);
+  // 提问改由渲染层原创题组按周期键确定性抽取；领域层三问仅作兜底，仍是一期三问的数据结构。
+  const legacy = await callDomain<string[]>('reviewPrompts', ['', '', ''], period.value);
+  const fresh = reviewTriplet(period.value, reviewKey.value);
+  reviewPrompts.value = fresh.length === 3 ? fresh : (Array.isArray(legacy) ? legacy.slice(0, 3) : ['', '', '']);
   answers.value = await callDomain<string[]>('loadReview', ['', '', ''], period.value, reviewKey.value);
   reviewSaved.value = false;
 }

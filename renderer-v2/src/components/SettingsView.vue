@@ -5,6 +5,7 @@ import { useTheme } from '../composables/useTheme';
 import { SKINS, localDate, type SkinId } from '../types';
 import { worktimeSync, type WorktimeView } from '../bridge';
 import { useWeather } from '../composables/useWeather';
+import { useI18n } from '../i18n/useI18n';
 
 const emit = defineEmits<{
   (e: 'goData'): void;
@@ -13,6 +14,7 @@ const emit = defineEmits<{
   (e: 'wtChanged'): void;
 }>();
 const { skin, set } = useTheme();
+const { locale, choice, options: localeOptions, setLocale } = useI18n();
 
 const TEMPLATES = [
   { id: 'standard', name: '标准·九格' },
@@ -301,7 +303,8 @@ onMounted(async () => {
       <p class="line">
         只取「此刻的窗外」：地点、温度、今日高低温、降水概率。请求只发往气象服务与 IP 归属地服务，
         <strong>不发送日记、窗口标题、机器名或任何本机内容</strong>；没有账号、没有 Key、没有遥测。
-        九格里手填的「天气」档位是另一件事，不会被自动值覆盖。
+        联网天气会自动带进「今天概览 / 今日状态」的天气档位，点一次保存即记进当天日记；
+        断网或关闭时才需要手填，手选过的值不会被后续刷新覆盖。
       </p>
 
       <template v-if="wxOn">
@@ -327,7 +330,18 @@ onMounted(async () => {
       <p v-else class="muted">关闭态：首页连天气占位都不渲染，主进程一次请求都不发。</p>
     </div>
 
-    <div class="card"><h2>8 · 关于</h2>
+    <div class="card"><h2>8 · 语言</h2>
+      <div class="row">
+        <button v-for="o in localeOptions" :key="o.code" class="seg" data-no-i18n
+          :class="{ 'seg-on': choice === o.code }"
+          :aria-pressed="choice === o.code"
+          @click="setLocale(o.code)">{{ o.label }}</button>
+      </div>
+      <p class="line">界面语言只影响界面文字。日记、笔记和自己录入的语料不会被翻译或改动；切换语言不改变已保存的数据格式。</p>
+      <p class="muted">当前：{{ locale }} · 语言名一律用各语言自称。</p>
+    </div>
+
+    <div class="card"><h2>9 · 关于</h2>
       <p class="line">日记不上传 · 无账号 · 无遥测 · 不联互联网（除你开启的天气）</p>
       <p class="line" v-if="wxOn">首页天气已开启：只向气象服务取当前天气，发送的只有出口 IP，不发送任何本机记录。</p>
       <p class="line" v-if="wt && wt.enabled">本机时间源已开启：只读 127.0.0.1:5600，不出本机。</p>

@@ -26,11 +26,15 @@ import RelationView from './views/RelationView.vue';
 import ConnectView from './views/ConnectView.vue';
 import LongView from './views/LongView.vue';
 import ReadingView from './views/ReadingView.vue';
+// 胶囊降级 + 自由记录三合一：胶囊的书写/到期走顶栏弹窗，三 tab 模块占原导航位
+import CapsuleModal from './components/CapsuleModal.vue';
+import FreeView from './views/FreeView.vue';
 import { emptyRecord, localDate, GRID_KEYS, SKINS, type DiaryRecord, type SkinId, type ViewKey } from './types';
 import { listDiaries, upsertDiary, flush, onDataChanged, isMockBridge, openFinance } from './bridge';
 import { callDomain } from './composables/useDomain';
 import { useTheme } from './composables/useTheme';
 import { useWeather } from './composables/useWeather';
+import { initI18n } from './i18n/useI18n';
 
 const { skin, set: setSkin, load: loadTheme } = useTheme();
 // 真实今天：统计、问候、往年今天、胶囊提醒、洞察一律锚定它，永远不变。
@@ -55,11 +59,30 @@ const growthSel = ref('');
 // 当前选中的梦想目标：中栏点一行 → 右栏换成它的量化 / 账户 / 日期 / 图片
 const dreamSel = ref('');
 const quickOpen = ref(false);
+// 胶囊：顶栏按钮 + 两个弹窗态（写新 / 到期）。角标只显示待开启数，不再占一级导航。
+type CapTab = 'write' | 'due';
+const capModalOpen = ref(false);
+const capTab = ref<CapTab>('write');
+const capDueCount = ref(0);
 const backupTime = ref('—');
 // 本机时间源是否开启：只影响底栏那条合规声明怎么写，不影响任何数据通路
 const wtOn = ref(false);
 // 首页天气开关：底栏的合规声明要按它改口（开了就不能再说「零网络」）
 const weather = useWeather();
+// 天气条浮层「记进今天」：用户点一次就把联网天气落进当天日记。
+// 只改 base.weather 一个字段，其余基础栏与九格正文原样带回，不冲掉正在写的草稿；
+// 看往日时拒绝写入——不能用今天的窗外去改那一天的日记。
+weather.onSaveToToday(async function (w) {
+  if (selectedDate.value !== today) {
+    notify('当前看的是往日，请先回到今天再记天气');
+    return false;
+  }
+  const next: DiaryRecord = JSON.parse(JSON.stringify(record.value));
+  next.base = Object.assign({}, next.base || {}, { weather: w });
+  await save(next);
+  notify('今天的天气已记下：' + w);
+  return true;
+});
 const toast = ref('');
 let off: (() => void) | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -162,7 +185,8 @@ const selectedLabel = computed(() => {
 const viewLabel = computed(() => ({
   today: '今天', insight: '单格洞察', cell: '单格工作台', timeline: '时间轴', review: '回顾', capsule: '胶囊',
   habit: '坚持', dream: '梦想', data: '数据中心', bin: '封存箱', inspire: '语料库', settings: '设置',
-  life: '时间纵深', relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本'
+  life: '时间纵深', relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本',
+  free: '自由记录'
 }[view.value]));
 
 function shiftDate(delta: number): string {
@@ -233,6 +257,8 @@ async function refreshWtOn(): Promise<void> {
 
 // 九格 → 该格主功能。不占一级导航：它是「从格子里进去」的第二层入口。
 function openCell(key: string): void {
+  // 九格第 9 格与一级导航「自由记录」是同一个视图：入口唯一，不再开单格书写台。
+  if (key === 'free') { navigate('free'); return; }
   if (key !== 'work') gtdSel.value = '';
   if (key !== 'growth') growthSel.value = '';
   dreamSel.value = '';
@@ -286,6 +312,19 @@ async function quickSaved(payload: { target: string; text: string; openAt: strin
   }
 }
 
+// 胶囊角标与「到期主动弹」：每日最多一次；用户一有动作就取消自动弹，避免打断手上的事。
+async function refreshDueCapsules(): Promise<number> {
+  const list = await callDomain<unknown[]>('dueCapsules', []);
+  const n = Array.isArray(list) ? list.length : 0;
+  capDueCount.value = n;
+  return n;
+}
+function openCapsuleModal(which: CapTab): void {
+  capTab.value = which;
+  capModalOpen.value = true;
+  void refreshDueCapsules();
+}
+
 async function openDataDir(): Promise<void> {
   await flush('statusbar');
 }
@@ -302,6 +341,7 @@ function onKeydown(ev: KeyboardEvent): void {
 }
 
 onMounted(async () => {
+  initI18n();
   loadLayout();
   await loadTheme();
   await refresh();
@@ -311,6 +351,24 @@ onMounted(async () => {
   // 天气走独立状态源（useWeather 单例）：这里只负责首屏取一次，
   // 组件自己订阅同一份状态，设置页改完开关立刻反映到底栏与问候头。
   void weather.init();
+  // 启动 / 每日首次：有待开启胶囊就主动弹「到期」态；1.5 秒内用户一动就取消。
+  const due = await refreshDueCapsules();
+  if (due > 0) {
+    const stamp = 'jiuge.capsuleDuePrompt.' + today;
+    let already = false;
+    try { already = !!localStorage.getItem(stamp); } catch (e) { already = false; }
+    if (!already) {
+      let cancelled = false;
+      const cancel = function () { cancelled = true; };
+      window.addEventListener('pointerdown', cancel, { once: true });
+      window.setTimeout(function () {
+        if (cancelled) return;
+        try { localStorage.setItem(stamp, '1'); } catch (e) { /* 存不住也不影响本次提醒 */ }
+        capTab.value = 'due';
+        capModalOpen.value = true;
+      }, 1500);
+    }
+  }
 });
 
 onUnmounted(() => {
@@ -376,6 +434,14 @@ onUnmounted(() => {
           ></button>
         </span>
       </div>
+      <!-- 胶囊：功能单一，从一级导航降到这里；书写与到期都在弹窗内闭环 -->
+      <button
+        class="capsule-btn"
+        :class="{ 'capsule-on': capModalOpen }"
+        :aria-expanded="capModalOpen"
+        title="胶囊 · 写新 / 今日到期"
+        @click="openCapsuleModal('write')"
+      >胶囊<span v-if="capDueCount" class="cap-badge">{{ capDueCount }}</span></button>
       <button
         class="quick-btn"
         :class="{ 'quick-on': quickOpen }"
@@ -528,6 +594,8 @@ onUnmounted(() => {
           @notify="notify"
         />
         <ReviewView v-else-if="view === 'review'" mode="retro" />
+        <FreeView v-else-if="view === 'free'" @notify="notify" />
+        <!-- 旧 ViewKey 分支保留作兼容（命令面板等旧入口），主入口已是顶栏弹窗 -->
         <CapsuleView v-else-if="view === 'capsule'" />
         <HabitView v-else-if="view === 'habit'" />
         <DreamView
@@ -609,6 +677,13 @@ onUnmounted(() => {
       :wt-on="wtOn"
       :wx-on="weather.state.enabled"
       @open-data-dir="openDataDir"
+    />
+
+    <CapsuleModal
+      v-if="capModalOpen"
+      :tab="capTab"
+      @close="capModalOpen = false; void refreshDueCapsules()"
+      @due-changed="refreshDueCapsules()"
     />
 
     <QuickNote
@@ -709,14 +784,15 @@ onUnmounted(() => {
   color: var(--state-warn);
 }
 .spacer { flex: 1; }
-.quick-btn, .settings-btn, .insight-btn, .reading-btn, .finance-btn {
+.quick-btn, .settings-btn, .insight-btn, .reading-btn, .finance-btn, .capsule-btn {
   padding: 4px 12px;
   border: 0.5px solid rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-md);
   background: transparent;
   color: inherit;
 }
-.quick-on, .settings-on, .insight-on, .reading-on, .finance-on { background: var(--palette-on); color: var(--palette-primary); }
+.quick-on, .settings-on, .insight-on, .reading-on, .finance-on, .capsule-on { background: var(--palette-on); color: var(--palette-primary); }
+.cap-badge { display: inline-block; min-width: 15px; padding: 0 4px; margin-left: 5px; border-radius: 9px; background: var(--palette-accent); color: var(--palette-on); font-size: 10px; line-height: 15px; }
 .columns {
   display: flex;
   min-height: 0;

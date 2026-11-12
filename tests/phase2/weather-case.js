@@ -90,6 +90,47 @@ check('pack：上游多给的字段一律不落，只留界面要显示的', fun
     assert.ok(JSON.stringify(report).indexOf('不该出现') < 0, '上游多余字段不许透传');
 });
 
+check('8 档与 diary-store BASE_FIELDS 逐字一致：不许出现落不进日记的词', function () {
+    const store = require('../../src/utils/diary-store.js');
+    const field = store.BASE_FIELDS.filter(function (f) { return f.key === 'weather'; })[0];
+    assert.ok(field, 'diary-store 里没有 weather 基础字段');
+    assert.deepStrictEqual(board.BASE_WEATHER, field.options);
+});
+
+check('WMO → 8 档：晴 / 多云 / 阴 / 小雨 / 大雨 / 雪 / 雾 都有落点', function () {
+    const cases = [[0, '晴'], [1, '晴'], [2, '多云'], [3, '阴'], [45, '雾'], [48, '雾'],
+        [51, '小雨'], [61, '小雨'], [63, '大雨'], [65, '大雨'], [95, '大雨'], [99, '大雨'],
+        [71, '雪'], [75, '雪'], [86, '雪']];
+    cases.forEach(function (c) {
+        assert.strictEqual(board.toBaseWeather(c[0], 3), c[1], '代码 ' + c[0] + ' 映射错了');
+    });
+});
+
+check('大风只在无降水 / 无雾 / 无雪时改口记「风」，雨天再大风仍是雨天', function () {
+    assert.strictEqual(board.toBaseWeather(0, 35), '风');
+    assert.strictEqual(board.toBaseWeather(3, 30), '风');
+    assert.strictEqual(board.toBaseWeather(65, 60), '大雨');
+    assert.strictEqual(board.toBaseWeather(71, 60), '雪');
+    assert.strictEqual(board.toBaseWeather(0, 3), '晴');
+});
+
+check('认不出的代码 / 缺字段返回空串交给手填，绝不猜一个词塞进日记', function () {
+    assert.strictEqual(board.toBaseWeather(1234, 3), '');
+    assert.strictEqual(board.toBaseWeather(null, 3), '', 'null 不能被 Number() 折成 0（晴）');
+    assert.strictEqual(board.toBaseWeather(undefined, 3), '');
+    assert.strictEqual(board.toBaseWeather('', 3), '');
+});
+
+check('pack 把折算值一起给渲染层，且仍是 8 档之一', function () {
+    const r = board.pack({ label: '上海' },
+        { temperature_2m: 12, weather_code: 61, wind_speed_10m: 8 }, {}, 1000);
+    assert.strictEqual(r.now.baseWeather, '小雨');
+    assert.ok(board.BASE_WEATHER.indexOf(r.now.baseWeather) >= 0);
+    const unknown = board.pack({ label: '上海' },
+        { temperature_2m: 12, weather_code: 777 }, {}, 1000);
+    assert.strictEqual(unknown.now.baseWeather, '', '未知代码不该落任何档位');
+});
+
 check('view：缓存过期标 stale，关闭态照旧返回偏好', function () {
     const s = board.normalize({ enabled: true });
     const report = board.pack({ label: '上海' }, { temperature_2m: 10, weather_code: 0 }, {}, 1000);

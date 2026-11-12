@@ -203,6 +203,29 @@ async function waitStep(page, n) {
       });
       assert.strictEqual(cols, 3);
     });
+    await check('13a 页头无日期、九格引导语各不相同、单击标题直达对应模块', async () => {
+      // 日期文字已从九格页头下线（补记时仍留「补记」标记，具体日期由横幅明示）
+      const head = await page.locator('.editor .date-head').innerText();
+      assert(!/\d{4}-\d{2}-\d{2}/.test(head), '九格页头还在显示日期：' + head);
+      assert(head.includes('已写'), '页头统计被一起删了');
+
+      // 九格占位提示各按模块取词，不再是同一句「随手一句，可写多行」
+      const ph = await page.locator('.cell .rt-body').evaluateAll(function (els) {
+        return els.map(function (el) { return el.getAttribute('data-placeholder') || ''; });
+      });
+      assert.strictEqual(ph.length, 9, '没取到九格引导语');
+      assert.strictEqual(new Set(ph).size, 9, '引导语没按模块区分：' + ph.join(' | '));
+      assert(ph.every(function (t) { return !!t && t.indexOf('随手一句，可写多行') < 0; }),
+        '仍显示统一占位语或空提示');
+
+      // 标题单击走 open-cell：工作推进 → GTD 工作台，返回后九格还在
+      await page.locator('.cell[data-cell="work"] .cell-label').click();
+      await page.waitForTimeout(350);
+      assert.strictEqual(await page.locator('.gtd-view').count(), 1, '单击标题没进入对应模块');
+      await page.locator('.gtd-view .back').click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.grid').count(), 1, '返回后没回到九格');
+    });
     await check('14 初始徽标为「已保存」', async () => {
       assert((await page.locator('.badge').textContent()).includes('已保存'));
     });
@@ -386,7 +409,8 @@ async function waitStep(page, n) {
       });
       assert(beforeGrid, '问候条不在九格编辑器之前');
       const t = await page.locator('.greeting-bar').textContent();
-      assert(t.includes('连续') && t.includes('本机'), t.slice(0, 120));
+      // 2026-11-11：问候头已把「本机 N 篇」下放底栏、改显「本周 x/y」，同步过时断言
+      assert(t.includes('连续') && t.includes('本周'), t.slice(0, 120));
       assert.strictEqual(await page.locator('.greeting-line').count(), 1);
       assert.strictEqual(await page.locator('.quote-line').count(), 1);
       assert((await page.locator('.quote-line').textContent()).length > 4);
@@ -463,6 +487,15 @@ async function waitStep(page, n) {
       await page.waitForTimeout(350);
       assert((await page.locator('.toast').textContent()).includes('今日状态已记下'));
       assert.strictEqual(await page.locator('.base-grid select').first().inputValue(), '晴');
+    });
+    await check('38b 天气档位二态：联网自动带入 / 断网提示手填，必有其一', async () => {
+      const t = await page.locator('.today-opt .extras').textContent();
+      assert(/已带进今天|请在这里手填|已改为手填/.test(t || ''),
+        '今日状态卡没有说清天气来源：' + String(t).slice(0, 90));
+    });
+    await check('38c 一次保存后「今天概览」天气 chip 同步回显', async () => {
+      const chip = await page.locator('.ctx-card .chip').first().textContent();
+      assert((chip || '').indexOf('晴') >= 0, '今天概览没跟上刚保存的天气：' + chip);
     });
     await check('39 一键留一句追加到「自由」格', async () => {
       await page.locator('.quick-row input').fill('补一句也算一篇');
@@ -602,10 +635,12 @@ async function waitStep(page, n) {
     });
 
     // --- 胶囊 ---
-    await check('50 胶囊视图 4 个日期预设与 3 组分类', async () => {
-      await page.locator('.nav-item').nth(3).click();
+    await check('50 胶囊弹窗：4 个日期预设与 3 组分类（已从一级导航降到顶栏）', async () => {
+      await page.locator('.titlebar .capsule-btn').click();
       await page.waitForTimeout(300);
+      assert.strictEqual(await page.locator('.cm-box').count(), 1, '顶栏胶囊按钮没弹出弹窗');
       assert.strictEqual(await page.locator('.capsule').count(), 1);
+      assert.strictEqual(await page.locator('.cm-tab').count(), 2, '书写 / 到期两态不齐');
       assert.strictEqual(await page.locator('.capsule .seg').count(), 4);
       assert((await page.locator('.capsule').textContent()).includes('封存中'));
     });
@@ -623,6 +658,10 @@ async function waitStep(page, n) {
       await page.waitForTimeout(200);
       assert((await page.locator('.capsule .message').textContent()).includes('还没到开启的日子'));
       assert.strictEqual(await page.locator('.opened').count(), 0);
+      // 弹窗是覆盖层，不关掉会挡住后面所有左栏点击
+      await page.locator('.cm-x').click();
+      await page.waitForTimeout(150);
+      assert.strictEqual(await page.locator('.cm-box').count(), 0);
     });
 
     // --- 坚持 ---
@@ -648,7 +687,10 @@ async function waitStep(page, n) {
       await page.waitForTimeout(300);
       assert.strictEqual(await page.locator('.settings').count(), 1);
       assert.strictEqual(await page.locator('.settings .skin').count(), 4);
-      assert.strictEqual(await page.locator('.settings .seg').count(), 4);
+      // 第 8 卡「语言」也用 .seg，不能拿 .settings .seg 一把数（会把 4 个模板算成 9 个）。
+      // 只数第 2 张卡（页面模板）里的分段按钮，断言才是在说「4 个模板」这件事。
+      assert.strictEqual(await page.locator('.settings .card').nth(1).locator('.seg').count(), 4,
+        '页面模板不是 4 个');
       // 2026-11-11：首页天气也是一个开关（默认开），所以从 5 变 6
       assert.strictEqual(await page.locator('.settings .switch').count(), 6, '模块 3 + 头七天 + 本机时间源 + 首页天气');
       const setText = await page.locator('.settings').textContent();
@@ -1579,9 +1621,11 @@ async function waitStep(page, n) {
       assert(t.includes('复盘完成度') && t.includes('本周') && t.includes('本月'), t.slice(0, 90));
       assert(t.includes('本周三问'), t.slice(0, 120));
     });
-    await check('94 胶囊右栏：三组计数，且不泄露未开启正文', async () => {
+    await check('94 自由记录页：三 tab 在位，右栏仍是胶囊上下文（三组计数不泄露正文）', async () => {
       await page.locator('.nav-item').nth(3).click();
       await page.waitForTimeout(450);
+      assert.strictEqual(await page.locator('.free-view').count(), 1, '第 4 项导航没进自由记录');
+      assert.strictEqual(await page.locator('.free-view .fw-tab').count(), 3, '三种功能不齐');
       const t = await page.locator('.context').innerText();
       assert(t.includes('胶囊状态') && t.includes('待开启') && t.includes('封存中'), t.slice(0, 90));
       assert.strictEqual(await page.locator('.context .ctx-kv').count(), 3);
@@ -2251,10 +2295,21 @@ async function waitStep(page, n) {
       assert.strictEqual((text.match(/【读书·/g) || []).length, 1, '同一条笔记被写进九格两次');
     });
 
-    await check('128 主题阅读只读 growth 书单；闪念一键同时进库与九格', async () => {
+    await check('128 主题阅读 V2.14 自建书单；闪念一键同时进库与九格', async () => {
       await page.locator('.rd-tab').nth(1).click();
       await page.waitForSelector('.rd-notice', { timeout: 5000 });
-      assert.ok((await page.locator('.rd-notice').innerText()).indexOf('学习成长') >= 0, '主题阅读未声明书单归属');
+      assert.ok((await page.locator('.rd-notice').innerText()).indexOf('主题书单') >= 0, '主题页未提示可自建书单');
+      // 建一个主题 → 手写加一本书 → 双击翻开（中栏批注器与休闲同款）
+      await page.locator('.rd-add input[aria-label="新主题名"]').fill('GUI测试主题');
+      await page.locator('.rd-add button', { hasText: '建主题' }).first().click();
+      await page.waitForSelector('.rd-group-title', { timeout: 5000 });
+      assert.ok((await page.locator('.rd-group-title').first().innerText()).indexOf('GUI测试主题') >= 0, '主题没建出来');
+      await page.locator('.rd-group input[aria-label="主题新书名"]').fill('GUI主题书');
+      await page.locator('.rd-group button', { hasText: '加书名' }).first().click();
+      await page.waitForFunction(() => document.querySelectorAll('.rd-group .rd-book').length > 0, null, { timeout: 5000 });
+      await page.locator('.rd-group .rd-book').first().locator('button', { hasText: '翻开读' }).click();
+      await page.waitForSelector('.rd-reader[aria-label="主题阅读器"] .rd-prompts', { timeout: 5000 });
+      assert.ok((await page.locator('.rd-reader[aria-label="主题阅读器"] .rd-chapters').count()) >= 1, '主题批注器缺章节大纲');
       await page.locator('.rd-tab').nth(0).click();
       await page.locator('.rd-book').first().locator('button', { hasText: '翻开读' }).click();
       await page.waitForSelector('.rd-flash input[aria-label="即时想法"]', { timeout: 5000 });
@@ -3109,6 +3164,116 @@ async function waitStep(page, n) {
     } finally {
       await new Promise(function (r) { wtServer.close(r); });
     }
+
+    // ---- 自由记录模块三合一 + 胶囊降级（docs/28）----
+    await check('136 胶囊弹窗两态：书写 / 今日到期可切换，关闭后无残留', async () => {
+      await page.locator('.titlebar .capsule-btn').click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.cm-box').count(), 1);
+      assert.strictEqual(await page.locator('.capsule').count(), 1, '默认应落在书写态');
+      await page.locator('.cm-tab').nth(1).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.cm-due').count(), 1, '到期态没渲染');
+      await page.locator('.cm-x').click();
+      await page.waitForTimeout(150);
+      assert.strictEqual(await page.locator('.cm-box').count(), 0);
+    });
+
+    await check('137 闪念快记：原文留自由记录，收件箱恰好多一条且重进不重复', async () => {
+      await page.locator('.nav-item').nth(3).click();
+      await page.waitForTimeout(350);
+      await page.locator('.free-view .fw-tab').nth(1).click();
+      await page.waitForTimeout(200);
+      const stamp = '闪念同步验证-' + Date.now();
+      await page.locator('.fw-capture input').fill(stamp);
+      await page.locator('.fw-capture .fw-primary').click();
+      await page.waitForTimeout(450);
+      const row = page.locator('.fw-flash').filter({ hasText: stamp }).first();
+      assert.strictEqual(await row.count(), 1, '闪念原文没落库');
+      assert((await row.innerText()).includes('已同步'), '同步状态不是「已同步」');
+      // 到工作模块收件箱验收真链路。双击九格标题时第二次 click 可能落在新页面的分组 tab 上，
+      // 所以进 GTD 后显式点回「收件箱」，不让视图残留状态决定断言成败。
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(250);
+      await page.locator('.cell[data-cell="work"] .cell-label').dblclick();
+      await page.waitForTimeout(400);
+      assert.strictEqual(await page.locator('.gtd-view').count(), 1);
+      await page.locator('.gtd-tab').nth(0).click();
+      await page.waitForTimeout(250);
+      const hit = page.locator('.gtd-item').filter({ hasText: stamp });
+      assert.strictEqual(await hit.count(), 1, '收件箱没同步到这一条（或多同步了一条）');
+      // 再回一次自由记录：onMounted 会补跑 pending 同步，按 source 去重不应产生第二条
+      await page.locator('.nav-item').nth(3).click();
+      await page.waitForTimeout(400);
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(200);
+      await page.locator('.cell[data-cell="work"] .cell-label').dblclick();
+      await page.waitForTimeout(400);
+      await page.locator('.gtd-tab').nth(0).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.gtd-item').filter({ hasText: stamp }).count(), 1,
+        '重复进入后收件箱出现第二条（source 幂等失效）');
+    });
+
+    await check('138 长文撰写：海明威体检只标色、不改写、写作/编辑双模式', async () => {
+      await page.locator('.nav-item').nth(3).click();
+      await page.waitForTimeout(300);
+      await page.locator('.free-view .fw-tab').nth(2).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.fw-stats').count(), 1, '写作法面板没渲染');
+      await page.locator('.fw-doclist .fw-primary').click();
+      await page.waitForTimeout(300);
+      assert.ok((await page.locator('.fw-doc').count()) >= 1, '新建长文没进列表');
+      const text = '他非常慢慢地被进行了一番说明，其实没有予以解释。' + '字'.repeat(70) + '。';
+      await page.locator('.fw-paper').fill(text);
+      await page.locator('.fw-ebar .fw-btn').nth(0).click();
+      await page.waitForTimeout(450);
+      assert.strictEqual(await page.locator('.fw-review').count(), 1, '体检态没渲染');
+      assert.ok((await page.locator('.fw-review .fw-hard').count()) >= 1, '过长句没标红');
+      assert.ok((await page.locator('.fw-review mark').count()) >= 1, '弱化词没标蓝');
+      assert.strictEqual(await page.locator('.fw-paper').count(), 0, '体检态还留着写作输入框');
+      await page.locator('.fw-ebar .fw-btn').nth(0).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.fw-paper').inputValue(), text, '体检改写了用户正文');
+    });
+
+    await check('139 删闪念：原文与对应未完成的收件箱任务一并删除（Q3 A）', async () => {
+      await page.locator('.nav-item').nth(3).click();
+      await page.waitForTimeout(350);
+      await page.locator('.free-view .fw-tab').nth(1).click();
+      await page.waitForTimeout(200);
+      const stamp = '闪念删除验证-' + Date.now();
+      await page.locator('.fw-capture input').fill(stamp);
+      await page.locator('.fw-capture .fw-primary').click();
+      await page.waitForTimeout(400);
+      // 先确认收件箱里确实有这一条
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(250);
+      await page.locator('.cell[data-cell="work"] .cell-label').dblclick();
+      await page.waitForTimeout(400);
+      await page.locator('.gtd-tab').nth(0).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.gtd-item').filter({ hasText: stamp }).count(), 1);
+      // 回自由记录删掉原文
+      await page.locator('.nav-item').nth(3).click();
+      await page.waitForTimeout(350);
+      await page.locator('.free-view .fw-tab').nth(1).click();
+      await page.waitForTimeout(200);
+      const row = page.locator('.fw-flash').filter({ hasText: stamp }).first();
+      assert.strictEqual(await row.count(), 1);
+      await row.getByRole('button', { name: '删除' }).click();
+      await page.waitForTimeout(400);
+      assert.strictEqual(await page.locator('.fw-flash').filter({ hasText: stamp }).count(), 0, '闪念原文没删掉');
+      // 再回收件箱：任务应随之消失，不留孤儿
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(250);
+      await page.locator('.cell[data-cell="work"] .cell-label').dblclick();
+      await page.waitForTimeout(400);
+      await page.locator('.gtd-tab').nth(0).click();
+      await page.waitForTimeout(250);
+      assert.strictEqual(await page.locator('.gtd-item').filter({ hasText: stamp }).count(), 0,
+        '删了闪念，收件箱任务还在（孤儿）');
+    });
 
     await check('113 真实窗口无 JS 运行时异常', async () => {
       assert.strictEqual(jsErrors.length, 0, JSON.stringify(jsErrors));

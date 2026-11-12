@@ -2031,7 +2031,7 @@ test('v2', 'reading/board：normalize / 翻页 / 删书不删笔记 / 标签归�
   assert.strictEqual(modReading.notesQuery(s, {}).items[0].orphan, true, '原书移出应标 orphan');
 });
 
-test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单只读', function () {
+test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单自建', function () {
   const n = {
     mode: 'theme', bookTitle: '给水排水', page: 32, tags: ['管网', '读书'],
     quote: '原文一句', text: '我的想法', createdAt: Date.now()
@@ -2049,8 +2049,20 @@ test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单�
   assert.strictEqual(p.notes[0].pushedCell, 'growth', '重复回写不得改落格');
   const themeBooks = [{ themeId: 't1', themeTitle: '给排水', bookId: 'b1', title: '给水排水', total: 100, done: 20, pct: 20, status: 'reading' }];
   const bd = modReading.board(p, themeBooks);
-  assert.strictEqual(bd.themeBooks.length, 1, 'board 应原样带出主题书单');
-  assert.strictEqual(modReading.normalize(p).books.length, 0, '主题书单不得写进 state.books（不能有两份书单）');
+  assert.strictEqual(bd.themeBooks.length, 1, 'board 应原样带出旧 growth 主题书单（兼容）');
+  // V2.14：主题书自建进 md_reading.books（themeId 非空），与休闲书共用一张表
+  let t = modReading.addTheme(modReading.empty(), { id: 't9', title: '主题九' });
+  t = modReading.addBook(t, { id: 'bk9', title: '主题九的书', themeId: 't9', filePath: 'C:/a.epub' });
+  assert.strictEqual(modReading.normalize(t).books.length, 1, '主题书应写进 state.books');
+  assert.strictEqual(modReading.normalize(t).books[0].themeId, 't9', '主题书应带 themeId 归属');
+  assert.strictEqual(modReading.normalize(t).themes.length, 1, '主题表应落库');
+  // 一次性迁移：旧 growth 数据迁入，可重复调用
+  const legacy = { themes: [{ id: 'old1', title: '旧主题', books: [{ id: 'ob1', title: '旧书', quotes: [{ id: 'q1', text: '旧摘录', page: 3 }] }] }] };
+  let migrated = modReading.importGrowthThemes(modReading.empty(), legacy);
+  assert.strictEqual(migrated.themes.length, 1, '迁移后主题数');
+  assert.strictEqual(migrated.books[0].themeId, 'gth-old1', '迁移书归属主题');
+  assert.ok(migrated.notes.some(function (n) { return n.mode === 'theme' && n.quote === '旧摘录'; }), '迁移摘录进笔记');
+  assert.strictEqual(modReading.importGrowthThemes(migrated, legacy).themes.length, 1, '重复迁移幂等');
   assert.strictEqual(modReading.mergeSection(modReading.empty(), p).state.notes.length, 1, '合并应补进笔记');
   assert.strictEqual(modReading.mergeSection(p, p).added, 0, '二次合并必须幂等');
   assert.ok(modReading.exportMarkdown(p, themeBooks).indexOf('# 读书笔记') === 0, '汇总导出缺标题');
@@ -2692,6 +2704,235 @@ test('v2', 'finance/接线：领域函数过白名单、API 往返不丢整数�
   assert.strictEqual(imp.code, 'OK');
   assert.strictEqual(imp.data.added, 2);
   ctx.journal.close();
+});
+
+// ------------------------------------------------------------
+// 独立账本窗口：账户 / 净值 / 损益 / 目标 / 周期 / 订阅 / 检索 / 批量 / 洞察
+// ------------------------------------------------------------
+function finSeed() {
+  let s = modFinance.normalize(null);
+  s = modFinance.setAccountMeta(s, 'acc_bank', { openingCents: 1000000, side: 'asset' });
+  s = modFinance.addTxn(s, { date: '2026-11-02', kind: 'income', amountCents: 800000, category: 'cat_salary', account: 'acc_bank' });
+  s = modFinance.addTxn(s, { date: '2026-11-03', kind: 'expense', amountCents: -3250, category: 'cat_food', account: 'acc_alipay', payee: '楼下小馆' });
+  s = modFinance.addTxn(s, { date: '2026-11-04', kind: 'expense', amountCents: -12000, category: 'cat_house', account: 'acc_bank' });
+  return s;
+}
+
+test('v2', 'finance/资产负债表：期初 + 流水推余额，净值按余额符号算', function () {
+  const nw = modFinance.netWorth(finSeed(), '2026-11');
+  assert.strictEqual(nw.assetsCents, 1788000);
+  assert.strictEqual(nw.liabilitiesCents, 3250);
+  assert.strictEqual(nw.netCents, 1784750);
+  assert.strictEqual(nw.accounts.length, 4);
+  assert.strictEqual(nw.series.length, 6);
+  assert.strictEqual(nw.groups[0].assetCents, 1788000);
+  assert.strictEqual(nw.groups[0].liabilityCents, 3250);
+  // 转账两条互指、金额相消，不能凭空多出净值
+  let s = modFinance.addTxn(finSeed(), { date: '2026-11-05', kind: 'transfer', amountCents: 5000, account: 'acc_bank', toAccount: 'acc_alipay' });
+  assert.strictEqual(modFinance.netWorth(s, '2026-11').netCents, 1784750, '转账不能改变净资产');
+});
+
+test('v2', 'finance/损益表与分类环比：整数分、基点在展示层之外算好', function () {
+  const cf = modFinance.cashFlow(finSeed(), '2026-11');
+  assert.strictEqual(cf.incomeCents, 800000);
+  assert.strictEqual(cf.expenseCents, 15250);
+  assert.strictEqual(cf.netCents, 784750);
+  assert.strictEqual(cf.savingBp, 9809);
+  assert.strictEqual(cf.months.length, 6);
+  const rep = modFinance.categoryReport(finSeed(), '2026-11');
+  assert.strictEqual(rep.prevMonth, '2026-10');
+  assert.strictEqual(rep.totalCents, 15250);
+  assert.strictEqual(rep.rows.length, 2);
+  assert.strictEqual(rep.rows[0].spentCents, 12000);
+  assert.strictEqual(rep.rows[0].shareBp + rep.rows[1].shareBp, 10000);
+});
+
+test('v2', 'finance/目标：进度基点、追加存款、删除都保持整数分', function () {
+  let s = modFinance.addGoal(finSeed(), { name: '应急基金', targetCents: 5000000, savedCents: 1250000 });
+  assert.strictEqual(modFinance.goalRows(s)[0].progressBp, 2500);
+  assert.strictEqual(modFinance.goalRows(s)[0].remainingCents, 3750000);
+  s = modFinance.updateGoal(s, 'goal_1', { savedCents: 1500000 });
+  assert.strictEqual(modFinance.goalRows(s)[0].progressBp, 3000);
+  s = modFinance.removeGoal(s, 'goal_1');
+  assert.strictEqual(modFinance.goalRows(s).length, 0);
+  assert.strictEqual(modFinance.addGoal(s, { name: '空目标', targetCents: 0 }).goals.length, 0, '零额度目标不该入库');
+});
+
+test('v2', 'finance/周期账单：只给建议不写库，季度不落到非季度月', function () {
+  let s = modFinance.addRecurring(finSeed(), {
+    name: '房租', payee: '房东', amountCents: -300000, category: 'cat_house',
+    account: 'acc_bank', startDate: '2026-01-05', interval: 'monthly'
+  });
+  assert.strictEqual(s.txns.length, 3, '建周期账单绝不能自动写流水');
+  let due = modFinance.recurringRows(s, '2026-11');
+  assert.strictEqual(due.length, 1);
+  assert.strictEqual(due[0].date, '2026-11-05');
+  assert.strictEqual(due[0].recorded, false);
+  s = modFinance.addTxn(s, { date: '2026-11-05', kind: 'expense', amountCents: -300000, category: 'cat_house', account: 'acc_bank', payee: '房东' });
+  assert.strictEqual(modFinance.recurringRows(s, '2026-11')[0].recorded, true, '同月同对方同金额应判为已记');
+  let q = modFinance.addRecurring(finSeed(), { name: '季费', amountCents: -9000, startDate: '2026-01-05', interval: 'quarterly' });
+  assert.strictEqual(modFinance.recurringRows(q, '2026-11').length, 0, '11 月不是 1 月起算的季度月');
+  assert.strictEqual(modFinance.recurringRows(q, '2026-10').length, 1);
+});
+
+test('v2', 'finance/订阅识别：连续月且金额接近才算，单次消费不误判', function () {
+  let s = finSeed();
+  for (let i = 1; i <= 3; i++) {
+    s = modFinance.addTxn(s, { date: '2026-0' + i + '-05', kind: 'expense', amountCents: -1500, category: 'cat_sub', payee: '视频会员', account: 'acc_alipay' });
+  }
+  const subs = modFinance.detectSubscriptions(s);
+  assert.strictEqual(subs.length, 1);
+  assert.strictEqual(subs[0].payee, '视频会员');
+  assert.strictEqual(subs[0].typicalCents, 1500);
+  assert.strictEqual(subs[0].count, 3);
+  assert.strictEqual(modFinance.detectSubscriptions(modFinance.normalize(null)).length, 0);
+});
+
+test('v2', 'finance/检索与批量修正：金额区间用分比较，批量不重跑规则', function () {
+  let s = finSeed();
+  for (let i = 1; i <= 3; i++) {
+    s = modFinance.addTxn(s, { date: '2026-0' + i + '-05', kind: 'expense', amountCents: -1500, category: 'cat_sub', payee: '视频会员', account: 'acc_alipay' });
+  }
+  assert.strictEqual(modFinance.searchTxns(s, { keyword: '会员' }).length, 3);
+  assert.strictEqual(modFinance.searchTxns(s, { minCents: 1000, maxCents: 2000 }).length, 3);
+  assert.strictEqual(modFinance.searchTxns(s, { from: '2026-02-01', to: '2026-02-28' }).length, 1);
+  assert.strictEqual(modFinance.searchTxns(s, { kind: 'income' }).length, 1);
+  const ids = modFinance.searchTxns(s, { keyword: '会员' }).map(function (t) { return t.id; });
+  const out = modFinance.bulkUpdate(s, ids, { category: 'cat_fun', payee: '不该被改' });
+  assert.strictEqual(out.updated, 3);
+  const after = out.state.txns.filter(function (t) { return ids.indexOf(t.id) >= 0; });
+  assert.strictEqual(after[0].category, 'cat_fun');
+  assert.strictEqual(after[0].payee, '视频会员', '白名单外的字段必须被丢弃');
+  assert.deepStrictEqual(after[0].ruleIds, [], '批量修正不重跑规则');
+});
+
+test('v2', 'finance/洞察：没设额度不报超支，设了才如实报', function () {
+  let s = finSeed();
+  assert.strictEqual(modFinance.insights(s, '2026-11').overspent.length, 0);
+  s = modFinance.setBudget(s, { month: '2026-11', category: 'cat_food', limitCents: 1000, rollover: true });
+  const ins = modFinance.insights(s, '2026-11');
+  assert.strictEqual(ins.overspent.length, 1);
+  assert.strictEqual(ins.overspent[0].overCents, 2250);
+  assert.strictEqual(ins.netWorthCents, 1784750);
+  assert.strictEqual(ins.subscriptionCents, 0);
+  assert.strictEqual(ins.topCategory.spentCents, 12000);
+});
+
+test('v2', 'finance/新段落：normalize 白名单、老数据兼容、mergeSection 幂等', function () {
+  const dirty = modFinance.normalize({
+    goals: [{ id: 'goal_1', name: 'X', targetCents: 100, evil: 1 }],
+    recurring: [{ id: 'rec_1', name: 'Y', amountCents: -500, startDate: '2026-01-01', evil: 2 }]
+  });
+  assert.strictEqual(dirty.goals[0].evil, undefined, '未知字段必须被削掉');
+  assert.strictEqual(dirty.recurring[0].evil, undefined);
+  assert.deepStrictEqual(modFinance.normalize(dirty), dirty, 'normalize 必须幂等');
+  const old = modFinance.normalize({ txns: [], categories: [], accounts: [], budgets: [], rules: [] });
+  assert.strictEqual(old.goals.length, 0, 'V1 老账本读进来新段落为空');
+  assert.strictEqual(old.recurring.length, 0);
+  // section 要显式给全空段：只给 goals 会被当成「空库」而重新播种默认分类/账户。
+  const section = {
+    categories: [], accounts: [], txns: [], budgets: [], rules: [], recurring: [],
+    goals: [{ id: 'goal_9', name: 'Z', targetCents: 200 }]
+  };
+  const merged = modFinance.mergeSection(old, section);
+  assert.strictEqual(merged.added, 1);
+  assert.strictEqual(modFinance.mergeSection(merged.state, section).added, 0);
+});
+
+test('v2', 'finance/手记收支导入：符号、去重指纹、分类兜底、幂等', function () {
+  const s = modFinance.normalize(null);
+  const rows = [
+    { id: 'e1', date: '2026-11-03', type: 'expense', cents: 1250, category: 'food', note: '午饭' },
+    { id: 'e2', date: '2026-11-04', type: 'income', cents: 500000, category: 'other', note: '工资' }
+  ];
+  const one = modFinance.importMoneyBook(s, rows);
+  assert.strictEqual(one.added, 2);
+  assert.strictEqual(one.skipped, 0);
+  assert.strictEqual(one.state.txns.length, 2);
+  assert.strictEqual(one.state.txns[0].amountCents, -1250, '支出落成负整数分');
+  assert.strictEqual(one.state.txns[1].amountCents, 500000, '收入落成正整数分');
+  assert.ok(one.state.txns.every(function (t) { return t.importedId.indexOf('mb:') === 0; }));
+  assert.ok(one.state.txns.every(function (t) { return t.ruleIds.length === 0; }), '导入不重跑规则');
+  const two = modFinance.importMoneyBook(one.state, rows);
+  assert.strictEqual(two.added, 0, '同一笔手记重复导入零新增');
+  assert.strictEqual(two.skipped, 2);
+  assert.deepStrictEqual(modFinance.normalize(two.state), two.state, '导入后 normalize 幂等');
+  const bad = modFinance.importMoneyBook(s, [
+    { id: 'x', date: '2026-02-30', type: 'expense', cents: 100, category: 'food', note: '' }
+  ]);
+  assert.strictEqual(bad.added, 0, '非法日期不入库');
+});
+
+test('v2', 'finance/窗口接线：新增领域函数过白名单、开窗通道已注册', function () {
+  const ctx = makeRepo(fresh('finance-window-api'));
+  const lc = createLifecycle(ctx.repo);
+  let st = finSeed();
+  const domain = {
+    'finance.netWorth': function (m) { return modFinance.netWorth(st, m); },
+    'finance.addGoal': function (p) { st = modFinance.addGoal(st, p); return st; },
+    'finance.bulkUpdate': function (ids, patch) {
+      const out = modFinance.bulkUpdate(st, ids, patch);
+      st = out.state;
+      return out.updated;
+    }
+  };
+  const api = createApiLayer({ repository: ctx.repo, lifecycle: lc, domain: domain, financeOpener: function () { return { ok: true, reused: false }; } });
+  const nw = api.handle('v1/domain:call', { name: 'finance.netWorth', args: ['2026-11'] });
+  assert.strictEqual(nw.code, 'OK');
+  assert.strictEqual(nw.data.netCents, 1784750, '过一层 IPC 后净值仍是整数分');
+  const g = api.handle('v1/domain:call', { name: 'finance.addGoal', args: [{ name: 'G', targetCents: 1000 }] });
+  assert.strictEqual(g.code, 'OK');
+  const win = api.handle('v1/finance:open', {});
+  assert.strictEqual(win.code, 'OK');
+  assert.strictEqual(win.data.ok, true);
+  const blocked = api.handle('v1/domain:call', { name: 'finance.notRegistered', args: [] });
+  assert.strictEqual(blocked.code, 'CLIENT_EXCEPTION');
+  ctx.journal.close();
+});
+
+// ---------- 自由记录（md_freewrite）+ 写作法体检（docs/28）----------
+const modFree = require(path.resolve(__dirname, '../../src/free/board.js'));
+const modWriting = require(path.resolve(__dirname, '../../src/writing/check.js'));
+
+test('v2', 'free/新段落：normalize 幂等、脏数据白名单、mergeSection 只补不改', function () {
+  const a = modFree.normalize(null);
+  assert.deepStrictEqual(a, modFree.normalize(a));
+  const s = modFree.addFlash(a, { text: '周末导照片', date: '2026-11-12' });
+  assert.strictEqual(s.flashes[0].sync, 'pending');
+  assert.ok(s.flashes[0].source.length <= 32, 'source 超过 gtd 上限');
+  assert.deepStrictEqual(s, modFree.normalize(s));
+  const d = modFree.addDoc(s, { title: '', body: '字'.repeat(25000) });
+  assert.strictEqual(d.docs[0].body.length, 20000, '长文上限不是 2 万字');
+  assert.strictEqual(d.docs[0].title, '未命名长文');
+  const dirty = modFree.normalize({ flashes: [{ id: 'x', text: ' y ', evil: 1 }], evil: 1 });
+  assert.deepStrictEqual(dirty, modFree.normalize(dirty));
+  assert.strictEqual(Object.keys(dirty.flashes[0]).indexOf('evil'), -1);
+  const m = modFree.mergeSection(a, d);
+  assert.ok(m.added >= 2);
+  assert.strictEqual(modFree.mergeSection(m.state, d).added, 0, '第二次合并又补了一遍');
+});
+
+test('v2', 'free/写作法体检：长句分级、弱化词定位、逐句拼接不丢字、永不改写', function () {
+  const first = '他非常慢慢地被进行了一番说明，其实没有予以解释。';
+  const text = first + '字'.repeat(65) + '。';
+  const r = modWriting.analyze(text);
+  assert.strictEqual(r.sentences[1].level, 'hard');
+  assert.ok(r.counts.weak >= 3);
+  assert.ok(r.counts.passive >= 1 && r.counts.heavy >= 2);
+  assert.strictEqual(r.sentences.map(function (x) { return x.text; }).join(''), text);
+  assert.strictEqual(r.sentences[0].text, first, '体检改写了原文');
+});
+
+test('v2', 'free/接线：白名单、备份注入与导入、打包清单三处齐', function () {
+  const api = fs.readFileSync(path.resolve(__dirname, '../../src/core/api-layer.js'), 'utf8');
+  const main = fs.readFileSync(path.resolve(__dirname, '../../src/main/main-v2.js'), 'utf8');
+  const yml = fs.readFileSync(path.resolve(__dirname, '../../electron-builder-v2.yml'), 'utf8');
+  ['free.board', 'free.flashAdd', 'free.docAdd', 'writing.check'].forEach(function (k) {
+    assert.ok(api.indexOf("'" + k + "'") >= 0, '白名单缺 ' + k);
+  });
+  assert.ok(main.indexOf('obj.freewrite = freeStore.read()') >= 0, '备份没带新键');
+  assert.ok(main.indexOf("['freewrite', freeStore, freeMod]") >= 0, '导入没接新键');
+  assert.ok(yml.indexOf('src/free/**/*') >= 0 && yml.indexOf('src/writing/**/*') >= 0, '打包清单漏了');
 });
 
 console.log('');

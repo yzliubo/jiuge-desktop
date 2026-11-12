@@ -8,7 +8,10 @@ const assert = require('assert');
 const { spawn, execSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../..');
-const exe = path.join(root, 'build-v2', '九格手记-v2-便携版.exe');
+// 旧产物被环境独占时，允许用 JIUGE_EXE_PATH 指向本次真打出来的那一份
+const exe = process.env.JIUGE_EXE_PATH
+  ? path.resolve(process.env.JIUGE_EXE_PATH)
+  : path.join(root, 'build-v2', '九格手记-v2-便携版.exe');
 const userData = path.join(os.tmpdir(), 'jiuge-exe-e2e-' + Date.now());
 // 便携版会解包到 %TEMP%\<appId>。如果不同轮次/其他实例共用同一个解包目录，
 // 删不掉的旧文件会被改名成 xxxX 然后跳过，剩下的半截目录里缺 ffmpeg.dll / resources.pak，

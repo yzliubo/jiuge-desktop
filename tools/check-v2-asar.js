@@ -6,6 +6,7 @@ const crypto = require('crypto');
 
 // 打包目录可用环境变量指到别处：本机 build-v2/win-unpacked 有时会被
 // 残留进程 / 杀软句柄占住，改输出到 build-v2b 时用它核对，不必动产物位置。
+// JIUGE_EXE_PATH 可单独指定 exe（例如 asar 在 build-v2b、已交付 exe 在 build-v2）。
 const outDir = process.env.JIUGE_BUILD_DIR || 'build-v2';
 const asarPath = outDir + '/win-unpacked/resources/app.asar';
 const list = asar.listPackage(asarPath);
@@ -46,6 +47,10 @@ jsEntries.forEach(function (x) {
 });
 // 独立阅读窗口是纯静态页（不进 vite 构建），单独读进来一起做文案/选择器探针
 ['renderer-v2/reader/index.html', 'renderer-v2/reader/reader.js', 'renderer-v2/reader/reader.css'].forEach(function (rel) {
+  if (entry(rel)) { try { bundle += read(rel).toString('utf8'); } catch (e) { /* 缺文件由下面探针报 NO */ } }
+});
+// 两个 HTML 入口：主窗 index.html 与独立账本窗 finance.html（Vite 双入口构建产物）
+['renderer-v2/dist/index.html', 'renderer-v2/dist/finance.html'].forEach(function (rel) {
   if (entry(rel)) { try { bundle += read(rel).toString('utf8'); } catch (e) { /* 缺文件由下面探针报 NO */ } }
 });
 
@@ -90,6 +95,9 @@ const probes = [
   // 图书馆 / 读书笔记（V2.3）：两类阅读 + 行内批注 + 伴读三问 + 九格回写
   '图书馆', '休闲娱乐阅读', '读书笔记 · 数据库', '伴读三问', '批注贴着原文长',
   '闪念入格', '已入九格', '汇总旧摘录', 'reading.addNote', 'reading.importGrowthQuotes',
+  // V2.14：主题阅读自建书单（权威源迁到 md_reading），与休闲功能一致
+  '主题书单现在由这里维护', '导入学习成长的旧主题书单', '建主题', '主题新书名',
+  'reading.themeAdd', 'reading.importGrowthThemes', '翻开读',
   // 本地电子书（V2.4）：拖放 / 选择 / 详细列表 / 封面预览
   '把本电脑的电子书拖到这里', '选择电子书', '详细列表', '封面预览',
   'rd-card-img', 'reading.addFiles', 'reading.cover',
@@ -109,7 +117,23 @@ const probes = [
   '引原文', 'rr-ask-quote', 'pickAskQuote',
   // V2.10：右栏三阶九问面板取代自由表单；浮窗只留读中三问；划线工具条带快捷问
   '三阶九问', 'rr-q9-list', 'rr-q9-edit', 'renderQ9', 'commitQ9',
-  'data-ask="0"', 'data-ask="2"', 'contextmenu', 'Q2 · 它打算怎么回答'
+  'data-ask="0"', 'data-ask="2"', 'contextmenu', 'Q2 · 它打算怎么回答',
+  // V3.0 独立家庭账本窗口（Vite 双入口）：三栏 + 九模块 + 会计骨架
+  '九格手记 · 家庭账本', 'fin-card', 'fw-kpi', 'fin-trend', '净资产', '本月速览', '资产负债表',
+  '储蓄率', '自动分类规则', '储蓄目标', '周期与订阅', '规则命中',
+  '导入', '导出 CSV', '信封', '超支', '整数分', '交易对方', 'finance.netWorth',
+  'finance.bulkUpdate', 'finance.detectSubscriptions', 'finance.insights',
+  // V3.1 规格统一 + 三库联动：主窗同尺寸 / 手记收支只读联动 / 梦想账户并入储蓄目标
+  '手记收支 · 九格', '导入到账本', '导入本月待导入', '手记待导入',
+  '梦想账户已并入本页', '存入梦想账户', '栏宽已恢复默认',
+  'finance.moneyRows', 'finance.importMoneyRows', 'dream.deposit',
+  // 多语言：设置页语言选择 + 渲染层词典
+  '8 · 语言', '跟随系统 / Auto', '繁體中文', '日本語', 'English',
+  'jiuge.ui.locale', 'data-i18n-src', 'Nine Squares Journal',
+  // V3.2 自由记录三合一 + 胶囊降级（docs/28）
+  '自由记录 · 三合一', '① 胶囊收录', '② 闪念快记', '③ 长文撰写',
+  '胶囊 · 给未来的信', '今日到期', '已同步收件箱', '海明威', '不套 ARI',
+  'free.board', 'free.flashAdd', 'free.docAdd', 'writing.check'
 ];
 
 console.log('  asar: ' + asarPath);
@@ -121,15 +145,28 @@ console.log('  src/reading/board.js 在包内: ' + (entry('src/reading/board.js'
 console.log('  src/reading/epub.js 在包内: ' + (entry('src/reading/epub.js') ? 'YES' : 'NO'));
 console.log('  src/reading/reader-source.js 在包内: ' + (entry('src/reading/reader-source.js') ? 'YES' : 'NO'));
 console.log('  renderer-v2/reader/index.html 在包内: ' + (entry('renderer-v2/reader/index.html') ? 'YES' : 'NO'));
+// V3.0 新入口：漏了 finance.html 或 src/finance/board.js，独立账本窗会白屏 / 主进程 require 直接崩
+console.log('  renderer-v2/dist/finance.html 在包内: ' + (entry('renderer-v2/dist/finance.html') ? 'YES' : 'NO'));
+console.log('  src/finance/board.js 在包内: ' + (entry('src/finance/board.js') ? 'YES' : 'NO'));
+const financeJs = jsEntries.filter(function (x) { return /\/finance-.*\.js$/.test(posix(x)); });
+console.log('  dist/assets/finance-*.js 在包内: ' + (financeJs.length ? 'YES (' + financeJs.map(posix).join(', ') + ')' : 'NO'));
+console.log('  src/free/board.js 在包内: ' + (entry('src/free/board.js') ? 'YES' : 'NO'));
+console.log('  src/writing/check.js 在包内: ' + (entry('src/writing/check.js') ? 'YES' : 'NO'));
 console.log('  packaged main: ' + JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8')).main);
 console.log('');
+const misses = [];
 probes.forEach(function (s) {
-  console.log('  ' + s + ' => ' + (bundle.indexOf(s) >= 0 ? 'YES' : 'NO'));
+  const hit = bundle.indexOf(s) >= 0;
+  if (!hit) misses.push(s);
+  console.log('  ' + s + ' => ' + (hit ? 'YES' : 'NO'));
 });
+console.log('');
+console.log('  探针合计 ' + probes.length + ' 条，未命中 ' + misses.length + ' 条' + (misses.length ? '：' + misses.join(' / ') : ''));
 
-const exePath = 'build-v2/九格手记-v2-便携版.exe';
+const exePath = process.env.JIUGE_EXE_PATH || (outDir + '/九格手记-v2-便携版.exe');
 const buf = fs.readFileSync(exePath);
 console.log('');
+console.log('  exe: ' + exePath);
 console.log('  exe 字节: ' + buf.length);
 console.log('  exe SHA256: ' + crypto.createHash('sha256').update(buf).digest('hex'));
 console.log('  app.asar 字节: ' + fs.statSync(asarPath).size);

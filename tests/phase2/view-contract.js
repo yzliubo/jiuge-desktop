@@ -235,9 +235,13 @@ check('原小程序 5 页能力桌面化 + V1.1 新增视图全部接入主窗',
   // 右栏能写的是设置类数据，正文仍只在主栏
   assert(/@save/.test(opts) && /emit\('save'/.test(opts), '本页选项没接 save（改了存不下去）');
   const types = read('renderer-v2/src/types.ts');
-  ['今天', '时间轴', '回顾', '胶囊', '坚持', '数据中心'].forEach(function (n) {
+  // 2026-11-12：胶囊功能单一，从一级导航降到顶栏（书写 / 到期两个弹窗），
+  // 腾出的位置给三合一的「自由记录」。导航仍 7 项 + 设置（GUI #09 / #122）。
+  ['今天', '时间轴', '回顾', '自由记录', '坚持', '数据中心'].forEach(function (n) {
     assert(types.indexOf("label: '" + n + "'") >= 0, '一级导航缺少 ' + n);
   });
+  assert(!/label: '胶囊'/.test(types), '胶囊仍在占一级导航');
+  assert(/class="capsule-btn"/.test(app), '顶栏缺少胶囊按钮');
   assert(/mode="timeline"/.test(app) && /mode="retro"/.test(app), '时间轴 / 回顾未分别指定单一职责');
   assert(/@go-data="navigate\('data'\)"/.test(app), '设置页未跳转数据中心');
   assert(!/class="placeholder"/.test(app), '仍存在占位视图');
@@ -611,7 +615,7 @@ check('右栏按模块联动：子面板一一对应，且只有「选中项详�
   });
   // 每个模块必须有专属分支，不能出现「fallback 到同一份卡片」
   assert(/v-if="view === 'today'"/.test(panel), '缺少 today 的专属右栏分支');
-  ['cell', 'insight', 'timeline', 'review', 'capsule', 'habit', 'data', 'inspire'].forEach(function (v) {
+  ['cell', 'insight', 'timeline', 'review', 'capsule', 'free', 'habit', 'data', 'inspire'].forEach(function (v) {
     assert(new RegExp("v-else-if=\"view === '" + v + "'\"").test(panel), '缺少 ' + v + ' 的专属右栏分支');
   });
   // 单格分支：工作格与学习格各自成栏（要能改选中项的详情），金钱与其余六格仍在 CellContext
@@ -1305,18 +1309,30 @@ check('图书馆接线：顶栏入口 / ViewKey / 视图 / 右栏四处在位，
   assert(panel.indexOf("reading: ''") >= 0, '右栏 HINTS 缺少 reading');
 });
 
-check('图书馆：主题阅读只读 md_growth，不得出现第二份书单写口', function () {
+check('图书馆：主题阅读 V2.14 自建书单（md_reading），功能与休闲一致', function () {
   const v = read('renderer-v2/src/views/ReadingView.vue');
-  assert(v.indexOf('reading.themeAdvance') >= 0, '主题翻页未转发 growth');
-  assert(v.indexOf('书单仍由') >= 0, '主题分区未告知书单归属');
+  assert(v.indexOf('reading.themeAdvance') >= 0, '主题翻页通道仍在');
+  assert(v.indexOf('reading.themeAdd') >= 0 && v.indexOf('addNewTheme') >= 0, '主题页缺少自建主题');
+  assert(v.indexOf('reading.addFiles') >= 0 && v.indexOf('pickThemeFiles') >= 0, '主题页缺少导入电子书');
+  assert(v.indexOf('reading.importGrowthThemes') >= 0, '主题页缺少一次性迁移旧书单');
+  assert(v.indexOf('themes') >= 0 && v.indexOf('themeGroups') >= 0, '主题分组未接新权威源');
   assert(v.indexOf('reading.addBook') >= 0, '休闲阅读缺少自建书单');
+  // 主题页与休闲页同款批注器：章节大纲 / 伴读三问 / 闪念 / 已有笔记
+  assert(v.indexOf('主题阅读器') >= 0 && v.indexOf('章节大纲') >= 0 && v.indexOf('伴读三问') >= 0,
+    '主题批注器未与休闲阅读对齐');
   const main = read('src/main/main-v2.js');
-  assert(main.indexOf('function themeBooksFlat()') >= 0, '主进程缺少主题书单只读派生');
-  assert(main.indexOf('growth.advanceBook(s, themeId, bookId, delta)') >= 0, '主进程未把翻页转发 growth');
+  assert(main.indexOf('function themeBooksFlat()') >= 0, '旧 growth 书单只读派生仍保留（导入用）');
+  assert(main.indexOf('function themeGroupsFromReading()') >= 0, '主进程缺少主题书新派生');
+  assert(main.indexOf("'reading.importGrowthThemes'") >= 0, '主进程缺旧书单迁移路由');
+  assert(main.indexOf("mode: b.themeId ? 'theme' : 'leisure'") >= 0, '阅读窗未按 themeId 判 mode');
   assert(main.indexOf('obj.reading = readingStore.read()') >= 0, '备份导出未注入 reading 段');
   assert(main.indexOf("['reading', readingStore, readingMod]") >= 0, '备份导入未接 reading 段');
+  const board = read('src/reading/board.js');
+  assert(board.indexOf('function addTheme') >= 0 && board.indexOf('function importGrowthThemes') >= 0,
+    '领域层缺少主题 mutator');
   const white = read('src/core/api-layer.js');
   assert(white.indexOf("'reading.themeAdvance'") >= 0, '白名单缺 reading.themeAdvance');
+  assert(white.indexOf("'reading.importGrowthThemes'") >= 0, '白名单缺 reading.importGrowthThemes');
   assert(white.indexOf("'reading.exportMd'") >= 0, '白名单缺 reading.exportMd');
   assert(read('electron-builder-v2.yml').indexOf('src/reading/**/*') >= 0, '打包清单漏了 src/reading');
 });
@@ -1472,7 +1488,12 @@ check('阅读器详细功能：书签 / 书内搜索 / 划选标注 / 多字体�
   const b = read('src/reading/board.js');
   assert(b.indexOf('function normAnchor') >= 0 && b.indexOf('HL_COLORS') >= 0, '笔记标注字段没进 normalize');
   assert(b.indexOf('function normBookmark') >= 0 && b.indexOf('MAX_BOOKMARKS') >= 0, '缺书签实体与上限');
-  assert(b.indexOf("['books', 'chapters', 'notes', 'bookmarks']") >= 0, '备份合并漏了书签');
+  // 2026-11-11 口径同步：字体方案（themes）并入后，合并段落是五段且顺序有调整。
+  // 逐个 key 验，比写死整个数组字面量稳，也不会把「漏段」放过去。
+  const merge = b.slice(b.indexOf('function mergeSection'), b.indexOf('function mergeSection') + 600);
+  ['books', 'chapters', 'notes', 'bookmarks', 'themes'].forEach(function (k) {
+    assert(new RegExp("'" + k + "'").test(merge), '备份合并漏了 ' + k);
+  });
   const rs = read('src/reading/reader-source.js');
   assert(rs.indexOf('function search') >= 0 && rs.indexOf('function plainText') >= 0, '缺书内搜索');
 });
@@ -1653,7 +1674,7 @@ check('三阶九问浮窗：单问触发 / 可跳过 / 前附页不出卡 / 可�
   // 双击书架直接翻开
   const v = read('renderer-v2/src/views/ReadingView.vue');
   assert(v.indexOf('@dblclick="startBook(b)"') >= 0, '书架行没有双击开读');
-  assert(v.indexOf("@dblclick=\"openBook('theme', b)\"") >= 0, '主题书行没有双击开读');
+  assert(v.indexOf("@dblclick=\"startThemeBook(b)\"") >= 0, '主题书行没有双击开读');
   assert((v.match(/@dblclick\.stop/g) || []).length >= 2, '书行动作区没拦双击冒泡（会误触发开读）');
 });
 
@@ -1794,6 +1815,171 @@ check('首页天气：只经主进程、渲染层没有 URL、关了就不发请
   const status = read('renderer-v2/src/components/StatusBar.vue');
   assert(/仅天气联网/.test(status), '底栏没有「仅天气联网」这一态');
   assert(/wxOn/.test(status), '底栏没接天气开关');
+});
+
+// ---------- V2.14：联网天气 ↔ 今天概况（主理人改口径） ----------
+check('联网天气关联今天概况：映射只一份、只联动今天、点一次保存就落盘', function () {
+  const board = read('src/weather/board.js');
+  const use = read('renderer-v2/src/composables/useWeather.ts');
+  const extras = read('renderer-v2/src/components/TodayExtras.vue');
+  const pill = read('renderer-v2/src/components/WeatherPill.vue');
+  const ctx = read('renderer-v2/src/components/context/TodayContext.vue');
+  const app = read('renderer-v2/src/App.vue');
+  const set = read('renderer-v2/src/components/SettingsView.vue');
+  const bridge = read('renderer-v2/src/bridge.ts');
+
+  // 8 档折算只在领域层做一次：渲染层再抄一份 WMO 代码表，两套映射迟早漂移
+  assert(/toBaseWeather\s*\(/.test(board) && /baseWeather:/.test(board), '领域层没有 8 档折算');
+  assert(/baseWeather/.test(bridge), 'bridge 的 WeatherNow 没有 baseWeather');
+  assert(!/weather_code|WMO|CODE_TO_BASE/.test(extras + ctx + pill), '渲染层重复实现了 WMO 映射');
+  assert(/autoWeather/.test(use), 'useWeather 没有给出可自动带入的档位');
+
+  // 断网才手填：autoWeather 在 error / 关闭态返回空串；且只对今天生效
+  assert(/state\.error/.test(use) && /return ''/.test(use), '断网没有转手填');
+  assert(/localDate\(\)/.test(extras) && /isToday/.test(extras), '没有按日期限定「只联动今天」');
+  assert(/manual/.test(extras) && /autoWx/.test(extras), '没有手填 / 自动二态');
+
+  // 「点击保存直接记录」：两个保存按钮都带 base，浮层一键落盘由 App 收口
+  const saves = extras.match(/persist\(\{ base: base\.value \}\)/g) || [];
+  assert(saves.length >= 2, '不是两个保存按钮都带上 base（会逼用户点两次）');
+  assert(/@click="saveAll"/.test(extras), '「保存今日记录」没接 saveAll');
+  assert(/记进今天/.test(pill), '天气浮层没有「记进今天」');
+  assert(/onSaveToToday/.test(app) && /base\s*=\s*Object\.assign/.test(app), 'App 没接浮层保存');
+
+  // 概览卡标来源；上一轮「永不覆盖」的旧口径必须清干净，不能两处说法打架
+  assert(/wxTag/.test(ctx) && /联网/.test(ctx), '今天概览没有标出联网来源');
+  assert(set.indexOf('不会被自动值覆盖') < 0, '设置页还留着上一轮旧口径');
+  assert(board.indexOf('绝对不行') < 0, 'board.js 还留着上一轮旧口径注释');
+});
+
+// ---------- 账本窗口 V3.1：规格与主窗一致 + 三库联动只走白名单 ----------
+check('账本窗与主窗同规格；手记收支只读联动、梦想账户并入储蓄目标', function () {
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const view = read('renderer-v2/src/views/FinanceView.vue');
+
+  // 两个 BrowserWindow 的宽高与下限必须逐字相同
+  assert(/width:\s*1440,[\s\S]{0,80}height:\s*900,[\s\S]{0,80}minWidth:\s*1024,[\s\S]{0,80}minHeight:\s*680/.test(main),
+    '主窗规格被改动或没找到');
+  const fin = main.slice(main.indexOf('function openFinanceWindow'), main.indexOf('function openFinanceWindow') + 900);
+  assert(/width:\s*1440/.test(fin) && /height:\s*900/.test(fin), '账本窗宽高与主窗不一致');
+  assert(/minWidth:\s*1024/.test(fin) && /minHeight:\s*680/.test(fin), '账本窗最小尺寸与主窗不一致');
+  // 三栏规格也要一致：默认 240 / 300、中栏 ≥420、可拖、双击复位
+  assert(/NAV_DEF\s*=\s*240/.test(view) && /RAIL_DEF\s*=\s*300/.test(view)
+    && /CENTER_MIN\s*=\s*420/.test(view), '账本窗栏宽常量与主窗不一致');
+  assert(/var\(--nav-w, 240px\)/.test(view) && /var\(--rail-w, 300px\)/.test(view),
+    '栏宽没走与主窗同款 CSS 变量');
+  assert(/col-divider/.test(view) && /resetLayout/.test(view), '账本窗缺可拖栏宽或双击复位');
+
+  // 两个新通道：白名单 / 主进程 / 视图三处齐
+  ['finance.moneyRows', 'finance.importMoneyRows'].forEach(function (n) {
+    assert(api.indexOf("'" + n + "'") >= 0, '白名单缺 ' + n);
+    assert(main.indexOf("'" + n + "'") >= 0, '主进程缺 ' + n);
+    assert(view.indexOf("'" + n + "'") >= 0, '视图没调用 ' + n);
+  });
+  // 只读联动：账本绝不改写九格日记；梦想账户的存入必须写回 dream.deposit
+  assert(view.indexOf('diaries:upsert') < 0 && view.indexOf('morning_diary_') < 0,
+    '账本窗在改写九格日记（只允许只读汇总）');
+  assert(/dream\.deposit/.test(view), '梦想账户存入没写回 dream.deposit');
+  assert(/finance\.updateGoal/.test(view), '本地储蓄目标存入没走 finance.updateGoal');
+  assert(/moneyBook\.normalize/.test(main), '主进程没有清洗手记收支数据');
+});
+
+// ---------- 2026-11-11 九格界面：去日期 / 标题直达 / 按模块引导语 ----------
+check('九格页头无日期、标题单击进模块、占位语按模块随机取词', function () {
+  const grid = read('renderer-v2/src/components/GridEditor.vue');
+  const tpl = grid.slice(grid.indexOf('<template>'), grid.indexOf('</template>'));
+
+  // 1) 日期文字下线，但补记标记、进度统计、保存态一个都不能丢
+  assert(!/\{\{\s*record\.date\s*\}\}/.test(tpl), '九格页头还在渲染日期');
+  assert(/class="date-title"/.test(tpl) && /v-if="backfill"/.test(tpl), '补记标记被一起删了');
+  assert(/已写 \{\{ filledCount \}\} \/ \{\{ GRID_KEYS\.length \}\} 格/.test(tpl), '页头进度统计被删了');
+  assert(/'badge-on': dirty/.test(tpl), '保存状态徽标被删了');
+
+  // 2) 标题即入口：可单击、可读、键盘可达，双击兜底仍在且按钮双击不重复跳转
+  assert(/<button[\s\S]{0,80}class="cell-label"/.test(tpl), '格位标题不是 button（键盘不可达）');
+  assert(/class="cell-label"[\s\S]{0,320}@click\.stop="emit\('open-cell', key\)"/.test(tpl),
+    '单击标题没有走 open-cell');
+  assert(/'进入' \+ GRID_LABELS\[key\] \+ '模块'/.test(tpl), '标题缺 aria-label');
+  assert(/@dblclick="onCellDblClick\(\$event, key\)"/.test(tpl), '双击进主功能的兜底入口被删了');
+  assert(/el\.tagName === 'BUTTON'/.test(grid), '按钮双击会连发跳转');
+
+  // 3) 占位语：按 key 绑定、走同源 promptFor、leisure 视图层补词、按日随机、可换一批
+  assert(tpl.indexOf('随手一句，可写多行') < 0, '九格仍共用同一句占位语');
+  assert(/:placeholder="prompts\[key\] \|\| FALLBACK_PROMPTS\[key\]"/.test(tpl), '占位语没按格位绑定');
+  assert(/callDomain<string>\('promptFor'/.test(grid), '引导语没接领域层同源题库');
+  assert(/LEISURE_PROMPTS/.test(grid) && /k === 'leisure'/.test(grid), '休闲娱乐格没有专属引导语');
+  assert(/dailyOffset/.test(grid) && /firstWeekState/.test(grid), '缺按日随机或头七天判定');
+  assert(/shufflePrompts/.test(grid) && /换一批引导语/.test(tpl), '缺「换一批引导语」入口');
+});
+
+check('多语言：设置页语言选择、渲染层词典与零改写红线', function () {
+  const src = function (rel) { return fs.readFileSync(path.join(root, rel), 'utf8'); };
+  const set = src('renderer-v2/src/components/SettingsView.vue');
+  const app = src('renderer-v2/src/App.vue');
+  const fin = src('renderer-v2/src/finance-main.ts');
+  const i18n = src('renderer-v2/src/i18n/useI18n.ts');
+  assert(set.indexOf('8 · 语言') >= 0 && set.indexOf('setLocale') >= 0, '设置页缺语言选择');
+  assert(set.indexOf('data-no-i18n') >= 0, '语言名按钮没有免翻译标记');
+  assert(app.indexOf('initI18n()') >= 0 && fin.indexOf('initI18n()') >= 0, '主窗 / 账本窗没初始化语言');
+  assert(i18n.indexOf('input, textarea, [contenteditable]') >= 0, '语言层没排除输入与用户内容区');
+  assert(!/fetch\(|XMLHttpRequest/.test(i18n), '语言层发起了网络请求');
+  const d = JSON.parse(src('renderer-v2/src/i18n/dict.json'));
+  assert(d.exact && d.exact['en-US'] && d.patterns.length >= 1, '词典缺英文或参数模板');
+  const l = JSON.parse(src('renderer-v2/src/i18n/locales.json'));
+  ['en-US', 'zh-Hant', 'ja-JP', 'zh-Hans'].forEach(function (c) {
+    assert(l[c] && l[c].meta && l[c].meta.code === c, '语言包缺 ' + c);
+  });
+});
+
+// ---------- 自由记录模块三合一 + 胶囊降级（docs/28）----------
+check('自由记录：胶囊降顶栏 / 三 tab / 新键六处接线 / 闪念同步只在主进程', function () {
+  const types = read('renderer-v2/src/types.ts');
+  const app = read('renderer-v2/src/App.vue');
+  const modal = read('renderer-v2/src/components/CapsuleModal.vue');
+  const free = read('renderer-v2/src/views/FreeView.vue');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const yml = read('electron-builder-v2.yml');
+  const board = read('src/free/board.js');
+
+  assert(types.indexOf("'free'") >= 0, 'ViewKey 缺少 free');
+  assert(app.indexOf("import FreeView from './views/FreeView.vue'") >= 0, 'App 未接入 FreeView');
+  assert(app.indexOf("view === 'free'") >= 0, 'App 缺少 free 视图分支');
+  assert(app.indexOf('class="capsule-btn"') >= 0 && app.indexOf("openCapsuleModal('write')") >= 0, '顶栏胶囊按钮未接线');
+  assert(app.indexOf('<CapsuleModal') >= 0, '弹窗未挂载');
+  assert(/navigate\('free'\)/.test(app), '九格自由格未落到同一视图（入口唯一）');
+
+  // 弹窗两态：书写态复用原组件，领域层与「封存中不泄露正文」一行未改
+  assert(modal.indexOf('<CapsuleView') >= 0, '书写态没复用 CapsuleView');
+  assert(modal.indexOf('capsuleGroups') >= 0, '到期态没有数据来源');
+  assert(modal.indexOf('openCapsule') >= 0, '到期态不能开读');
+
+  ['① 胶囊收录', '② 闪念快记', '③ 长文撰写'].forEach(function (t) {
+    assert(free.indexOf(t) >= 0, '自由记录缺 tab：' + t);
+  });
+  assert(free.indexOf('free.flashAdd') >= 0 && free.indexOf('free.board') >= 0, '闪念未接新键');
+  assert(free.indexOf('writing.check') >= 0, '写作法体检未接线');
+  // 长文正文绝不落进当日日记格（2000 字上限 + 每次保存整篇 record 全量写）
+  assert(!/\.cells\.free\s*=|\.cells\.free\s*\+/.test(free), '长文正文误写进 cells.free');
+  assert(!/v-html|fetch\(|XMLHttpRequest/.test(free), '自由记录视图出现越权或直插正文');
+  assert(!/https?:\/\//.test(free), '自由记录视图含远程 URL');
+  assert(free.indexOf('gtd.add') < 0, '渲染层越权写 GTD');
+
+  // 胶囊权威源仍是冻结的 diary-store：渲染层只能读主进程派生的元信息
+  assert(main.indexOf("'free.capsuleIndex'") >= 0, '主进程缺胶囊只读派生路由');
+  assert(free.indexOf('listCapsules') < 0, '渲染层直接读 listCapsules 会泄露封存正文');
+  assert(main.indexOf("makeDomainStore('md_freewrite', freeMod)") >= 0, '缺 md_freewrite 单键');
+  assert(main.indexOf('obj.freewrite = freeStore.read()') >= 0, '备份未注入 freewrite 段');
+  assert(main.indexOf("['freewrite', freeStore, freeMod]") >= 0, '备份导入未接 freewrite 段');
+  ['free.board', 'free.flashAdd', 'free.docAdd', 'writing.check'].forEach(function (k) {
+    assert(api.indexOf("'" + k + "'") >= 0, '白名单缺 ' + k);
+  });
+  assert(yml.indexOf('src/free/**/*') >= 0 && yml.indexOf('src/writing/**/*') >= 0, '打包清单漏新领域层');
+  assert(board.indexOf('function mergeSection') >= 0 && board.indexOf('function normalize') >= 0,
+    '新键领域层缺 normalize / mergeSection');
+  assert(board.indexOf('DOC_BODY_MAX = 20000') >= 0, '长文上限被改小或写死');
+  assert(main.indexOf('gtd.addTask(s, {') >= 0, '主进程未做闪念 → 收件箱同步');
 });
 
 console.log('');

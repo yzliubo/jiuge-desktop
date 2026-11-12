@@ -2,9 +2,10 @@
 // 读书笔记（md_reading）——纯领域层，CommonJS，零第三方依赖。
 //
 // ---- 三张表各自是什么 ----
-// books    : 仅「休闲娱乐」的书。主题阅读的书单权威源在 md_growth.themes[].books，
-//            本模块绝不复制那份数据，只在 board / exportMarkdown 里接受主进程传入的
-//            扁平 themeBooks 供展示，且只读、不改、不写回 state。
+// books    : 休闲娱乐 + 主题阅读共用本表。themeId 为空 = 休闲书；非空 = 归属该主题，
+//            因此主题书同样有 filePath，能用同一个阅读窗口、章节、进度、三阶九问与笔记落库。
+// themes    : 主题（学习单元）本身。V2.14 权威源由 md_growth 迁到 md_reading；
+//            md_growth 里的旧书单仅作「一次性导入」来源，导入后原样保留、不再写回。
 // notes    : 两类阅读产生的全部笔记汇总，是「读书笔记」数据库的本体。每条冗余存
 //            bookTitle，使书被删掉之后笔记仍然可读；orphan 只是派生判断，不落库。
 // chapters : 本地章节大纲（不是 AI 思维导图），挂在休闲书上，两层树。
@@ -18,6 +19,7 @@
 
 // ---------- 常量 ----------
 const MAX_BOOKS = 60;
+const MAX_THEMES = 20;
 const MAX_NOTES = 2000;
 const MAX_CHAPTERS = 300;
 // 书签独立成表：书签是「我的位置」，不是「读书笔记」，混进 notes 会污染笔记库语义
@@ -25,6 +27,8 @@ const MAX_BOOKMARKS = 200;
 const MAX_TAGS = 8;
 
 const TITLE_MAX = 60;
+const THEME_TITLE_MAX = 60;
+const THEME_NOTE_MAX = 200;
 const AUTHOR_MAX = 40;
 const BOOK_TITLE_MAX = 80;
 const NOTE_MAX = 200;
@@ -172,7 +176,7 @@ function dateOf(ts) {
 
 // ---------- 空态 ----------
 function empty() {
-    return { version: 1, books: [], chapters: [], notes: [], bookmarks: [], updatedAt: 0 };
+    return { version: 1, books: [], chapters: [], notes: [], bookmarks: [], themes: [], updatedAt: 0 };
 }
 
 // ---------- 实体 normalize：未知字段一律不保留 ----------
@@ -186,6 +190,7 @@ function normBook(b, seen, fallbackId) {
     const done = status === 'done' ? total : num(o.done, 0, total, 0);
     return {
         id: id,
+        themeId: clean(o.themeId, ID_MAX),
         title: title,
         author: clean(o.author, AUTHOR_MAX),
         total: total,
@@ -203,6 +208,20 @@ function normBook(b, seen, fallbackId) {
         startedAt: validDate(o.startedAt),
         finishedAt: status === 'done' ? validDate(o.finishedAt) : '',
         createdAt: num(o.createdAt, 0, TS_MAX, 0)
+    };
+}
+
+// 主题：一个学习单元；书靠 books[].themeId 归属，笔记靠 notes.themeId 归属
+function normTheme(t, seen, fallbackId) {
+    const o = isObj(t) ? t : {};
+    const title = clean(o.title, THEME_TITLE_MAX);
+    if (!title) return null;
+    return {
+        id: uniqueId(clean(o.id, ID_MAX) || fallbackId, seen),
+        title: title,
+        note: clean(o.note, THEME_NOTE_MAX),
+        createdAt: num(o.createdAt, 0, TS_MAX, 0),
+        updatedAt: num(o.updatedAt, 0, TS_MAX, 0)
     };
 }
 
@@ -320,6 +339,7 @@ function normalize(raw) {
             return fn(x, seen, prefix + '-' + i) || null;
         }).filter(function (x) { return !!x; });
     }
+    const themes = take(src.themes, normTheme, MAX_THEMES, 'th');
     const books = take(src.books, normBook, MAX_BOOKS, 'bk');
     const chapters = clampDepth(take(src.chapters, normChapter, MAX_CHAPTERS, 'ch'));
     const notes = take(src.notes, normNote, MAX_NOTES, 'nt');
@@ -335,6 +355,7 @@ function normalize(raw) {
     });
     return {
         version: 1,
+        themes: themes,
         books: books,
         chapters: chapters,
         notes: notes,
@@ -344,9 +365,9 @@ function normalize(raw) {
 }
 
 // 写操作统一出口：所有列表都重新过一遍 normalize，保证状态始终规范
-function rebuild(books, chapters, notes, updatedAt, bookmarks) {
+function rebuild(books, chapters, notes, updatedAt, bookmarks, themes) {
     return normalize({
-        version: 1, books: books, chapters: chapters, notes: notes,
+        version: 1, themes: themes || [], books: books, chapters: chapters, notes: notes,
         bookmarks: bookmarks || [], updatedAt: updatedAt
     });
 }
@@ -386,6 +407,7 @@ function addBook(state, patch) {
     const at = tsOf(p.createdAt) || Date.now();
     const raw = {
         id: str(p.id) || newId('bk'),
+        themeId: p.themeId,
         title: p.title,
         author: p.author,
         total: p.total,
@@ -404,7 +426,7 @@ function addBook(state, patch) {
         finishedAt: p.finishedAt,
         createdAt: at
     };
-    return rebuild(s.books.concat([raw]), s.chapters, s.notes, at, s.bookmarks);
+    return rebuild(s.books.concat([raw]), s.chapters, s.notes, at, s.bookmarks, s.themes);
 }
 
 function updateBook(state, id, patch) {
@@ -415,7 +437,7 @@ function updateBook(state, id, patch) {
     const books = s.books.map(function (b) {
         return b.id === key ? Object.assign({}, b, p, { id: key }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 // 只删书和它的章节；笔记一条不动（orphan 由 notesQuery 派生）
@@ -426,7 +448,7 @@ function removeBook(state, id) {
     const books = s.books.filter(function (b) { return b.id !== key; });
     if (books.length === s.books.length) return s;
     const chapters = s.chapters.filter(function (c) { return c.bookId !== key; });
-    return rebuild(books, chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 function advanceBook(state, id, delta, date) {
@@ -454,7 +476,7 @@ function advanceBook(state, id, delta, date) {
         return Object.assign({}, b, { done: done, status: status, finishedAt: finishedAt });
     });
     if (!hit) return s;
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 function setBookStatus(state, id, status, date) {
@@ -476,7 +498,130 @@ function setBookStatus(state, id, status, date) {
         }
         return next;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+// ---------- 主题（V2.14：书单权威源迁到 md_reading）----------
+function addTheme(state, patch) {
+    const s = normalize(state);
+    if (s.themes.length >= MAX_THEMES) return s;
+    const p = isObj(patch) ? patch : {};
+    const at = tsOf(p.createdAt) || Date.now();
+    const raw = {
+        id: str(p.id) || newId('th'),
+        title: p.title,
+        note: p.note,
+        createdAt: at,
+        updatedAt: at
+    };
+    return rebuild(s.books, s.chapters, s.notes, at, s.bookmarks, s.themes.concat([raw]));
+}
+
+function updateTheme(state, id, patch) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.themes.some(function (t) { return t.id === key; })) return s;
+    const p = isObj(patch) ? patch : {};
+    const at = tsOf(p.updatedAt) || Date.now();
+    const themes = s.themes.map(function (t) {
+        return t.id === key ? Object.assign({}, t, p, { id: key, updatedAt: at }) : t;
+    });
+    return rebuild(s.books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes);
+}
+
+// 删主题不删书：书解绑回休闲书架，笔记一条不动（orphan 由 notesQuery 派生）
+function removeTheme(state, id) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.themes.some(function (t) { return t.id === key; })) return s;
+    const themes = s.themes.filter(function (t) { return t.id !== key; });
+    const books = s.books.map(function (b) {
+        return b.themeId === key ? Object.assign({}, b, { themeId: '' }) : b;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes);
+}
+
+// 一次性把 md_growth 的旧主题书单 + 摘录迁进来。旧数据不删、可反复调用（按确定性 id 去重）。
+// 摘录沿用 importGrowthQuotes 的 sourceQuoteId，避免两处重复汇总；若旧摘录已汇总过，
+// 则就地改写归属到新主题书，保证「各文件的笔记都记在这一个主题之下」。
+function importGrowthThemes(state, growth) {
+    const s = normalize(state);
+    const g = isObj(growth) ? growth : {};
+    const now = Date.now();
+    let themes = s.themes.slice();
+    let books = s.books.slice();
+    let notes = s.notes.slice();
+    const themeSeen = {};
+    const bookSeen = {};
+    themes.forEach(function (t) { themeSeen[t.id] = true; });
+    books.forEach(function (b) { bookSeen[b.id] = true; });
+    let addedThemes = 0, addedBooks = 0, addedNotes = 0, relinked = 0;
+    (Array.isArray(g.themes) ? g.themes : []).forEach(function (t) {
+        if (!isObj(t) || !str(t.id)) return;
+        const tid = clean('gth-' + str(t.id), ID_MAX);
+        if (themeSeen[tid]) return;
+        themeSeen[tid] = true;
+        themes.push({
+            id: tid,
+            title: clean(t.title, THEME_TITLE_MAX) || '未命名主题',
+            note: clean(t.note, THEME_NOTE_MAX),
+            createdAt: num(t.createdAt, 0, TS_MAX, 0) || now,
+            updatedAt: now
+        });
+        addedThemes += 1;
+        (Array.isArray(t.books) ? t.books : []).forEach(function (b) {
+            if (!isObj(b)) return;
+            const bid = clean('gthbk-' + str(t.id) + '-' + str(b.id), ID_MAX);
+            if (bookSeen[bid]) return;
+            bookSeen[bid] = true;
+            books.push({
+                id: bid,
+                themeId: tid,
+                title: clean(b.title, TITLE_MAX) || '未命名书',
+                author: clean(b.author, AUTHOR_MAX),
+                total: num(b.total, 1, 9999, 300),
+                done: num(b.done, 0, 9999, 0),
+                unit: clean(b.unit, UNIT_MAX) || '页',
+                status: normStatus(b.status),
+                note: clean(b.note, NOTE_MAX),
+                coverColor: '', filePath: '', fileExt: '', fileSize: 0,
+                format: '', coverId: '',
+                source: 'manual',
+                startedAt: validDate(b.startedAt),
+                finishedAt: validDate(b.finishedAt),
+                createdAt: num(b.createdAt, 0, TS_MAX, 0) || now
+            });
+            addedBooks += 1;
+            (Array.isArray(b.quotes) ? b.quotes : []).forEach(function (q) {
+                if (!isObj(q)) return;
+                const sid = 'gq-' + str(t.id) + '-' + str(b.id) + '-' + str(q.id);
+                let idx = -1;
+                for (let i = 0; i < notes.length; i += 1) {
+                    if (notes[i].sourceQuoteId === sid) { idx = i; break; }
+                }
+                const patch = {
+                    mode: 'theme', themeId: tid, bookId: bid,
+                    bookTitle: clean(b.title, BOOK_TITLE_MAX),
+                    type: 'highlight', quote: clean(q.text, QUOTE_MAX), text: '',
+                    page: num(q.page, 0, PAGE_MAX, 0), tags: [], chapterId: '',
+                    createdAt: num(q.createdAt, 0, TS_MAX, 0) || now, sourceQuoteId: sid
+                };
+                if (idx >= 0) {
+                    notes[idx] = Object.assign({}, notes[idx], patch); // 已汇总过 → 改写归属
+                    relinked += 1;
+                } else {
+                    notes.push(Object.assign({ id: newId('nt'), color: '', style: '',
+                        anchor: '', anchorPre: '', anchorSuf: '', pushedAt: 0,
+                        pushedCell: '' }, patch));
+                    addedNotes += 1;
+                }
+            });
+        });
+    });
+    if (addedThemes || addedBooks || addedNotes || relinked) {
+        return rebuild(books, s.chapters, notes, now, s.bookmarks, themes);
+    }
+    return s;
 }
 
 // ---------- 章节 ----------
@@ -494,7 +639,7 @@ function addChapter(state, bookId, patch) {
         order: p.order,
         createdAt: at
     };
-    return rebuild(s.books, s.chapters.concat([raw]), s.notes, at, s.bookmarks);
+    return rebuild(s.books, s.chapters.concat([raw]), s.notes, at, s.bookmarks, s.themes);
 }
 
 function updateChapter(state, id, patch) {
@@ -509,7 +654,7 @@ function updateChapter(state, id, patch) {
         if (p.parentId !== undefined) next.parentId = clampParent(others, str(p.parentId), key);
         return next;
     });
-    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 // 删父章节时子章节上抬为顶层，绝不级联删
@@ -520,7 +665,7 @@ function removeChapter(state, id) {
     const chapters = s.chapters
         .filter(function (c) { return c.id !== key; })
         .map(function (c) { return c.parentId === key ? Object.assign({}, c, { parentId: '' }) : c; });
-    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks);
+    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 // ---------- 笔记 ----------
@@ -549,7 +694,7 @@ function addNote(state, patch) {
         pushedCell: p.pushedCell,
         sourceQuoteId: p.sourceQuoteId
     };
-    return rebuild(s.books, s.chapters, s.notes.concat([raw]), at, s.bookmarks);
+    return rebuild(s.books, s.chapters, s.notes.concat([raw]), at, s.bookmarks, s.themes);
 }
 
 function updateNote(state, id, patch) {
@@ -560,7 +705,7 @@ function updateNote(state, id, patch) {
     const notes = s.notes.map(function (n) {
         return n.id === key ? Object.assign({}, n, p, { id: key }) : n;
     });
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 function removeNote(state, id) {
@@ -569,7 +714,7 @@ function removeNote(state, id) {
     if (!key) return s;
     const notes = s.notes.filter(function (n) { return n.id !== key; });
     if (notes.length === s.notes.length) return s;
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 // 只写 pushedAt / pushedCell；已回写过的重复调用保持原值不覆盖
@@ -586,7 +731,7 @@ function markPushed(state, id, cell, at) {
         return Object.assign({}, n, { pushedAt: ts, pushedCell: c });
     });
     if (!hit) return s;
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
 }
 
 // ---------- 看板 ----------
@@ -610,7 +755,7 @@ function addBookmark(state, patch) {
         label: p.label,
         createdAt: tsOf(p.createdAt) || Date.now()
     };
-    return rebuild(s.books, s.chapters, s.notes, raw.createdAt, s.bookmarks.concat([raw]));
+    return rebuild(s.books, s.chapters, s.notes, raw.createdAt, s.bookmarks.concat([raw]), s.themes);
 }
 
 function removeBookmark(state, id) {
@@ -618,7 +763,7 @@ function removeBookmark(state, id) {
     const key = str(id);
     if (!key) return s;
     return rebuild(s.books, s.chapters, s.notes, s.updatedAt,
-        s.bookmarks.filter(function (m) { return m.id !== key; }));
+        s.bookmarks.filter(function (m) { return m.id !== key; }), s.themes);
 }
 
 function bookmarksOf(state, bookId) {
@@ -683,7 +828,7 @@ function board(state, themeBooks) {
     const tagTop = Object.keys(tagCount).map(function (t) { return { tag: t, count: tagCount[t] }; })
         .sort(function (a, b) { return b.count - a.count || (a.tag < b.tag ? -1 : (a.tag > b.tag ? 1 : 0)); })
         .slice(0, 12);
-    return { stats: stats, books: books, themeBooks: tb, recent: recent, tagTop: tagTop };
+    return { stats: stats, books: books, themes: s.themes, themeBooks: tb, recent: recent, tagTop: tagTop };
 }
 
 // ---------- 查询 ----------
@@ -835,7 +980,7 @@ function mergeSection(state, section) {
     const s = normalize(state);
     const incoming = normalize(section);
     let added = 0;
-    ['books', 'chapters', 'notes', 'bookmarks'].forEach(function (key) {
+    ['themes', 'books', 'chapters', 'notes', 'bookmarks'].forEach(function (key) {
         const seen = {};
         s[key].forEach(function (r) { seen[r.id] = true; });
         incoming[key].forEach(function (r) {
@@ -855,6 +1000,7 @@ module.exports = {
     NOTE_TYPE_LABEL: NOTE_TYPE_LABEL,
     PROMPTS: PROMPTS,
     MAX_BOOKS: MAX_BOOKS,
+    MAX_THEMES: MAX_THEMES,
     MAX_NOTES: MAX_NOTES,
     MAX_CHAPTERS: MAX_CHAPTERS,
     MAX_TAGS: MAX_TAGS,
@@ -866,6 +1012,10 @@ module.exports = {
     empty: empty,
     normalize: normalize,
     meta: meta,
+    addTheme: addTheme,
+    updateTheme: updateTheme,
+    removeTheme: removeTheme,
+    importGrowthThemes: importGrowthThemes,
     addBook: addBook,
     updateBook: updateBook,
     removeBook: removeBook,

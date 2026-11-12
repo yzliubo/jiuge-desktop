@@ -1,15 +1,16 @@
 // 九格手记 · 首页天气与环境（md_weather 单键）
 //
-// 为什么单独一个键、而不是塞进 base.weather：
-//   1. 九格原本有一个手填的「天气」档位（晴 / 阴 / 雨…），那是**你自己写下来的心情背景**，
-//      与「此刻窗外几度」是两件事。自动天气写进 base.weather 等于替你改日记，绝对不行；
-//   2. 自动天气是外部投影，会过期、会失败、可以关掉，生命周期与日记正文完全不同；
-//   3. 备份只带偏好，不带缓存：换台机器重新拉一次就行，不必把别人家的温度带进你的档案。
+// 2026-11-11 主理人改口径（V2.14）：上一轮把「自动天气永不写进日记」写成硬约束，
+// 现在明确要「互联网天气与今天概况直接关联，只有断网下需要手填，点击保存直接记录」。
+// 于是本模块仍**不直接写 diary-store**，但会把联网天气折算成九格 8 档之一（baseWeather）
+// 交给渲染层：联网时自动带入今日状态，断网 / 关闭时才需要手选，用户点一次保存才落盘。
 //
-// 三条硬约束（改代码前先读）：
-//   · **默认开启但可一键关闭**。关闭后主进程一次远程请求都不发，首页连占位都不渲染；
+// 反转后仍然守住的三条边界（改代码前先读）：
+//   · **写入必须由用户点保存触发**。领域层不碰 base.weather / cells，不偷偷改历史日记；
+//     已经手填过、且与自动值不同的天气不被静默覆盖；
 //   · **只存偏好**。normalize 里没有 report / temperature 字段，缓存只在主进程内存里；
-//   · **不碰日记**。本模块没有任何写 base.weather / cells 的函数。
+//     md_weather 不进 V2_SECTIONS：换台机器重新拉一次就行，不必把别人家的温度带进档案；
+//   · **默认开启但可一键关闭**。关闭后主进程一次远程请求都不发，首页连占位都不渲染。
 //
 // 纯函数、不联网：网络在 client.js，调用方把结果传进来，便于断言。
 
@@ -76,6 +77,30 @@ function describe(code) {
     const hit = WMO[Number(code)];
     if (!hit) return { text: '天气未知', icon: '·', group: 'unknown' };
     return { text: hit[0], icon: hit[1], group: hit[2] };
+}
+
+// WMO 代码 → 九格「今日状态 · 天气」的 8 档（与 diary-store.js BASE_FIELDS 逐字一致）。
+// 这一档是**日记里的一个字**，不是天气播报：所以「晴间多云」归「晴」、「雷阵雨」归「大雨」，
+// 一整串代码最终只能落到一个词上。映射放领域层，渲染层不准再实现一遍（会漂移）。
+const BASE_WEATHER = ['晴', '多云', '阴', '小雨', '大雨', '雪', '风', '雾'];
+const CODE_TO_BASE = {
+    0: '晴', 1: '晴', 2: '多云', 3: '阴',
+    45: '雾', 48: '雾',
+    51: '小雨', 53: '小雨', 55: '小雨', 56: '小雨', 57: '小雨', 61: '小雨', 80: '小雨',
+    63: '大雨', 65: '大雨', 66: '大雨', 67: '大雨', 81: '大雨', 82: '大雨',
+    95: '大雨', 96: '大雨', 99: '大雨',
+    71: '雪', 73: '雪', 75: '雪', 77: '雪', 85: '雪', 86: '雪'
+};
+const GALE_KMH = 30;
+
+/** 联网天气折算成 8 档之一；认不出的代码返回空串，交给用户手填，绝不猜一个词塞进日记。 */
+function toBaseWeather(code, wind) {
+    if (code === null || code === undefined || code === '') return '';
+    const c = Number(code);
+    const w = Number(wind);
+    // 大风只在无降水 / 无雾 / 无雪时改口记「风」；雨天再大风也还是雨天。
+    if (Number.isFinite(w) && w >= GALE_KMH && (c === 0 || c === 1 || c === 2 || c === 3)) return '风';
+    return CODE_TO_BASE[c] || '';
 }
 
 function normalizePlace(raw) {
@@ -211,7 +236,9 @@ function pack(place, current, daily, fetchedAt) {
             code: Number(cur.weather_code),
             text: d.text,
             icon: d.icon,
-            group: d.group
+            group: d.group,
+            // 给「今天概览」用的 8 档折算值：联网时自动带入今日状态，用户点保存才落盘
+            baseWeather: toBaseWeather(cur.weather_code, cur.wind_speed_10m)
         },
         today: {
             max: round1(Array.isArray(day.temperature_2m_max) ? day.temperature_2m_max[0] : null),
@@ -228,6 +255,8 @@ module.exports = {
     CITY_MAX: CITY_MAX,
     MODES: MODES,
     WMO: WMO,
+    BASE_WEATHER: BASE_WEATHER,
+    toBaseWeather: toBaseWeather,
     describe: describe,
     empty: empty,
     normalize: normalize,

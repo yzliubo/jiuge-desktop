@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 图书馆：休闲娱乐阅读 / 主题阅读 / 读书笔记（数据库）。
-// 三条硬口径（docs/13）：
-//   1. 主题阅读书单权威源是 md_growth，本页只读，翻页转发 growth.advanceBook——绝不建第二份书单；
+// 三条硬口径（docs/13，V2.14 已更新）：
+//   1. 主题书单权威源已迁到 md_reading：themes[] + books[].themeId；主题书与休闲书共用
+//      同一套 books / 阅读窗口 / 三阶九问，笔记按 themeId 归到主题下（旧 growth 书单只读保留）；
 //   2. 两类阅读的笔记统一进 md_reading.notes，即「读书笔记」数据库；
 //   3. 笔记写进九格只能追加、必须带出处，且补记态不许冒充当天。
 // 类名一律 rd- 前缀：项目里 .cell / .heat-cell 都因撞名炸过真 GUI 断言。
@@ -15,8 +16,12 @@ interface BookRow {
   unit: string; status: string; pct: number; progressText: string;
   statusLabel: string; noteCount: number; note: string; coverColor: string;
   filePath: string; fileExt: string; fileSize: number; format: string;
-  coverId: string; source: string; hasFile: boolean;
+  coverId: string; source: string; hasFile: boolean; themeId: string;
   fileMissing?: boolean; fileSizeText?: string;
+}
+// V2.14：主题书（books 里 themeId 非空的记录）按主题分组展示，带 filePath 可进阅读窗
+interface ThemeGroup {
+  themeId: string; themeTitle: string; note: string; rows: BookRow[];
 }
 interface ThemeBook {
   themeId: string; themeTitle: string; bookId: string; title: string; author: string;
@@ -34,7 +39,7 @@ interface Stats {
   leisureNotes: number; themeNotes: number; tagCount: number; thisMonth: number;
 }
 interface BoardData {
-  stats: Stats; books: BookRow[]; themeBooks: ThemeBook[];
+  stats: Stats; books: BookRow[]; themeBooks: ThemeBook[]; themeGroups: ThemeGroup[];
   recent: NoteRow[]; tagTop: Array<{ tag: string; count: number }>;
 }
 interface NotesResult {
@@ -80,6 +85,12 @@ const noteTags = ref('');
 // 即时想法：回车即存，同时进读书笔记与九格
 const flash = ref('');
 const flashCell = ref('free');
+// 主题阅读自建书单
+const newThemeTitle = ref('');
+const newThemeNote = ref('');
+const newThemeBook = ref('');       // 主题下手工加书（无本机文件的书）
+const themeSel = ref('');            // 当前展开的主题 id
+const importingTheme = ref('');      // 正在导入文件的主题 id
 // 读书笔记库筛选
 const kw = ref('');
 const fMode = ref('');
@@ -104,18 +115,11 @@ const stats = computed<Stats>(() => board.value?.stats || {
 });
 const books = computed<BookRow[]>(() => board.value?.books || []);
 const themeBooks = computed<ThemeBook[]>(() => board.value?.themeBooks || []);
-const themeGroups = computed(() => {
-  const map = new Map<string, { title: string; rows: ThemeBook[] }>();
-  themeBooks.value.forEach((b) => {
-    const g = map.get(b.themeId) || { title: b.themeTitle, rows: [] };
-    g.rows.push(b);
-    map.set(b.themeId, g);
-  });
-  return Array.from(map.entries()).map(([id, g]) => ({ id, title: g.title, rows: g.rows }));
-});
+// V2.14：主题书格局 md_reading.books 派生（每行是 BookRow，有 id 可直接开阅读窗）
+const themeGroups = computed<ThemeGroup[]>(() => board.value?.themeGroups || []);
 const tagTop = computed(() => board.value?.tagTop || []);
 const activeChapters = computed(() => {
-  if (!active.value || active.value.mode !== 'leisure') return [];
+  if (!active.value) return [];
   return chapters.value.filter((c) => c.bookId === active.value!.bookId);
 });
 const activeNotes = computed(() => notes.value.filter((n) => active.value && n.bookId === active.value.bookId));
@@ -198,24 +202,31 @@ async function pickFiles(): Promise<void> {
   const r = await pickBookFiles();
   if (r && !r.canceled) await addPaths(r.paths || []);
 }
-async function addPaths(paths: string[]): Promise<void> {
+async function addPaths(paths: string[], themeId = ''): Promise<void> {
   if (!paths.length) return;
   importing.value = true;
   try {
-    const r = await callDomain<{ added: number; skipped: number; errors: string[] } | null>('reading.addFiles', null, paths);
+    // 第二参 themeId：非空即把书归到该主题下（V2.14）
+    const r = await callDomain<{ added: number; skipped: number; errors: string[] } | null>('reading.addFiles', null, paths, themeId);
     await reload();
     await loadCovers();
     const err = r?.errors?.[0];
-    say(r?.added
-      ? '已放入 ' + r.added + ' 本' + (r.skipped ? '，跳过重复 ' + r.skipped + ' 本' : '')
-      : (err || '没有可添加的书'));
+    say((themeId ? '已放入主题 ' : '已放入 ') + (r?.added || 0) + ' 本'
+      + (r?.skipped ? '，跳过重复 ' + r.skipped + ' 本' : '') + (r?.added ? '' : (err ? '：' + err : '')));
   } finally { importing.value = false; }
 }
-async function openInReader(b: BookRow): Promise<void> {
+async function openInReader(b: BookRow, mode: 'leisure' | 'theme' = 'leisure'): Promise<void> {
   // 独立阅读窗口（目录 / 正文 / 笔记三栏）；书架留在主窗口，两窗口可并排
-  const r = await openReader(b.id, 'leisure');
+  const r = await openReader(b.id, mode);
   if (!r.ok) say(r.reason || '这本书打不开');
   else if (r.reused) say('这本书的阅读窗口已经开着');
+}
+// 主题书：有本机文件 → 独立阅读窗（与休闲阅读功能完全一致）；无文件 → 中栏批注
+function startThemeBook(b: BookRow): void {
+  themeSel.value = b.themeId || themeSel.value;
+  if (b.filePath) { void openInReader(b, 'theme'); return; }
+  openBook('theme', b);
+  say('这本是手工登记，没有本机电子书；已选中，可在右栏记笔记');
 }
 function startBook(b: BookRow): void {
   // 有本机文件 → 独立阅读窗口；手工登记的书没有正文可读，仍用中栏批注面板
@@ -253,18 +264,63 @@ async function removeBook(id: string): Promise<void> {
   say('书已移出书架；它留下的笔记仍在「读书笔记」里');
 }
 
-// ---- 主题阅读：只读 md_growth，翻页转发 ----
+// ---- 主题阅读：自建书单（V2.14）----
 async function advanceTheme(themeId: string, bookId: string, delta: number): Promise<void> {
-  await callDomain<unknown>('reading.themeAdvance', null, themeId, bookId, delta);
+  // 主题书已在 md_reading.books，走 advanceBook（themeId 仅作兼容占位）
+  await callDomain<unknown>('reading.themeAdvance', null, themeId, bookId, delta, props.today);
   await reload();
+}
+async function addNewTheme(): Promise<void> {
+  const title = newThemeTitle.value.trim();
+  if (!title) { say('先写主题名'); return; }
+  const r = await callDomain<{ id?: string } | null>('reading.themeAdd', null, { title, note: newThemeNote.value.trim() });
+  newThemeTitle.value = ''; newThemeNote.value = '';
+  await reload();
+  if (r?.id) themeSel.value = r.id;
+  say('主题已建好，现在可以往里放书了');
+}
+async function removeTheme(id: string, title: string): Promise<void> {
+  if (!window.confirm('删除主题「' + title + '」？主题下的书会移回休闲书架，笔记保留。')) return;
+  await callDomain<unknown>('reading.themeRemove', null, id);
+  if (themeSel.value === id) themeSel.value = '';
+  active.value = null;
+  await reload();
+  say('主题已删除，书已移回休闲书架');
+}
+async function addThemeBook(themeId: string): Promise<void> {
+  const title = newThemeBook.value.trim();
+  if (!title) { say('先写书名'); return; }
+  await callDomain<unknown>('reading.addBook', null, { title, themeId, total: 300, unit: '页' });
+  newThemeBook.value = '';
+  await reload();
+  say('书已放进主题，可在右栏记笔记；有电子书文件也可以拖进来读正文');
+}
+async function pickThemeFiles(themeId: string): Promise<void> {
+  const r = await pickBookFiles();
+  if (r && !r.canceled) await addPaths(r.paths || [], themeId);
+}
+async function onThemeDrop(ev: DragEvent, themeId: string): Promise<void> {
+  ev.preventDefault();
+  const files = Array.from(ev.dataTransfer?.files || []);
+  const paths = files.map((f) => pathForFile(f)).filter(Boolean);
+  if (!paths.length) { say('没读到文件；请从资源管理器拖文件，或点「选择电子书」'); return; }
+  await addPaths(paths, themeId);
+}
+async function importThemes(): Promise<void> {
+  const r = await callDomain<{ addedThemes: number; addedBooks: number; addedNotes: number; changed: boolean } | null>('reading.importGrowthThemes', null);
+  await reload();
+  say(r?.changed
+    ? '已迁移旧主题 ' + (r.addedThemes || 0) + ' 个、书 ' + (r.addedBooks || 0) + ' 本、摘录 ' + (r.addedNotes || 0) + ' 条（旧数据保留）'
+    : '没有需要迁移的旧主题书单');
 }
 
 function openBook(mode: 'leisure' | 'theme', row: BookRow | ThemeBook): void {
-  const b = row as ThemeBook;
+  const b = row as BookRow;
   active.value = {
     mode,
-    bookId: mode === 'leisure' ? (row as BookRow).id : b.bookId,
-    themeId: mode === 'theme' ? b.themeId : '',
+    // V2.14：主题书在 books 表里，主键是 id；旧 ThemeBook 走 bookId 兼容
+    bookId: mode === 'leisure' ? (row as BookRow).id : (b.id || (row as ThemeBook).bookId),
+    themeId: mode === 'theme' ? (b.themeId || (row as ThemeBook).themeId || '') : '',
     title: row.title,
     total: row.total,
     done: row.done
@@ -575,49 +631,129 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- ============ 主题阅读（书单只读 md_growth） ============ -->
+    <!-- ============ 主题阅读（V2.14：自建书单 · 与休闲阅读功能一致） ============ -->
     <div v-else-if="tab === 'theme'" class="rd-pane">
       <div class="rd-notice">
-        <span>主题与书单仍由「学习成长」维护，这里只读并负责阅读与批注——同一份书单不存两份。</span>
-        <button class="rd-mini" @click="emit('open-cell', 'growth')">去学习成长维护书单</button>
+        <span>主题书单现在由这里维护：建主题 → 往主题里放书 → 双击读正文。多格式多文件都归在同一主题下，笔记也集中记录在这里。</span>
+        <button class="rd-mini" @click="importThemes">导入学习成长的旧主题书单</button>
       </div>
-      <div v-if="!themeGroups.length" class="rd-empty">学习成长里还没有主题书单。先去那边建一个主题，再回来读。</div>
-      <section v-for="g in themeGroups" :key="g.id" class="rd-group">
-        <h2 class="rd-h2">{{ g.title }} <span class="rd-hint">{{ g.rows.length }} 本</span></h2>
-        <article v-for="b in g.rows" :key="b.bookId" class="rd-book" :class="{ 'rd-book-on': active?.bookId === b.bookId }"
-          :title="'双击翻开《' + b.title + '》'" @dblclick="openBook('theme', b)">
+
+      <!-- 新建主题 -->
+      <div class="rd-add">
+        <input v-model="newThemeTitle" class="rd-input rd-name" placeholder="新主题名，如：污水处理工艺" aria-label="新主题名" @keyup.enter="addNewTheme" />
+        <input v-model="newThemeNote" class="rd-input" placeholder="这个主题想解决什么（可不填）" aria-label="主题说明" />
+        <button class="rd-primary" @click="addNewTheme">＋ 建主题</button>
+      </div>
+
+      <div v-if="!themeGroups.length" class="rd-empty">还没有主题。先在上面建一个主题，然后把电子书拖进主题里；学习成长里的旧书单也可以一键导入。</div>
+
+      <section v-for="g in themeGroups" :key="g.themeId" class="rd-group" :class="{ 'rd-group-on': themeSel === g.themeId }">
+        <h2 class="rd-h2">
+          <button class="rd-group-title" @click="themeSel = themeSel === g.themeId ? '' : g.themeId">{{ themeSel === g.themeId ? '▾' : '▸' }} {{ g.themeTitle }}</button>
+          <span class="rd-hint">{{ g.rows.length }} 本</span>
+          <button class="rd-mini rd-mini-quiet rd-group-del" :aria-label="'删除主题 ' + g.themeTitle" @click="removeTheme(g.themeId, g.themeTitle)">删主题</button>
+        </h2>
+        <p v-if="g.note" class="rd-meta">{{ g.note }}</p>
+
+        <!-- 主题下导入多格式多文件（与休闲阅读同样的拖放/选择入口，归到本主题） -->
+        <div class="rd-files">
+          <div class="rd-drop" :class="{ 'rd-drop-on': importingTheme === g.themeId }" aria-label="拖放电子书到本主题"
+            @dragenter.prevent="importingTheme = g.themeId" @dragover.prevent="importingTheme = g.themeId"
+            @dragleave.prevent="importingTheme = ''" @drop="onThemeDrop($event, g.themeId)">
+            <span class="rd-drop-icon" aria-hidden="true">⇩</span>
+            <span>把电子书拖「{{ g.themeTitle }}」里，笔记就记在这个主题下</span>
+            <span class="rd-hint">支持 EPUB / PDF / TXT / MD / MOBI / AZW3 · 多格式多文件 · 只登记路径</span>
+          </div>
+          <div class="rd-file-actions rd-file-actions-theme">
+            <button class="rd-primary" :disabled="importing" @click="pickThemeFiles(g.themeId)">＋ 选择电子书放进本主题</button>
+            <span class="rd-theme-book-add">
+              <input v-model="newThemeBook" class="rd-input" placeholder="或手写书名（无电子书，仅记笔记）" aria-label="主题新书名" @keyup.enter="addThemeBook(g.themeId)" />
+              <button class="rd-mini" @click="addThemeBook(g.themeId)">＋ 加书名</button>
+            </span>
+          </div>
+        </div>
+
+        <div v-if="!g.rows.length" class="rd-hint rd-group-empty">这个主题还没放书。拖一本进来，或手写书名。</div>
+        <article v-for="b in g.rows" :key="b.id" class="rd-book" :class="{ 'rd-book-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing }"
+          :title="'双击翻开《' + b.title + '》'" @dblclick="startThemeBook(b)">
+          <span class="rd-cover" :style="{ background: b.coverColor || coverHue(b) }" aria-hidden="true">
+            <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-cover-img" />
+          </span>
           <div class="rd-book-main">
-            <div class="rd-book-line"><strong class="rd-book-title">《{{ b.title }}》</strong><span class="rd-author">{{ b.author }}</span><span class="rd-chip">{{ b.pct }}%</span></div>
+            <div class="rd-book-line">
+              <strong class="rd-book-title">《{{ b.title }}》</strong><span class="rd-author">{{ b.author }}</span>
+              <span v-if="b.format" class="rd-chip rd-chip-file">{{ b.format }}</span>
+              <span class="rd-chip">{{ b.statusLabel }}</span>
+              <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原文件已不在原处</span>
+            </div>
             <div class="rd-thick" role="progressbar" :aria-valuenow="b.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="b.title + ' 已读进度'">
               <span class="rd-thick-in" :style="{ width: b.pct + '%' }"></span>
             </div>
-            <p class="rd-meta">{{ b.done }} / {{ b.total }} {{ b.unit }} · 原有摘录 {{ b.quoteCount }} 条</p>
+            <p class="rd-meta">{{ b.progressText }} · {{ b.noteCount }} 条笔记<span v-if="b.filePath"> · 双击读正文</span><span v-else> · 手工登记，仅记笔记</span></p>
+            <p v-if="b.filePath" class="rd-meta rd-path" :title="b.filePath">{{ b.filePath }}</p>
           </div>
-          <div class="rd-book-actions">
-            <button class="rd-mini" @click="advanceTheme(b.themeId, b.bookId, 10)">+10 {{ b.unit }}</button>
-            <button class="rd-mini" @click="openBook('theme', b)">翻开读</button>
+          <div class="rd-book-actions" @dblclick.stop>
+            <button class="rd-mini" @click="advanceTheme(g.themeId, b.id, 10)">+10 {{ b.unit }}</button>
+            <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在右栏记笔记'" @click="startThemeBook(b)">翻开读</button>
+            <button class="rd-mini rd-mini-quiet" @click="removeBook(b.id)">移出</button>
           </div>
         </article>
       </section>
 
+      <!-- 主题批注器：与休闲阅读同款（章节大纲 / 伴读三问 / 摘录批注 / 闪念 / 已有笔记） -->
       <div v-if="active && active.mode === 'theme'" class="rd-reader" aria-label="主题阅读器">
-        <h2 class="rd-h2">正在读《{{ active.title }}》<span class="rd-hint"> · 主题阅读</span></h2>
-        <div class="rd-prompts" aria-label="伴读三问">
-          <button v-for="p in PROMPTS" :key="p.id" class="rd-prompt" :class="{ 'rd-prompt-on': activePrompt === p.id }" :title="p.hint" @click="pickPrompt(p)">{{ p.label }}</button>
+        <h2 class="rd-h2">正在读《{{ active.title }}》<span class="rd-hint"> · 主题阅读 · 笔记记在本主题下</span></h2>
+        <div class="rd-reader-grid">
+          <div class="rd-col">
+            <h3 class="rd-h3">章节大纲 <span class="rd-hint">自己填，不是自动生成的思维导图</span></h3>
+            <div class="rd-chapters">
+              <p v-for="c in activeChapters" :key="c.id" class="rd-chapter" :class="{ 'rd-chapter-sub': !!c.parentId }">
+                {{ c.parentId ? '↳ ' : '· ' }}{{ c.title }}
+                <button class="rd-x" :aria-label="'删除章节 ' + c.title" @click="removeChapter(c.id)">×</button>
+              </p>
+              <p v-if="!activeChapters.length" class="rd-hint">还没分章。读到哪儿顺手记一个章节名即可。</p>
+            </div>
+            <div class="rd-inline-add">
+              <input v-model="newChapter" class="rd-input" placeholder="加一个章节" aria-label="新章节名" @keyup.enter="addChapter" />
+              <button class="rd-mini" @click="addChapter">＋</button>
+            </div>
+          </div>
+          <div class="rd-col">
+            <h3 class="rd-h3">批注贴着原文长</h3>
+            <div class="rd-prompts" aria-label="伴读三问">
+              <button v-for="p in PROMPTS" :key="p.id" class="rd-prompt" :class="{ 'rd-prompt-on': activePrompt === p.id }" :title="p.hint" @click="pickPrompt(p)">{{ p.label }}</button>
+            </div>
+            <p v-if="activePrompt" class="rd-hint">{{ PROMPTS.find(p => p.id === activePrompt)?.hint }}</p>
+            <textarea v-model="noteQuote" class="rd-area" rows="3" placeholder="摘录：书里那句原话" aria-label="摘录原文"></textarea>
+            <textarea v-model="noteText" class="rd-area" rows="3" placeholder="我的批注 / 想法（自己的话）" aria-label="我的批注"></textarea>
+            <div class="rd-form-row">
+              <select v-model="noteType" class="rd-input rd-sel" aria-label="笔记类型">
+                <option v-for="t in NOTE_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+              </select>
+              <input v-model="notePage" class="rd-input rd-num" type="number" min="0" placeholder="页码" aria-label="页码" />
+              <input v-model="noteTags" class="rd-input" placeholder="#标签 空格分隔" aria-label="标签" />
+              <button class="rd-primary" @click="saveNote">存进读书笔记</button>
+            </div>
+            <div class="rd-flash">
+              <input v-model="flash" class="rd-input" placeholder="即时想法：一句话，回车即存进九格" aria-label="即时想法" @keyup.enter="saveFlash" />
+              <select v-model="flashCell" class="rd-input rd-sel" aria-label="闪念写入的格子">
+                <option value="growth">学习成长</option>
+                <option value="free">自由记录</option>
+                <option value="leisure">休闲娱乐</option>
+              </select>
+              <button class="rd-mini" @click="saveFlash">闪念入格</button>
+            </div>
+            <p v-if="props.backfill" class="rd-warn">正在补记过去：写进九格的动作只作用于真实今天 {{ props.today }}。</p>
+          </div>
         </div>
-        <textarea v-model="noteQuote" class="rd-area" rows="3" placeholder="摘录：书里那句原话" aria-label="摘录原文"></textarea>
-        <textarea v-model="noteText" class="rd-area" rows="3" placeholder="我的批注 / 想法（自己的话）" aria-label="我的批注"></textarea>
-        <div class="rd-form-row">
-          <select v-model="noteType" class="rd-input rd-sel" aria-label="笔记类型">
-            <option v-for="t in NOTE_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
-          </select>
-          <input v-model="notePage" class="rd-input rd-num" type="number" min="0" placeholder="页码" aria-label="页码" />
-          <input v-model="noteTags" class="rd-input" placeholder="#标签 空格分隔" aria-label="标签" />
-          <button class="rd-primary" @click="saveNote">存进读书笔记</button>
-        </div>
-        <div class="rd-flash">
-          <input v-model="flash" class="rd-input" placeholder="即时想法：回车即存进九格" aria-label="即时想法" @keyup.enter="saveFlash" />
-          <button class="rd-mini" @click="saveFlash">闪念入格</button>
+        <div class="rd-notes-inline">
+          <h3 class="rd-h3">这本书已有的笔记（{{ activeNotes.length }}）</h3>
+          <p v-for="n in activeNotes.slice(0, 5)" :key="n.id" class="rd-note-line">
+            <span class="rd-chip">{{ n.typeLabel || n.type }}</span>
+            {{ n.quote ? '「' + n.quote + '」→ ' : '' }}{{ n.text }}
+            <span class="rd-hint">p.{{ n.page }} {{ n.tags.map(t => '#' + t).join(' ') }}</span>
+          </p>
+          <p v-if="!activeNotes.length" class="rd-hint">还没有笔记。读到一句想留的话，就写在上面。</p>
         </div>
       </div>
     </div>
@@ -721,7 +857,12 @@ onMounted(() => {
 .rd-warn { font-size: 11px; color: var(--state-warn); margin: 0; }
 .rd-notes-inline { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 0.5px solid var(--surface-border); }
 .rd-note-line { font-size: 12px; margin: 0 0 6px; color: var(--surface-text); line-height: 1.6; }
-.rd-group { margin-bottom: var(--space-2); }
+.rd-group { margin-bottom: var(--space-2); padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.rd-group-on { border-color: var(--palette-border); }
+.rd-group .rd-h2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rd-group-title { font-size: 15px; font-weight: 600; color: var(--surface-text); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.rd-group-del { margin-left: auto; }
+.rd-group-empty { padding: 8px 0; display: block; }
 .rd-filter { padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .rd-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .rd-tag { padding: 3px 9px; font-size: 11px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-panel); color: var(--surface-text); cursor: pointer; }
@@ -753,6 +894,10 @@ onMounted(() => {
 .rd-drop-icon { font-size: 18px; color: var(--palette-primary); }
 .rd-drop .rd-hint { flex-basis: 100%; }
 .rd-file-actions { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+/* 主题页：横向排「选择电子书」+「手写书名」两组，避免被挤成窄列 */
+.rd-file-actions-theme { flex: 1 1 320px; flex-direction: row; flex-wrap: wrap; align-items: center; }
+.rd-theme-book-add { display: inline-flex; gap: 6px; flex: 1 1 240px; align-items: center; }
+.rd-theme-book-add .rd-input { flex: 1 1 160px; min-width: 0; }
 .rd-viewmode { display: inline-flex; gap: 4px; }
 .rd-mode-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .rd-chip-file { background: var(--surface-panel); color: var(--surface-muted); }

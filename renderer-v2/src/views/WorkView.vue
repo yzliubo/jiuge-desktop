@@ -825,13 +825,14 @@ function onDocDown(e: Event): void {
   const t = e.target as HTMLElement | null;
   // 浮层自己的点击不能先被这里关掉：capture 阶段比目标元素的 handler 更早跑
   const inside = (t && typeof t.closest === 'function')
-    ? t.closest('.gtd-menu, .gtd-pick, .gtd-side-menu, .side-add-row, .side-edit')
+    ? t.closest('.gtd-menu, .gtd-pick, .gtd-side-menu, .gtd-blank-add, .side-add-row, .side-edit')
     : null;
   if (inside) return;
   closeMenu();
   sideMenu.value = null;
   picker.value = null;
   sideAdd.value = '';
+  blankMenu.value = null;
 }
 function onDocKey(e: KeyboardEvent): void {
   if (e.key !== 'Escape') return;
@@ -840,12 +841,15 @@ function onDocKey(e: KeyboardEvent): void {
   picker.value = null;
   sideEdit.value = null;
   sideAdd.value = '';
+  if (blankMenu.value) blankMenu.value = null;
+  else if (blankOpen.value) blankOpen.value = false;
 }
 // 滚动 / 改窗口大小时浮层跟着收起：fixed 定位不会跟着内容走，留着就是错位
 function closeFloats(): void {
   closeMenu();
   sideMenu.value = null;
   picker.value = null;
+  blankMenu.value = null;
 }
 
 async function menuMove(k: string): Promise<void> {
@@ -973,6 +977,131 @@ async function actRemove(): Promise<void> {
   closeMenu();
   if (t) await remove(t);
 }
+
+// ---------------------------------------------------------------
+// 任务区空白处的「就地新建」（2026-11-11 主理人要求）
+// 顶部捕获条仍是 GTD 的默认入口：新念头一律先进收件箱。
+// 但用户已经站在「下一步 / 等待 / 日程 / 某项目 / 某情境」里，
+// 说明这一条当场就想清楚了；再让他捕获→厘清→移动，是让界面替流程多走两步。
+// 这条通道必须显式（双击 / 右击 / ＋），并把当前上下文一次写进新任务，
+// 不制造「存下了却看不见」的孤儿。
+// ---------------------------------------------------------------
+const blankOpen = ref(false);
+const blankTitle = ref('');
+const blankContext = ref('');
+const blankProject = ref('');
+const blankDue = ref('');
+const blankWaiting = ref('');
+const blankMenu = ref<{ x: number; y: number } | null>(null);
+const blankInputEl = ref<HTMLInputElement | null>(null);
+const canCreateHere = computed(() => activeStatus.value !== 'done');
+const createTargetLabel = computed(() => STATUS_LABEL[activeStatus.value] || '清单');
+
+function focusBlankInput(): void {
+  void nextTick(function () {
+    if (blankInputEl.value) blankInputEl.value.focus();
+  });
+}
+
+function openBlankCreate(target?: string): void {
+  // 条已开着、又没要求换分组，就只把光标送回去，别把正在敲的字清掉
+  if (!target && blankOpen.value) { focusBlankInput(); return; }
+  if (target) pickStatus(target);
+  // 「已完成」只做回顾，不新建：真要建就落到「下一步」，并说清去哪了
+  if (activeStatus.value === 'done') {
+    pickStatus('next');
+    say('「已完成」只做回顾——新任务放在「下一步」');
+  }
+  blankMenu.value = null;
+  menu.value = null;
+  sideMenu.value = null;
+  picker.value = null;
+  // 就地 = 继承眼前这一组：项目 / 情境筛选直接写进新任务，不必事后归位
+  blankContext.value = contextFilter.value;
+  blankProject.value = projectFilter.value;
+  blankDue.value = activeStatus.value === 'scheduled' ? localDate() : '';
+  blankWaiting.value = '';
+  blankTitle.value = '';
+  blankOpen.value = true;
+  focusBlankInput();
+}
+
+function closeBlankCreate(): void {
+  blankOpen.value = false;
+  blankMenu.value = null;
+}
+
+async function commitBlankCreate(): Promise<void> {
+  const text = blankTitle.value.trim();
+  if (!text) return;
+  const status = activeStatus.value === 'done' ? 'next' : activeStatus.value;
+  const patch: Record<string, string> = {
+    title: text,
+    status: status,
+    context: blankContext.value,
+    project: blankProject.value
+  };
+  // 日程缺日期、等待缺「等谁」会被领域层点名；就地新建时就把这两格给足
+  if (status === 'scheduled') patch.dueDate = blankDue.value || localDate();
+  if (status === 'waiting') patch.waitingFor = blankWaiting.value.trim();
+  await callDomain('gtd.add', null, patch);
+  blankTitle.value = '';
+  // 搜索词会把刚建的那条挡在视图外，重演「刚存下却看不见」的老问题
+  keyword.value = '';
+  await refresh();
+  say('已在「' + (STATUS_LABEL[status] || '清单') + '」新建，没有过收件箱');
+  focusBlankInput(); // 连着录几条时不用来回点开
+}
+
+function blankAreaOnly(e: Event): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t || typeof t.closest !== 'function') return false;
+  // 行、行内按钮、输入框、新建条都不是「空白」；它们的右键/双击各有自己的去处
+  return !t.closest('.gtd-item, .gtd-kids-wrap, .gtd-blank-add, button, input, select, textarea');
+}
+
+function onCanvasDblClick(e: MouseEvent): void {
+  if (!blankAreaOnly(e)) return;
+  openBlankCreate();
+}
+
+function onCanvasMenu(e: MouseEvent): void {
+  if (!blankAreaOnly(e)) return;
+  e.preventDefault();
+  const p = clampMenu(e.clientX, e.clientY);
+  menu.value = null;
+  sideMenu.value = null;
+  picker.value = null;
+  blankMenu.value = { x: p.x, y: p.y };
+}
+
+function createInInbox(): void {
+  openBlankCreate('inbox');
+}
+
+function blankNewSide(kind: SideKind): void {
+  blankMenu.value = null;
+  openSideAdd(kind);
+}
+
+function actSideNewTask(): void {
+  const m = sideMenu.value;
+  if (!m) return;
+  // 从项目 / 情境右键进来，就把筛选定在它身上：新任务直接落在眼前这一组
+  if (m.kind === 'proj') { projectFilter.value = m.name; contextFilter.value = ''; }
+  else { contextFilter.value = m.name; projectFilter.value = ''; }
+  sideMenu.value = null;
+  // 换了归属就让它重新初始化一次，别沿用上一条还没写完的字段
+  blankOpen.value = false;
+  openBlankCreate();
+}
+
+// 换清单时把条件字段收掉，避免「在日程里填的日期」被带到等待里
+watch(activeStatus, function (k) {
+  blankDue.value = k === 'scheduled' ? localDate() : '';
+  blankWaiting.value = '';
+  if (k === 'done') blankOpen.value = false;
+});
 
 async function pullLegacy(): Promise<void> {
   const res = await callDomain<{ added?: number; skipped?: number } | null>('gtd.importLegacy', null);
@@ -1174,6 +1303,7 @@ onUnmounted(function () {
             role="tab"
             :aria-selected="activeStatus === k"
             @click="pickStatus(k)"
+            @contextmenu.prevent.stop="openBlankCreate(k)"
             @dragover="dropHover('st:' + k, $event)"
             @dragleave="dropLeave('st:' + k)"
             @drop.prevent="dropToStatus(k)"
@@ -1246,9 +1376,10 @@ onUnmounted(function () {
                 <span class="proj-mini">{{ p.done }} / {{ p.total }}</span>
               </span>
               <span class="side-bar"><i :style="{ width: p.pct + '%' }"></i></span>
+              <!-- 「N 个下一步」已下线：与上面的 done/total 重复，且把项目卡变成半张清单。
+                   只在真出问题时才占第三行：停滞 / 还有没收件箱条目待厘清。 -->
               <span v-if="projStalled(p)" class="proj-warn">停滞：没有下一步</span>
               <span v-else-if="p.stalled" class="proj-ok">{{ projInbox[p.name] }} 条待厘清</span>
-              <span v-else class="proj-ok">{{ p.next }} 个下一步</span>
             </button>
           </template>
           <p v-if="!projects.length" class="side-empty">还没有项目。点标题旁的「＋」建一个。</p>
@@ -1364,6 +1495,9 @@ onUnmounted(function () {
           <span class="ch-act"></span>
         </div>
 
+        <!-- 任务区画布：列表之外的空白也是可操作的（双击 / 右击就地新建），
+             行、行内按钮、输入框由 blankAreaOnly 排除，不抢它们自己的事件 -->
+        <div class="gtd-canvas" @dblclick="onCanvasDblClick" @contextmenu="onCanvasMenu">
         <ul class="gtd-list">
           <template v-for="row in treeRows" :key="row.task.id">
             <li
@@ -1554,7 +1688,70 @@ onUnmounted(function () {
           <li v-if="treeRows.length === 0" class="gtd-empty">
             {{ emptyHint }}
           </li>
+
+          <!-- 就地新建：状态、项目、情境都按眼前这一组预置，回车即存。
+               保存后保留输入条，方便连着录几条。 -->
+          <li v-if="blankOpen" class="gtd-blank-add" @dblclick.stop @contextmenu.stop>
+            <div class="gtd-blank-head">
+              在「{{ createTargetLabel }}」里新建
+              <span v-if="projectFilter"> · 项目「{{ projectFilter }}」</span>
+              <span v-if="contextFilter"> · 情境 {{ contextFilter }}</span>
+              <span class="gtd-blank-tip">回车即存，不过收件箱</span>
+            </div>
+            <div class="gtd-blank-row">
+              <input
+                ref="blankInputEl"
+                v-model="blankTitle"
+                class="gtd-blank-in"
+                maxlength="80"
+                placeholder="写一条能动手的任务，回车即存"
+                aria-label="就地新建任务"
+                @keydown.enter.prevent="commitBlankCreate"
+                @keydown.esc="closeBlankCreate"
+              />
+              <button class="mini gtd-blank-go" @click="commitBlankCreate">加入</button>
+              <button class="mini" @click="closeBlankCreate">收起</button>
+            </div>
+            <div class="gtd-blank-row gtd-blank-fields">
+              <select v-model="blankContext" class="gtd-blank-sel" aria-label="新任务的情境">
+                <option value="">无情境</option>
+                <option v-for="c in contextOptions" :key="c" :value="c">{{ c }}</option>
+              </select>
+              <input
+                v-model="blankProject"
+                class="gtd-blank-proj"
+                maxlength="24"
+                list="cap-proj-list"
+                placeholder="项目（可选）"
+                aria-label="新任务的项目"
+              />
+              <input
+                v-if="activeStatus === 'scheduled'"
+                v-model="blankDue"
+                class="gtd-blank-date"
+                type="date"
+                aria-label="日程日期"
+              />
+              <input
+                v-if="activeStatus === 'waiting'"
+                v-model="blankWaiting"
+                class="gtd-blank-who"
+                maxlength="40"
+                placeholder="等谁 / 等什么"
+                aria-label="等待对象"
+              />
+            </div>
+          </li>
         </ul>
+
+        <div v-if="!blankOpen && canCreateHere" class="gtd-blank-hint">
+          <span>双击或右击空白处，直接在此新建</span>
+          <button class="mini gtd-blank-hint-btn" aria-label="在此新建任务" @click.stop="openBlankCreate()">＋ 新建</button>
+        </div>
+        <div v-else-if="!blankOpen" class="gtd-blank-hint">
+          <span>「已完成」只做回顾；去「下一步」新建，或在左侧清单上右击</span>
+        </div>
+        </div>
       </div>
     </div>
 
@@ -1639,6 +1836,10 @@ onUnmounted(function () {
     >
       <p class="gm-head" :title="sideMenu.name">{{ sideMenu.name }}</p>
       <p class="gm-meta">{{ sideMenu.kind === 'proj' ? '项目' : '情境' }}<template v-if="sideMenu.archived"> · 已归档</template></p>
+      <button v-if="!sideMenu.archived" class="gm-item" role="menuitem" @click="actSideNewTask">
+        <span class="gm-label">在此新建任务</span><span class="gm-hint">直接归属</span>
+      </button>
+      <div v-if="!sideMenu.archived" class="gm-sep" role="separator"></div>
       <button class="gm-item" role="menuitem" @click="actSideRename">
         <span class="gm-label">改名</span><span class="gm-hint">双击也能改</span>
       </button>
@@ -1662,6 +1863,32 @@ onUnmounted(function () {
       <button class="gm-item gm-del" role="menuitem" @click="actSideRemove">
         <span class="gm-label">删除</span>
         <span class="gm-hint">{{ sideMenu.kind === 'proj' ? '任务保留' : '清空该情境' }}</span>
+      </button>
+    </div>
+
+    <!-- 任务区空白处的右键菜单：就地新建 / 回到收件箱 / 补名单 -->
+    <div
+      v-if="blankMenu"
+      class="gtd-menu gtd-blank-menu"
+      role="menu"
+      :style="{ left: blankMenu.x + 'px', top: blankMenu.y + 'px' }"
+      @contextmenu.prevent
+      @pointerdown.stop
+    >
+      <p class="gm-head">在「{{ createTargetLabel }}」新建</p>
+      <p class="gm-meta">{{ filterText || '就地建，不必先过收件箱' }}</p>
+      <button class="gm-item" role="menuitem" @click="openBlankCreate()">
+        <span class="gm-label">新建一条任务</span><span class="gm-hint">双击空白处同款</span>
+      </button>
+      <button class="gm-item" role="menuitem" @click="createInInbox">
+        <span class="gm-label">新建到收件箱</span><span class="gm-hint">暂不判断</span>
+      </button>
+      <div class="gm-sep" role="separator"></div>
+      <button class="gm-item" role="menuitem" @click="blankNewSide('proj')">
+        <span class="gm-label">新建项目</span><span class="gm-hint">名单</span>
+      </button>
+      <button class="gm-item" role="menuitem" @click="blankNewSide('ctx')">
+        <span class="gm-label">新建情境</span><span class="gm-hint">名单</span>
       </button>
     </div>
 
@@ -1864,6 +2091,30 @@ input:focus, select:focus { border-color: var(--palette-accent); }
 .gtd-item .gtd-cell-ctx, .gtd-item .gtd-cell-proj, .gtd-item .gtd-cell-due, .gtd-item .gtd-act {
   border-left: 0.5px solid var(--surface-border);
 }
+
+/* --- 任务区空白处：双击 / 右击就地新建 --- */
+/* 底部这条 padding 是「永远点得到的空白」：列表排满时也有地方双击 / 右击 */
+.gtd-canvas { flex: 1; min-height: 92px; padding-bottom: 16px; display: flex; flex-direction: column; border-radius: var(--radius-sm); }
+.gtd-canvas:hover { box-shadow: inset 0 0 0 0.5px var(--surface-border); }
+.gtd-blank-hint {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 6px; padding: 5px 8px;
+  border: 0.5px dashed var(--surface-border); border-radius: var(--radius-sm);
+  font-size: 11px; color: var(--surface-muted);
+}
+.gtd-blank-hint-btn { padding: 2px 9px; font-size: 11px; flex: 0 0 auto; }
+.gtd-blank-add {
+  list-style: none; margin: 2px 0 0; padding: 8px;
+  border: 0.5px solid var(--palette-border); border-radius: var(--radius-sm);
+  background: var(--palette-soft); display: flex; flex-direction: column; gap: 6px;
+}
+.gtd-blank-head { font-size: 11px; color: var(--palette-primary); display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
+.gtd-blank-tip { color: var(--surface-muted); }
+.gtd-blank-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.gtd-blank-in { flex: 1 1 190px; min-width: 140px; font-size: 12px; }
+.gtd-blank-fields input, .gtd-blank-fields select { flex: 0 1 132px; min-width: 96px; font-size: 11px; padding: 3px 6px; }
+.gtd-blank-go { flex: 0 0 auto; }
+.gtd-blank-menu { width: 214px; }
 
 .gtd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .gtd-item {

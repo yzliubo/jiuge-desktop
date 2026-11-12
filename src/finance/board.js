@@ -312,10 +312,13 @@ function normalize(raw) {
     return arr.map(function (o, idx) { return fn(isObj(o) ? o : {}, idx, seen); });
   }
   // 空库才播种默认分类/账户；用户主动删空的数组保持为空，不被重新种回来。
+  // 播种也必须过 normXxx：否则默认对象会缺 side / openingCents 等新增字段，
+  // 第二次 normalize 再把它们补上时结果就变了——幂等性会被静态门禁当场抓到。
+  const seedSeen = {};
   const cats = Array.isArray(src.categories) ? list('categories', normCategory, MAX_CATEGORIES)
-    : DEFAULT_CATEGORIES.map(function (c) { return Object.assign({}, c, { archived: false }); });
+    : DEFAULT_CATEGORIES.map(function (c) { return normCategory(c, 0, seedSeen); });
   const accounts = Array.isArray(src.accounts) ? list('accounts', normAccount, MAX_ACCOUNTS)
-    : DEFAULT_ACCOUNTS.map(function (a) { return Object.assign({}, a, { archived: false }); });
+    : DEFAULT_ACCOUNTS.map(function (a) { return normAccount(a, 0, seedSeen); });
   return {
     version: VERSION,
     categories: cats,
@@ -1238,6 +1241,59 @@ function setAccountMeta(state, id, patch) {
   return found ? normalize(Object.assign({}, s, { accounts: accounts })) : s;
 }
 
+// 九格「金钱收支」格 → 家庭账本：先在界面只读汇总，用户点导入才落库。
+// rows 由主进程从 morning_diary_* 的 moneyBook.entries 整理好传进来；
+// 领域层不碰 repo、不写日记、不联网。导入指纹是 mb:<日期>:<九格条目 id>，
+// 重复点导入只会跳过，不会把同一笔手记记成两笔账。
+function moneyImportId(date, id) {
+  return 'mb:' + clean(date, 10) + ':' + clean(id, ID_MAX);
+}
+function importMoneyBook(state, rows) {
+  const s = normalize(state);
+  const list = Array.isArray(rows) ? rows : [];
+  const seen = {};
+  s.txns.forEach(function (t) { if (t.importedId) seen[t.importedId] = true; });
+  // 九格只记「多少钱、什么类型」，没有账户概念：统一挂到第一个在用账户，
+  // 分类按 cat_<九格分类> 找，找不到就退到该类型第一个分类，绝不硬造新分类。
+  const acc = s.accounts.filter(function (a) { return !a.archived; })[0] || s.accounts[0];
+  const added = [];
+  let skipped = 0;
+  for (let i = 0; i < list.length && added.length < 200; i++) {
+    const r = isObj(list[i]) ? list[i] : {};
+    const date = validDate(r.date);
+    const cents = int(r.cents, 0, CENTS_MAX, 0);
+    if (!date || !cents) { skipped += 1; continue; }
+    const kind = r.type === 'income' ? 'income' : 'expense';
+    const iid = moneyImportId(date, r.id);
+    if (seen[iid]) { skipped += 1; continue; }
+    seen[iid] = true;
+    const want = 'cat_' + clean(r.category, ID_MAX);
+    const hit = s.categories.filter(function (c) {
+      return c.id === want && c.kind === kind && !c.archived;
+    })[0];
+    const fallback = s.categories.filter(function (c) {
+      return c.kind === kind && !c.archived;
+    })[0];
+    const safe = iid.replace(/[^A-Za-z0-9]/g, '');
+    added.push({
+      id: ('txn_mb_' + safe + '_' + i).slice(0, ID_MAX),
+      date: date, month: monthOf(date),
+      amountCents: kind === 'income' ? cents : -cents,
+      kind: kind, account: acc ? acc.id : '',
+      category: hit ? hit.id : (fallback ? fallback.id : ''),
+      payee: '', note: '手记收支 · ' + clean(r.note, NOTE_MAX),
+      transferId: '', importedId: iid,
+      // 导入是一次明确决定，与 bulkUpdate 同口径：不重跑自动分类规则
+      ruleIds: [], cleared: false
+    });
+  }
+  if (!added.length) return { state: s, added: 0, skipped: skipped };
+  return {
+    state: normalize(Object.assign({}, s, { txns: s.txns.concat(added) })),
+    added: added.length, skipped: skipped
+  };
+}
+
 module.exports = {
   VERSION: VERSION,
   normalize: normalize,
@@ -1259,6 +1315,8 @@ module.exports = {
   removeAccount: removeAccount,
   importCsv: importCsv,
   exportCsv: exportCsv,
+  importMoneyBook: importMoneyBook,
+  moneyImportId: moneyImportId,
   accountRows: accountRows,
   netWorth: netWorth,
   cashFlow: cashFlow,

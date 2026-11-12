@@ -155,6 +155,22 @@ function createMemoryBridge(): PreloadBridge {
             modules: { data: { work: true, money: true, growth: true }, error: null },
             firstWeekState: { data: { enabled: true, active: false, total: 0, dayNo: 1, celebration: '' }, error: null },
             firstWeekEnabled: true,
+            // 自由记录 / 写作法：mock 通道下的空态，真实数据一律走主进程 md_freewrite
+            'free.board': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
+            'free.capsuleIndex': [],
+            'free.flashAdd': { item: null, synced: false },
+            'free.flashRetry': { item: null, synced: false },
+            'free.flashSyncPending': { total: 0, synced: 0 },
+            'free.flashRemove': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
+            'free.docAdd': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
+            'free.docUpdate': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
+            'free.docRemove': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
+            'free.prefs': { lastTab: 'capsule', method: 'hemingway', checkOn: false },
+            'writing.check': {
+              sentences: [], counts: { soft: 0, hard: 0, long: 0, weak: 0, passive: 0, heavy: 0, sentences: 0 },
+              chars: 0, avg: 0, readability: '偏短', rules: { softLen: 40, hardLen: 60, weakWords: 24 }
+            },
+            'writing.cards': [],
             capsuleGroups: { data: { due: [], sealed: [], opened: [] }, error: null },
             capsulePresets: [
               { label: '7 天后', value: '2026-12-01' },
@@ -198,11 +214,12 @@ function createMemoryBridge(): PreloadBridge {
             'reading.meta': { modes: ['leisure', 'theme'], noteTypes: ['highlight', 'note', 'idea', 'link'], prompts: [] },
             'reading.board': {
               stats: { books: 0, notes: 0, highlights: 0, ideas: 0, pushed: 0, leisureNotes: 0, themeNotes: 0, tagCount: 0, thisMonth: 0 },
-              books: [], themeBooks: [], recent: [], tagTop: []
+              books: [], themeBooks: [], themeGroups: [], recent: [], tagTop: []
             },
             'reading.notes': { items: [], total: 0, byTag: [], byBook: [], byType: [], byMonth: [] },
-            'reading.read': { chapters: [] },
+            'reading.read': { chapters: [], themes: [] },
             'reading.themeBooks': [],
+            'reading.themes': [],
             'reading.exportMd': '# 读书笔记\n\n还没有笔记\n',
             // 家庭账本：dev 模式（无 Electron）给一份能看的空态，金额一律整数分
             'finance.meta': {
@@ -241,6 +258,17 @@ function createMemoryBridge(): PreloadBridge {
               netWorthCents: 0, assetsCents: 0, liabilitiesCents: 0,
               overspent: [], biggest: null, subscriptionCents: 0, subscriptionCount: 0,
               topCategory: null, budgetUsedBp: 0, ruleHit: 0, imported: 0
+            },
+            // V3.1 联动样例：账本窗在没有 preload 的冒烟环境里也能渲染两块新 UI
+            'finance.moneyRows': {
+              rows: [{ id: 'm1', date: '2026-11-03', type: 'expense', cents: 1250,
+                       category: 'food', note: '午饭', importedId: 'mb:2026-11-03:m1', imported: false }],
+              pending: 1
+            },
+            'finance.importMoneyRows': { added: 1, skipped: 0 },
+            'dream.board': {
+              rows: [{ id: 'd1', title: '去一趟敦煌', fund: { target: 500000, saved: 120000, pct: 24, ready: false } }],
+              alerts: []
             }
           };
           // 首页天气：dev / 无 Electron 环境给一份固定样例（不联网、不含任何远程地址）。
@@ -253,7 +281,7 @@ function createMemoryBridge(): PreloadBridge {
             unit: 'c',
             report: {
               place: { label: '上海', region: '上海市' },
-              now: { temp: 12, feels: 10, humidity: 65, wind: 3, isDay: true, code: 0, text: '晴', icon: '☀', group: 'sun' },
+              now: { temp: 12, feels: 10, humidity: 65, wind: 3, isDay: true, code: 0, text: '晴', icon: '☀', group: 'sun', baseWeather: '晴' },
               today: { max: 17, min: 6, rainProb: 0 },
               fetchedAt: 0
             },
@@ -481,6 +509,9 @@ export interface WeatherNow {
   text: string;
   icon: string;
   group: string;
+  // 领域层折算好的九格 8 档天气（晴/多云/阴/小雨/大雨/雪/风/雾）；空串 = 认不出，需手填。
+  // 渲染层不自己映射 WMO 代码：映射只有一份，放在 src/weather/board.js。
+  baseWeather: string;
 }
 export interface WeatherReport {
   place: { label: string; region: string };

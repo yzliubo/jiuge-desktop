@@ -52,14 +52,16 @@ export const SKINS: Array<{ id: SkinId; label: string }> = [
 // 回看拆成「时间轴（日记）」+「回顾（概览 / 复盘）」，并新增一级「数据中心」。
 // insight 不进一级导航，由标题栏进入；inspire（语料库）挂在数据中心下，
 // 它是「问候 / 名言 / 运动提示」的数据管理，不是第 8 个功能模块。
-export type ViewKey = 'today' | 'insight' | 'cell' | 'timeline' | 'capsule' | 'review' | 'habit' | 'dream' | 'data' | 'bin' | 'inspire' | 'settings' | 'life' | 'relation' | 'connect' | 'long' | 'reading' | 'finance';
+export type ViewKey = 'today' | 'insight' | 'cell' | 'timeline' | 'capsule' | 'review' | 'habit' | 'dream' | 'data' | 'bin' | 'inspire' | 'settings' | 'life' | 'relation' | 'connect' | 'long' | 'reading' | 'finance' | 'free';
 // V1.3 正文待办汇总：只读行，勾选必须回原文（不在汇总页写正文）
 export interface TodoRow { date: string; cell: string; text: string; line: number; raw: string }
 export const NAV_ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'today', label: '今天' },
   { key: 'timeline', label: '时间轴' },
   { key: 'review', label: '回顾' },
-  { key: 'capsule', label: '胶囊' },
+  // 胶囊功能单一，降为顶栏按钮 + 两个弹窗；腾出的导航位给三合一的「自由记录」。
+  // 计数仍是 7 项 + 设置（GUI #09 / #122 硬断言），胶囊的 ViewKey 保留作兼容，不再占导航。
+  { key: 'free', label: '自由记录' },
   { key: 'habit', label: '坚持' },
   // 梦想从九格升成一级模块：目标板（短/中/长期 + 量化 + 关联行动）
   { key: 'dream', label: '梦想' },

@@ -112,6 +112,8 @@ function bootCore() {
     diary = require(p);
   }
   const quotes = require('../utils/quotes.js');
+  // 九格「金钱收支」格按天挂在日记的 moneyBook 上；账本只读它、不改写它。
+  const moneyBook = require('../utils/money-book.js');
   const greetings = require('../utils/greetings.js');
   const insights = require('../utils/cell-insights.js');
   // GTD 是桌面端增量能力，单独成模块、存 md_gtd 单键：
@@ -163,6 +165,10 @@ function bootCore() {
   const readingEpub = require('../reading/epub.js');
   // 家庭账本（md_finance）：信封预算 + 条件→动作自动分类 + CSV 导入，金额全程整数分。
   const financeMod = require('../finance/board.js');
+  // 自由记录（md_freewrite）：闪念 / 长文 / 偏好；胶囊只读派生，绝不复制正文。
+  const freeMod = require('../free/board.js');
+  // 写作法体检：本地纯函数，只给定位与计数，不联网、不代写、不自动落库。
+  const writingCheck = require('../writing/check.js');
   // 通用 store：normalize 幂等 + repo.set。新键必须显式包装进备份（见 exportBackup），
   // 否则换机后这些模块的数据会静默丢失。
   function makeDomainStore(key, api) {
@@ -188,8 +194,10 @@ function bootCore() {
   const attachStore = makeDomainStore('md_attach', attachMod);
   // 图书馆 / 读书笔记：同走 normalize 幂等 + repo.set，且必须显式进备份（见 V2_SECTIONS）
   const readingStore = makeDomainStore('md_reading', readingMod);
-  // 家庭账本：独立单键，绝不与九格内的 MoneyView（按天挂在日记里）混写。
+  // 家庭账本：独立单键。与九格 MoneyView 只做「只读汇总 + 显式导入」，绝不改写日记。
   const financeStore = makeDomainStore('md_finance', financeMod);
+  // 自由记录：独立单键。长文正文不进 cells.free（当日日记 2000 字上限 + 每次全量写 record）。
+  const freeStore = makeDomainStore('md_freewrite', freeMod);
   // 本机时间源：日聚合 + 规则表，独立键（保留期与清空都能单独做）
   const worktimeStore = makeDomainStore('md_worktime', worktimeMod);
   // 首页天气：只存偏好（开关 / 模式 / 城市 / 坐标），缓存留在内存里。
@@ -198,6 +206,36 @@ function bootCore() {
   const WEATHER_TTL = 30 * 60 * 1000;      // 成功一次管 30 分钟
   const WEATHER_FAIL_TTL = 5 * 60 * 1000;  // 失败后 5 分钟内不再打网络，避免断网时反复重试
   let weatherCache = { report: null, fetchedAt: 0, ttl: WEATHER_TTL, error: null };
+
+  // 本地今天（YYYY-MM-DD）：胶囊派生与到期判断只认本地日，不认 UTC。
+  function isoDayNow() {
+    const d = new Date();
+    const p = function (n) { return n < 10 ? '0' + n : String(n); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  // 闪念 → 收件箱：按 source 幂等（gtd.addTask 的 source 上限 32 字）。
+  // 同步失败只改标记、绝不回滚原文——「不静默丢字」高于「两边绝对一致」。
+  function syncFlash(f) {
+    const source = String(f.source || '');
+    if (!source) return false;
+    try {
+      const tasks = gtdStore.read().tasks || [];
+      const exists = tasks.some(function (t) { return t && t.source === source; });
+      if (!exists) {
+        gtdStore.mutate(function (s) {
+          return gtd.addTask(s, {
+            title: String(f.text || '').slice(0, 40), status: 'inbox', source: source
+          });
+        });
+      }
+      freeStore.mutate(function (s) { return freeMod.setFlashSync(s, f.id, 'ok', ''); });
+      return true;
+    } catch (e) {
+      freeStore.mutate(function (s) { return freeMod.setFlashSync(s, f.id, 'failed', ''); });
+      return false;
+    }
+  }
 
   // 本地日界：ActivityWatch 存 UTC，九格按本地日切分。时区只在这里出现一次。
   function localDayBounds(date) {
@@ -251,8 +289,8 @@ function bootCore() {
     }
   };
 
-  // 主题阅读书单从 md_growth 只读派生（扁平化给视图用），绝不写进 md_reading。
-  // 图书馆里的「翻页」也转发 growth.advanceBook：同一份事实只能有一个写口。
+  // V2.14：主题书单权威源已迁到 md_reading.books（themeId 非空的记录）。
+  // themeBooksFlat() 保留为 md_growth 旧数据的只读派生，仅供一次性导入与向后兼容。
   function themeBooksFlat() {
     const g = growthStore.read();
     const out = [];
@@ -269,6 +307,26 @@ function bootCore() {
       });
     });
     return out;
+  }
+
+  // V2.14：主题书从 md_reading.books 派生，带 filePath，可进独立阅读窗读正文。
+  function themeGroupsFromReading() {
+    const s = readingStore.read();
+    const groups = [];
+    const idx = {};
+    (s.themes || []).forEach(function (t) {
+      const g = { themeId: t.id, themeTitle: t.title || '', note: t.note || '', rows: [] };
+      idx[t.id] = g;
+      groups.push(g);
+    });
+    (s.books || []).forEach(function (b) {
+      const tid = String(b.themeId || '');
+      if (!tid) return;
+      const g = idx[tid] || { themeId: tid, themeTitle: '未命名主题', note: '', rows: [] };
+      if (!idx[tid]) { idx[tid] = g; groups.push(g); }
+      g.rows.push(b);
+    });
+    return groups;
   }
 
   // 闭包绑定而非值拷贝：reloadDiary() 后所有领域函数自动指向新模块。
@@ -787,8 +845,9 @@ function bootCore() {
     // ---- 图书馆 / 读书笔记：两类阅读共用一个笔记库 ----
     'reading.meta': function () { return readingMod.meta(); },
     // ---- 本地电子书：只登记路径，绝不把书的内容复制进库 ----
-    'reading.addFiles': function (paths) {
+    'reading.addFiles': function (paths, themeId) {
       const list = Array.isArray(paths) ? paths : [];
+      const tid = String(themeId || '');
       let added = 0, skipped = 0;
       const errors = [];
       list.slice(0, 20).forEach(function (raw) {
@@ -816,7 +875,7 @@ function bootCore() {
           } catch (_) { coverId = ''; }
         }
         s = readingMod.addBook(s, {
-          id: id, title: title, author: author,
+          id: id, themeId: tid, title: title, author: author,
           filePath: p, fileExt: ext, fileSize: st.size,
           format: ext.toUpperCase(), coverId: coverId, source: 'file',
           total: 100, unit: '章', status: 'todo', createdAt: Date.now()
@@ -858,11 +917,14 @@ function bootCore() {
       const b = s.books.filter(function (x) { return x.id === bookId; })[0];
       const theme = b ? null : themeBooksFlat().filter(function (x) { return x.bookId === bookId; })[0];
       if (!b && !theme) return { ok: false, reason: '书架上找不到这本书', today: todayStr };
+      // V2.14：主题书已在 books 表里（themeId 非空），和休闲书走同一套 filePath 链路；
+      // mode 由 themeId 决定，笔记落库时自动带 themeId 归到该主题下。
       const book = b ? {
         id: b.id, title: b.title, author: b.author,
         format: b.format || String(b.fileExt || '').toUpperCase(),
         filePath: b.filePath, done: b.done, total: b.total, unit: b.unit, status: b.status,
-        cover: '', mode: 'leisure', themeId: '', bookTitle: b.title
+        cover: '', mode: b.themeId ? 'theme' : 'leisure',
+        themeId: b.themeId || '', bookTitle: b.title
       } : {
         id: theme.bookId, title: theme.title, author: theme.author,
         format: String(theme.fileExt || 'BOOK').toUpperCase(),
@@ -940,6 +1002,7 @@ function bootCore() {
     'reading.read': function () { return readingStore.read(); },
     'reading.board': function () {
       const b = readingMod.board(readingStore.read(), themeBooksFlat());
+      b.themeGroups = themeGroupsFromReading();
       // 文件失效 / 大小是派生值，不落库：每次读 board 现算，文件移走立刻标灰
       b.books = b.books.map(function (x) {
         return Object.assign({}, x, {
@@ -991,9 +1054,42 @@ function bootCore() {
     'reading.markPushed': function (id, cell, at) {
       return readingStore.mutate(function (s) { return readingMod.markPushed(s, id, cell, at || 0); });
     },
-    // 主题阅读翻页转发 growth：唯一写口仍是 md_growth
+    // ---- V2.14 主题阅读：书单权威源在 md_reading（themes + books[].themeId）----
+    'reading.themes': function () { return themeGroupsFromReading(); },
+    'reading.themeAdd': function (patch) {
+      const before = readingStore.read();
+      const after = readingStore.write(readingMod.addTheme(before, patch || {}));
+      const fresh = (after.themes || []).filter(function (t) {
+        return !(before.themes || []).some(function (x) { return x.id === t.id; });
+      })[0];
+      return { id: fresh ? fresh.id : '', ok: !!(after.themes.length > before.themes.length) };
+    },
+    'reading.themeUpdate': function (id, patch) {
+      return readingStore.mutate(function (s) { return readingMod.updateTheme(s, id, patch || {}); });
+    },
+    'reading.themeRemove': function (id) {
+      return readingStore.mutate(function (s) { return readingMod.removeTheme(s, id); });
+    },
+    // 一次性把 md_growth 旧主题书单 + 摘录迁进 md_reading（旧数据保留、可重复调用）
+    'reading.importGrowthThemes': function () {
+      const before = readingStore.read();
+      const g = growthStore.read();
+      const after = readingStore.write(readingMod.importGrowthThemes(before, g));
+      const themeBefore = before.books.filter(function (b) { return !!b.themeId; }).length;
+      const themeAfter = after.books.filter(function (b) { return !!b.themeId; }).length;
+      return {
+        addedThemes: after.themes.length - before.themes.length,
+        addedBooks: themeAfter - themeBefore,
+        addedNotes: after.notes.length - before.notes.length,
+        changed: after.updatedAt !== before.updatedAt
+      };
+    },
+    // 主题书翻页：主题书已在 md_reading.books，直接走 advanceBook；旧通道名保持不变
     'reading.themeAdvance': function (themeId, bookId, delta) {
-      return growthStore.mutate(function (s) { return growth.advanceBook(s, themeId, bookId, delta); });
+      const now = new Date();
+      const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      const date = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+      return readingStore.mutate(function (s) { return readingMod.advanceBook(s, bookId, delta || 0, date); });
     },
     // 一次性把第 22 轮学习成长里的旧摘录汇进「读书笔记」，按 sourceQuoteId 去重
     'reading.importGrowthQuotes': function () {
@@ -1144,6 +1240,37 @@ function bootCore() {
       const out = financeMod.bulkUpdate(financeStore.read(), ids, patch || {});
       if (out.updated > 0) financeStore.write(out.state);
       return out.updated;
+    },
+
+    // ---- 与九格「金钱收支」格联动：只读汇总 + 用户点名才导入 ----
+    // 九格按天把收支挂在 morning_diary_* 的 moneyBook.entries 上（cents 正整数 + type）。
+    // 这里只遍历读取、标出哪些已导入过；绝不写日记，避免同一笔钱两处各记一半。
+    'finance.moneyRows': function () {
+      const fin = financeStore.read();
+      const imported = {};
+      fin.txns.forEach(function (t) { if (t.importedId) imported[t.importedId] = true; });
+      const rows = [];
+      repo.keys().forEach(function (k) {
+        const m = /^morning_diary_(\d{4}-\d{2}-\d{2})$/.exec(k);
+        if (!m) return;
+        const rec = repo.get(k);
+        const book = moneyBook.normalize(rec && rec.moneyBook);
+        book.entries.forEach(function (e) {
+          const iid = financeMod.moneyImportId(m[1], e.id);
+          rows.push({
+            id: e.id, date: m[1], type: e.type, cents: e.cents,
+            category: e.category, note: e.note,
+            importedId: iid, imported: !!imported[iid]
+          });
+        });
+      });
+      rows.sort(function (a, b) { return b.date.localeCompare(a.date) || b.id.localeCompare(a.id); });
+      return { rows: rows, pending: rows.filter(function (r) { return !r.imported; }).length };
+    },
+    'finance.importMoneyRows': function (rows) {
+      const out = financeMod.importMoneyBook(financeStore.read(), rows || []);
+      if (out.added > 0) financeStore.write(out.state);
+      return { added: out.added, skipped: out.skipped };
     },
 
     // ---- V2.12 本机时间源：只读订阅 ActivityWatch ----
@@ -1379,6 +1506,86 @@ function bootCore() {
       return out;
     },
 
+    // ---- 自由记录（md_freewrite）：闪念 / 长文 / 胶囊只读派生 ----
+    'free.board': function () { return freeStore.read(); },
+    // 胶囊信息收录：只派生元信息。封存中的信连正文都不往渲染层送，
+    // 避免「界面不显示但 IPC 里已经有了」的假保密（沿用 CapsuleContext 老口径）。
+    'free.capsuleIndex': function () {
+      const res = diary.listCapsules();
+      const list = Array.isArray(res && res.data) ? res.data : [];
+      const now = isoDayNow();
+      return list.map(function (c) {
+        const x = c || {};
+        const due = !x.opened && String(x.openAt || '') <= now;
+        const readable = !!x.opened || due;
+        return {
+          id: String(x.id || ''), openAt: String(x.openAt || ''),
+          writtenAt: String(x.writtenAt || ''), opened: !!x.opened,
+          due: due, sealed: !x.opened && !due,
+          text: readable ? String(x.text || '') : '',
+          preview: readable ? String(x.text || '').slice(0, 40) : ''
+        };
+      }).filter(function (r) { return !!r.id; });
+    },
+    // 闪念 → 收件箱：一次调用里完成「原文落库 + 按 source 幂等生成 inbox 任务」。
+    'free.flashAdd': function (text, date) {
+      const before = {};
+      freeStore.read().flashes.forEach(function (f) { before[f.id] = true; });
+      const state = freeStore.mutate(function (s) {
+        return freeMod.addFlash(s, { text: text, date: date });
+      });
+      const added = state.flashes.filter(function (f) { return !before[f.id]; });
+      if (!added.length) return { item: null, synced: false, reason: 'EMPTY_OR_FULL' };
+      const ok = syncFlash(added[0]);
+      return { item: freeMod.findFlash(freeStore.read(), added[0].id), synced: ok };
+    },
+    'free.flashRetry': function (id) {
+      const f = freeMod.findFlash(freeStore.read(), id);
+      if (!f) return { item: null, synced: false };
+      const ok = syncFlash(f);
+      return { item: freeMod.findFlash(freeStore.read(), id), synced: ok };
+    },
+    'free.flashSyncPending': function () {
+      const list = freeMod.pendingSync(freeStore.read());
+      let done = 0;
+      list.forEach(function (f) { if (syncFlash(f)) done += 1; });
+      return { total: list.length, synced: done };
+    },
+    // Q3 A：删闪念时一并删掉对应「未完成」的收件箱任务，两边都不留孤儿。
+    'free.flashRemove': function (id) {
+      const f = freeMod.findFlash(freeStore.read(), id);
+      if (!f) return freeStore.read();
+      try {
+        const hit = (gtdStore.read().tasks || []).filter(function (t) {
+          return t && t.source === f.source && t.status !== 'done';
+        });
+        hit.forEach(function (t) {
+          gtdStore.mutate(function (s) { return gtd.removeTask(s, t.id); });
+        });
+      } catch (e) { /* 任务删不掉也不拦着删闪念 */ }
+      freeStore.mutate(function (s) { return freeMod.removeFlash(s, id); });
+      return freeStore.read();
+    },
+    'free.docAdd': function (patch) {
+      freeStore.mutate(function (s) { return freeMod.addDoc(s, patch || {}); });
+      return freeStore.read();
+    },
+    'free.docUpdate': function (id, patch) {
+      freeStore.mutate(function (s) { return freeMod.updateDoc(s, id, patch || {}); });
+      return freeStore.read();
+    },
+    'free.docRemove': function (id) {
+      freeStore.mutate(function (s) { return freeMod.removeDoc(s, id); });
+      return freeStore.read();
+    },
+    'free.prefs': function (patch) {
+      freeStore.mutate(function (s) { return freeMod.setPrefs(s, patch || {}); });
+      return freeStore.read().prefs;
+    },
+    // 写作法体检：本地纯函数，只给定位与计数，不给改写文本、不联网、不落库。
+    'writing.check': function (text) { return writingCheck.analyze(text); },
+    'writing.cards': function () { return writingCheck.cards; },
+
     // ---- 胶囊写信日映射 ----
     // capsuleGroups() 只给"还有几天开启"，不给"已经封存了几天"。
     // writtenAt 在原始 listCapsules() 里有，补一个 id → writtenAt 的映射，界面自己算天数。
@@ -1441,6 +1648,9 @@ function bootCore() {
       // 家庭账本：分类 / 账户 / 流水 / 预算 / 规则全量带走，换机后预算不用重设
       obj.finance = financeStore.read();
       obj.financeVersion = 1;
+      // 自由记录：闪念 / 长文 / 偏好全量带走。胶囊不在这里——它随日记备份走，不复制。
+      obj.freewrite = freeStore.read();
+      obj.freewriteVersion = 1;
       // 本机时间源：规则 + 日聚合。**不含任何窗口标题**（契约里就没有这个字段）
       obj.worktime = worktimeStore.read();
       obj.worktimeVersion = 1;
@@ -1528,6 +1738,7 @@ function bootCore() {
       ['attach', attachStore, attachMod],
       ['reading', readingStore, readingMod],
       ['finance', financeStore, financeMod],
+      ['freewrite', freeStore, freeMod],
       ['worktime', worktimeStore, worktimeMod]
     ];
     V2_SECTIONS.forEach(function (entry) {
@@ -1720,13 +1931,14 @@ function bootCore() {
       }
     });
     win.setMenuBarVisibility(false);
-    win.loadFile(READER_HTML, { query: { bookId: bookId, mode: b ? 'leisure' : 'theme' } });
+    win.loadFile(READER_HTML, { query: { bookId: bookId, mode: b ? (b.themeId ? 'theme' : 'leisure') : 'theme' } });
     win.on('closed', function () { readerWindows.delete(bookId); });
     readerWindows.set(bookId, win);
     return { ok: true, reused: false };
   }
 
-  // 账本三栏需要比主窗更宽的画布，且记账是长时间连续操作，独立窗口比内嵌页合适。
+  // 记账是长时间连续操作，独立窗口比内嵌页合适；但规格与主窗一致：
+  // 1440×900 / 最小 1024×680，三栏默认 240 / 300、可拖、中栏 ≥420——切窗口不跳尺寸。
   // 仍用同一个 preload：渲染层没有第二条出境口，也没有任何跨窗口直连。
   function openFinanceWindow() {
     if (financeWindow && !financeWindow.isDestroyed()) {
@@ -1735,10 +1947,10 @@ function bootCore() {
       return { ok: true, reused: true };
     }
     const win = new BrowserWindow({
-      width: 1480,
-      height: 920,
-      minWidth: 1200,
-      minHeight: 720,
+      width: 1440,
+      height: 900,
+      minWidth: 1024,
+      minHeight: 680,
       title: '九格手记 · 家庭账本',
       backgroundColor: '#faf7f1',
       webPreferences: {

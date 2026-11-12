@@ -272,6 +272,9 @@ function createApiLayer(opts) {
     'reading.addChapter', 'reading.updateChapter', 'reading.removeChapter',
     'reading.addNote', 'reading.updateNote', 'reading.removeNote', 'reading.markPushed',
     'reading.themeAdvance', 'reading.importGrowthQuotes', 'reading.diaryLine', 'reading.exportMd',
+    // V2.14 主题阅读自建书单：主题表 + 主题书导入 + 一次性迁移旧 growth 书单
+    'reading.themes', 'reading.themeAdd', 'reading.themeUpdate', 'reading.themeRemove',
+    'reading.importGrowthThemes',
     // 本机时间源（md_worktime）：只读订阅 ActivityWatch。
     // 白名单里没有任何「写回 ActivityWatch」的函数——客户端只发 GET，这条在这里也钉死。
     'worktime.read', 'worktime.meta', 'worktime.enable', 'worktime.setHost', 'worktime.setKeepDays',
@@ -283,7 +286,8 @@ function createApiLayer(opts) {
     // 不进这里——那条路由的前提是「领域函数都是同步纯函数」。
     'weather.view', 'weather.setEnabled', 'weather.setMode', 'weather.setCity',
     'weather.clearCity', 'weather.setUnit',
-    // 家庭账本（md_finance）：与 MoneyView（按天挂在日记里）互不写对方的数据。
+    // 家庭账本（md_finance）：与九格 MoneyView 只做「只读汇总 + 显式导入」，
+    // 导入写 md_finance 的 txns（按 importedId 去重），绝不改写 morning_diary_*。
     // 金额一律整数分，导入/导出都是本机文件，不含任何联网函数。
     'finance.meta', 'finance.board', 'finance.read',
     'finance.add', 'finance.update', 'finance.remove',
@@ -292,13 +296,22 @@ function createApiLayer(opts) {
     'finance.addCategory', 'finance.removeCategory',
     'finance.addAccount', 'finance.removeAccount',
     'finance.importCsv', 'finance.exportCsv',
+    // 手记收支联动：只读扫描日记 + 点名导入（仍只写 md_finance）
+    'finance.moneyRows', 'finance.importMoneyRows',
     // 完整理财：只读视图 + 目标/周期/账户/批量编辑的写操作，仍是同一份 md_finance
     'finance.accountRows', 'finance.netWorth', 'finance.cashFlow', 'finance.categoryReport',
     'finance.goalRows', 'finance.recurringRows', 'finance.detectSubscriptions',
     'finance.search', 'finance.insights',
     'finance.addGoal', 'finance.updateGoal', 'finance.removeGoal',
     'finance.addRecurring', 'finance.updateRecurring', 'finance.removeRecurring',
-    'finance.setAccountMeta', 'finance.bulkUpdate'
+    'finance.setAccountMeta', 'finance.bulkUpdate',
+    // 自由记录（md_freewrite）：闪念 / 长文 / 胶囊只读派生；胶囊本身仍走 diary-store 的白名单。
+    // 同步到收件箱的动作发生在主进程路由里，渲染层拿不到跨 store 的写权限。
+    'free.board', 'free.capsuleIndex',
+    'free.flashAdd', 'free.flashRetry', 'free.flashSyncPending', 'free.flashRemove',
+    'free.docAdd', 'free.docUpdate', 'free.docRemove', 'free.prefs',
+    // 写作法体检：本地纯函数，只返回定位与计数，不联网、不代写。
+    'writing.check', 'writing.cards'
   ];
 
   route('v1/domain:call', function (p) {

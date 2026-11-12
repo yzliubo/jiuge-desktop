@@ -19,8 +19,11 @@
     "weather:check": "node tests/phase2/weather-case.js",
     "build:view": "npm --prefix renderer-v2 run build",
     "dist": "electron-builder --win --x64 --config electron-builder.yml",
-    "dist:v2": "electron-builder --win --x64 --config electron-builder-v2.yml",
-    "test:gui": "node tests/e2e/gui-assert.js",
+    "dist:v2": "node tools/check-artifact-freshness.js --source-dist && electron-builder --win --x64 --config electron-builder-v2.yml && node tools/check-artifact-freshness.js && node tools/check-v2-asar.js",
+    "artifact:check": "node tools/check-artifact-freshness.js",
+    "asar:check": "node tools/check-v2-asar.js",
+    "dist:check": "node tools/check-artifact-freshness.js --source-dist",
+    "test:gui": "node tools/check-artifact-freshness.js --source-dist && node tests/e2e/gui-assert.js",
     "test:exe": "node tests/e2e/exe-assert.js"
   },
   "devDependencies": {

@@ -24,17 +24,18 @@ delete process.env.ELECTRON_RUN_AS_NODE;
 fs.mkdirSync(userData, { recursive: true });
 
 // 解包目录的 app.asar 有时候会被环境钉死（删不掉、改名也不行，进程列表里又查不到），
-// 那时打包只能换个输出目录。这里按「新构建优先」的顺序找包，两个都不存在时仍报错。
-// 注意：只是换位置核对，验的还是这次真打出来的那一份，不是拿假数据糊过去。
+// 那时打包只能换个输出目录。
+// 整改（R-07）：原实现按「build-v2b 优先」硬编码顺序查找，一旦 build-v2b 里留着旧包，
+// 就会出现「跑的是新 exe、验的是旧载荷」——门禁验错对象。现改为**按 mtime 取最新**，
+// 不论输出目录叫什么名字，验的都是最近一次真正打出来的那一份。
 function resolveAsar() {
   const list = [
-    path.join(root, 'build-v2b', 'win-unpacked', 'resources', 'app.asar'),
-    path.join(root, 'build-v2', 'win-unpacked', 'resources', 'app.asar')
-  ];
-  for (let i = 0; i < list.length; i++) {
-    if (fs.existsSync(list[i])) return list[i];
-  }
-  return list[1];
+    path.join(root, 'build-v2', 'win-unpacked', 'resources', 'app.asar'),
+    path.join(root, 'build-v2b', 'win-unpacked', 'resources', 'app.asar')
+  ].filter(function (p) { return fs.existsSync(p); });
+  if (!list.length) return path.join(root, 'build-v2', 'win-unpacked', 'resources', 'app.asar');
+  list.sort(function (a, b) { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; });
+  return list[0];
 }
 
 let passed = 0;

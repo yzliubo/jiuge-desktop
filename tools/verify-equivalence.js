@@ -964,38 +964,46 @@ check('nav.js 覆盖 5 页 URL 与 5 项侧栏入口', function () {
 // ==================================================================== 11. T5 打包交付
 section('11. T5 打包 / 启动 / 交付说明一致性');
 const README_PATH = path.join(ROOT, 'README.md');
-const BUILD_DIR = path.join(ROOT, 'build');
+// 整改（R-06）：原实现 BUILD_DIR 指向 ROOT/build，校验的是 build/ 下两个 V1 exe 的
+// 字节与 SHA256，而 V3.3 的交付物在 build-v2、由 electron-builder-v2.yml 产出。
+// 结果是 verify 69/69 全绿却从未验过交付物。现改为以 artifact-manifest.json 为唯一声明源。
+const MANIFEST_PATH = path.join(ROOT, 'build-v2', 'artifact-manifest.json');
 
-check('electron-builder.yml 配置合法：无非法字段，portable + nsis 双目标声明', function () {
-  const y = readText(path.join(ROOT, 'electron-builder.yml'));
+check('electron-builder-v2.yml 配置合法：portable 单目标 + 期望产物命名', function () {
+  const y = readText(path.join(ROOT, 'electron-builder-v2.yml'));
   const illegal = /^\s*(fileVersion|productVersion)\s*:/m.test(y);
-  const ok = !illegal && /target:\s*portable/.test(y) && /target:\s*nsis/.test(y)
-    && /artifactName: 九格手记-便携版\.exe/.test(y);
-  return { ok: ok, detail: '非法字段=' + illegal + ' / portable+nsis 已声明 / 便携版命名正确' };
+  const hasPortable = /target:\s*portable/.test(y);
+  const nameOk = /artifactName:\s*九格手记-v2-便携版\.exe/.test(y);
+  const outOk = /output:\s*build-v2/.test(y);
+  return { ok: !illegal && hasPortable && nameOk && outOk,
+    detail: '非法字段=' + illegal + ' / portable=' + hasPortable + ' / 产物名=' + nameOk + ' / 输出目录=' + outOk };
 });
 
-check('两个 exe 产物存在，字节数与 SHA256 与 README 记录一致', function () {
-  const targets = [
-    { name: '九格手记-便携版.exe', bytes: 71227242, sha: '318ee77ea56593e483dc7a32ec415789785aa8bb089d17b986b666588265577f' },
-    { name: '九格手记-安装版-1.0.0.exe', bytes: 71454987, sha: 'b44d4187774951ab1b22e7d8a7d0b411498c815a2e02cfb1fd0313740234e6cd' },
-  ];
-  const rm = readText(README_PATH);
-  const bad = [];
-  const detail = [];
-  targets.forEach(function (t) {
-    const f = path.join(BUILD_DIR, t.name);
-    if (!fs.existsSync(f)) { bad.push(t.name + '(缺失)'); return; }
-    const buf = fs.readFileSync(f);
-    const sha = sha256(buf);
-    // README 面向用户使用千分位写法（71,227,242），校验同时接受无逗号与千分位两种记录形式。
-    const plain = String(t.bytes);
-    const grouped = plain.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    const bytesRecorded = rm.indexOf(plain) >= 0 || rm.indexOf(grouped) >= 0;
-    detail.push(t.name + '=' + buf.length + 'B/' + sha.slice(0, 12) + '…');
-    if (buf.length !== t.bytes || !bytesRecorded || rm.indexOf(sha) < 0) bad.push(t.name);
-  });
-  return { ok: bad.length === 0,
-    detail: detail.join(' | ') + '；差异=' + (bad.length ? bad.join(',') : '无') };
+check('交付 exe 唯一，字节数与 SHA256 与 artifact-manifest.json 一致', function () {
+  // 这一条替代原先「两个 V1 exe 与 README 对拍」的断言：
+  // 它必须能拦住「交付物被替换 / 清单没更新 / 拿旧包冒充新包」三种情况。
+  if (!fs.existsSync(MANIFEST_PATH)) {
+    return { ok: false, detail: '缺少 build-v2/artifact-manifest.json' };
+  }
+  const mf = JSON.parse(readText(MANIFEST_PATH));
+  const outDir = path.join(ROOT, mf.buildOutputDir || 'build-v2');
+  if (!fs.existsSync(outDir)) return { ok: false, detail: '输出目录不存在：' + mf.buildOutputDir };
+  const exes = fs.readdirSync(outDir).filter(function (n) { return /\.exe$/i.test(n); });
+  if (exes.length !== 1) {
+    return { ok: false, detail: '交付目录下 exe 数量=' + exes.length + '（应为 1）：' + exes.join(', ') };
+  }
+  const f = path.join(outDir, exes[0]);
+  const buf = fs.readFileSync(f);
+  const sha = sha256(buf);
+  const nameOk = exes[0] === mf.artifact;
+  const bytesOk = buf.length === mf.bytes;
+  const shaOk = sha === mf.sha256;
+  return {
+    ok: nameOk && bytesOk && shaOk,
+    detail: exes[0] + ' = ' + buf.length + 'B/' + sha.slice(0, 12) + '…'
+      + '；清单=' + mf.bytes + 'B/' + String(mf.sha256).slice(0, 12) + '…'
+      + '；产物名一致=' + nameOk + ' 字节一致=' + bytesOk + ' SHA一致=' + shaOk
+  };
 });
 
 check('README.md 覆盖 10 个必备章节，并明确区分「另存为文件」与「复制到剪贴板」', function () {

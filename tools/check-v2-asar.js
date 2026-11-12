@@ -1,5 +1,6 @@
-// 一次性校验脚本：从打包后的 app.asar 里抽 Vue 产物，确认新 UI 与新模块真的进包了。
-// 不放进 tests/ 是因为它只服务于发版前人工核对，不进 CI 门禁（门禁在 view-contract / exe-assert）。
+// 校验脚本：从打包后的 app.asar 里抽 Vue 产物，确认新 UI 与新模块真的进包了。
+// 整改（R-07）：原先自注「不进 CI」，导致 11-12 交付包掉了 300 条语料无人发现。
+// 现已纳入门禁（npm run asar:check，并串在 dist:v2 之后），未命中即失败。
 const asar = require('@electron/asar');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -170,3 +171,19 @@ console.log('  exe: ' + exePath);
 console.log('  exe 字节: ' + buf.length);
 console.log('  exe SHA256: ' + crypto.createHash('sha256').update(buf).digest('hex'));
 console.log('  app.asar 字节: ' + fs.statSync(asarPath).size);
+
+// ---- 门禁判定（R-07）：探针未全命中即失败，不再只打印给人看 ----
+// 必查模块：只列**以源码形式入包**的领域模块。四语言与视图是打进 dist 资产的，
+// 不以源码形式入包，由上面的语料/文案探针覆盖，不要写进这里（否则门禁必挂）。
+const requiredEntries = ['src/free/board.js', 'src/writing/check.js'];
+const missingEntries = requiredEntries.filter(function (r) { return !entry(r); });
+console.log('');
+if (misses.length || missingEntries.length) {
+  console.log('  [FAIL] 交付包内容不符合预期');
+  if (misses.length) console.log('         语料/文案未命中 ' + misses.length + ' 条：' + misses.join(' / '));
+  if (missingEntries.length) console.log('         缺少模块文件：' + missingEntries.join(' / '));
+  process.exitCode = 1;
+} else {
+  console.log('  [PASS] 全部探针命中，交付包内容符合预期');
+}
+process.exit(process.exitCode || 0);

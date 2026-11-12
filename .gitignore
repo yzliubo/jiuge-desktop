@@ -50,6 +50,9 @@ tests/**/Session Storage/
 *.bak
 *.bak-*
 
+# 换肤 / 主题改造前留下的整目录备份（留档在磁盘，不入库）
+_backup-theme-*/
+
 # 误重定向产生的 Chromium/Electron 日志（文件名即 fd 号）
 # 文件保留在磁盘，仅不入库
 /2300

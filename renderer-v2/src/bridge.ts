@@ -6,6 +6,8 @@ import type { ApiEnvelope, DataChangedEvent, DiaryRecord, ListResult } from './t
 export interface PreloadBridge {
   invoke<T>(channel: string, payload?: unknown): Promise<ApiEnvelope<T>>;
   onDataChanged(cb: (event: DataChangedEvent) => void): () => void;
+  // 全局热键 / 托盘速记（R-09）：主进程推「现在可以记了」，payload.date 是按键那一刻的日期
+  onQuickCapture?(cb: (payload: { date: string; source: string }) => void): () => void;
   // 拖放：把 File 交给 preload 换成本机绝对路径，渲染层不接触 fs
   pathForFile(file: File): string;
 }
@@ -131,6 +133,35 @@ function createMemoryBridge(): PreloadBridge {
           break;
         case 'v1/health:backup':
           data = { ok: true, id: 'mock-' + Date.now() + '-manual' };
+          break;
+        // 可回滚版本（R-10）：mock 下给两条假版本，界面与类型仍可独立跑
+        case 'v1/snapshot:list':
+          data = {
+            items: [
+              { id: '1762900000000-auto', createdAt: new Date().toISOString(), bytes: 1024, count: 3, auto: true, reason: 'timer' },
+              { id: '1762800000000-pre-restore', createdAt: new Date(Date.now() - 86400000).toISOString(), bytes: 2048, count: 2, auto: false, reason: 'before-rollback' }
+            ]
+          };
+          break;
+        case 'v1/snapshot:restore':
+          data = { ok: true, restored: String(q.id || ''), safetyId: 'mock-safety', before: { diaries: 3, keys: 5, revision }, after: { diaries: 2, keys: 5, revision } };
+          break;
+        // 使用度量（R-11）：mock 下全为「尚未产生样本」，不编造数字
+        case 'v1/metrics:summary':
+          data = {
+            ok: true, enabled: true, file: '<mock>/metrics.log', sampleSize: 0, firstDay: null,
+            metrics: {
+              weekActiveDays: 0, nextDayRetention: null, week4Retention: null,
+              migrateRate: null, searchUsageRate: null, saveLatencyP50: null, saveLatencyP95: null
+            },
+            counts: { appStart: 0, entrySave: 0, saveEvents: 0, searchUse: 0, migrateStart: 0, migrateSuccess: 0 }
+          };
+          break;
+        case 'v1/metrics:setEnabled':
+          data = { ok: true, enabled: !!q.enabled };
+          break;
+        case 'v1/quickcapture:trigger':
+          data = { ok: true, queued: false, date: new Date().toISOString().slice(0, 10) };
           break;
         case 'v1/file:pick':
           data = { canceled: true, paths: [] };
@@ -377,6 +408,13 @@ export function onDataChanged(cb: (event: DataChangedEvent) => void) {
   return bridge.onDataChanged(cb);
 }
 
+// 全局热键 / 托盘速记（R-09）：返回解绑函数，用法与 onDataChanged 一致。
+// mock 环境下没有主进程推送，返回一个空解绑，界面照常可用。
+export function onQuickCapture(cb: (payload: { date: string; source: string }) => void): () => void {
+  if (typeof bridge.onQuickCapture === 'function') return bridge.onQuickCapture(cb);
+  return () => {};
+}
+
 // 领域层白名单调用：8 utils 的 68 个能力统一从这里出境
 export function domainCall<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
   return call<T>('v1/domain:call', { name, args });
@@ -404,6 +442,75 @@ export function healthCheck() {
 
 export function runBackup() {
   return call<{ ok: boolean; id?: string; error?: string }>('v1/health:backup', {});
+}
+
+// ---- 可回滚版本（R-10）----
+// 术语按 D8：这是「可回滚版本」，与数据中心的「导出记录」、健康卡里的「数据快照数量」不是一回事。
+export interface RestorableVersion {
+  id: string;
+  createdAt: string;
+  bytes: number;
+  count: number;
+  auto: boolean;
+  reason: string;
+}
+export interface RestoreResult {
+  ok: boolean;
+  restored?: string;
+  safetyId?: string;
+  before?: { diaries: number; keys: number; revision: number };
+  after?: { diaries: number; keys: number; revision: number };
+  code?: string;
+  message?: string;
+}
+
+export function listRestorable(): Promise<RestorableVersion[]> {
+  return call<{ items: RestorableVersion[] }>('v1/snapshot:list', {}).then((r) => (r && r.items) || []);
+}
+
+// 回滚直接用 invoke 而不是 call：call 在非 OK 时会抛错，把 code/message 丢掉，
+// 而回滚失败的原因（找不到 / 文件读不出来 / 留不了安全版本）必须原样告诉用户。
+export function restoreVersion(id: string): Promise<RestoreResult> {
+  return bridge.invoke<RestoreResult>('v1/snapshot:restore', { id })
+    .then((r) => r.data || { ok: false, code: r.code, message: r.message });
+}
+
+// ---- 使用度量（R-11）----
+// 只读汇总：算不出来的指标一律返回 null，界面上写「尚无可判定样本」，不编数字。
+export interface MetricsSummary {
+  ok: boolean;
+  enabled: boolean;
+  file: string;
+  sampleSize: number;
+  firstDay: string | null;
+  metrics: {
+    weekActiveDays: number;
+    nextDayRetention: number | null;
+    week4Retention: number | null;
+    migrateRate: number | null;
+    searchUsageRate: number | null;
+    saveLatencyP50: number | null;
+    saveLatencyP95: number | null;
+  };
+  counts: {
+    appStart: number; entrySave: number; saveEvents: number;
+    searchUse: number; migrateStart: number; migrateSuccess: number;
+  };
+}
+
+export function metricsSummary(): Promise<MetricsSummary | null> {
+  return call<MetricsSummary>('v1/metrics:summary', {}).then((r) => r || null);
+}
+
+export function setMetricsEnabled(enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> {
+  return call<{ ok: boolean; enabled: boolean }>('v1/metrics:setEnabled', { enabled })
+    .then((r) => r || { ok: false, enabled: false });
+}
+
+// ---- 快速记录（R-09）：托盘菜单 / 窗口未就绪补发都走这条 ----
+export function triggerQuickCapture(source = 'ui'): Promise<{ ok: boolean; queued: boolean; date?: string }> {
+  return call<{ ok: boolean; queued: boolean; date?: string }>('v1/quickcapture:trigger', { source })
+    .then((r) => r || { ok: false, queued: false });
 }
 
 export interface SaveReceipt { canceled: boolean; path?: string; bytes?: number }

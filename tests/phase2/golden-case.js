@@ -2935,6 +2935,47 @@ test('v2', 'free/接线：白名单、备份注入与导入、打包清单三处
   assert.ok(yml.indexOf('src/free/**/*') >= 0 && yml.indexOf('src/writing/**/*') >= 0, '打包清单漏了');
 });
 
+test('v2', 'metrics/隐私：指标只写本机独立文件，正文与关键词一律丢弃（R-11）', function () {
+  const os = require('os');
+  const { createMetrics } = require(path.resolve(__dirname, '../../src/core/metrics.js'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuge-metrics-'));
+  const m = createMetrics(dir);
+
+  // ① 正文类字段必须被白名单丢掉：即使调用方硬塞也写不进去
+  m.record('entry_save', {
+    ts: new Date().toISOString(), date: '2026-11-12', ms: 12,
+    text: '这是一句绝不该出现在指标里的正文', content: '同上', body: '同上'
+  });
+  m.record('search_use', { ts: new Date().toISOString(), mode: 'search.or', text: '私密关键词' });
+
+  const raw = fs.readFileSync(m.file, 'utf8');
+  assert.ok(raw.indexOf('绝不该出现') < 0, '指标文件里出现了正文');
+  assert.ok(raw.indexOf('私密关键词') < 0, '指标文件里出现了检索关键词');
+  assert.ok(raw.indexOf('"ms":12') >= 0, '该记的耗时没记下来');
+
+  // ② 汇总能真的算出东西（不是永远空表）
+  const s = m.summary();
+  assert.strictEqual(s.metrics.saveLatencyP50, 12, '保存耗时没进汇总');
+  assert.strictEqual(s.enabled, true);
+
+  // ③ 停用后不再写
+  m.setEnabled(false);
+  m.record('entry_save', { ts: new Date().toISOString(), date: '2026-11-13', ms: 99999 });
+  assert.ok(fs.readFileSync(m.file, 'utf8').indexOf('99999') < 0, '停用后仍在写指标');
+
+  // ④ 结构性保证：指标落在 dataDir 独立文件，备份导出里没有 metrics 字段
+  const main = fs.readFileSync(path.resolve(__dirname, '../../src/main/main-v2.js'), 'utf8');
+  assert.ok(main.indexOf('createMetrics(dataDir)') >= 0, '指标没有落在 dataDir');
+  assert.ok(main.indexOf('obj.metrics') < 0, '备份注入里出现了 metrics 字段（指标会被导出）');
+
+  // ⑤ 通道与开关都在白名单里，渲染层没有写原始事件的通道
+  const api = fs.readFileSync(path.resolve(__dirname, '../../src/core/api-layer.js'), 'utf8');
+  assert.ok(api.indexOf("'v1/metrics:summary'") >= 0, '缺少指标汇总路由');
+  assert.ok(api.indexOf("'v1/metrics:setEnabled'") >= 0, '缺少指标开关路由');
+  const preload = fs.readFileSync(path.resolve(__dirname, '../../src/preload/v2-preload.js'), 'utf8');
+  assert.ok(preload.indexOf('v1/metrics:record') < 0, 'preload 暴露了写原始事件的通道');
+});
+
 console.log('');
 if (failed > 0) {
   console.log('  失败明细: ' + JSON.stringify(failures, null, 2));

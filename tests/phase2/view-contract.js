@@ -138,9 +138,15 @@ check('唯一出境口：只有 bridge.ts 访问 jiugeBridge / ipcRenderer', fun
 check('preload 白名单通道与 v1 API 路由一致', function () {
   const preload = read('src/preload/v2-preload.js');
   const api = read('src/core/api-layer.js');
+  // 通道分两类：invoke 类必须有对应路由；**推送类**（ipcRenderer.on）由主进程单向发，
+  // 本来就没有路由，不能要求它在 api-layer 里存在。
+  // 原先只硬编码豁免 v1/data:changed，R-09 新增 v1/quickcapture:open 后立刻误报——
+  // 改成按「是否只用 on 订阅」自动排除，以后再加推送通道不必改这条断言。
+  const pushChannels = (preload.match(/ipcRenderer\.on\('(v1\/[A-Za-z:]+)'/g) || [])
+    .map(function (s) { return s.split("'")[1]; });
   const channels = (preload.match(/'v1\/[A-Za-z:]+'/g) || [])
     .map(function (s) { return s.slice(1, -1); })
-    .filter(function (c) { return c !== 'v1/data:changed'; });
+    .filter(function (c) { return pushChannels.indexOf(c) < 0; });
   assert(channels.length >= 7, '白名单通道不足');
   channels.forEach(function (c) {
     assert(api.indexOf("'" + c + "'") >= 0, '白名单通道在 api-layer 中不存在: ' + c);

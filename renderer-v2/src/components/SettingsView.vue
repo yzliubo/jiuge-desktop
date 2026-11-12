@@ -342,7 +342,7 @@ onMounted(async () => {
     </div>
 
     <div class="card"><h2>9 · 关于</h2>
-      <p class="line">日记不上传 · 无账号 · 无遥测 · 不联互联网（除你开启的天气）</p>
+      <p class="line">日记不上传 · 无账号 · 不联互联网（除你开启的天气）· 使用指标只存本机、从不上传</p>
       <p class="line" v-if="wxOn">首页天气已开启：只向气象服务取当前天气，发送的只有出口 IP，不发送任何本机记录。</p>
       <p class="line" v-if="wt && wt.enabled">本机时间源已开启：只读 127.0.0.1:5600，不出本机。</p>
       <p class="line" v-if="!(wxOn || (wt && wt.enabled))">不发起任何网络请求（含本机回环）。</p>

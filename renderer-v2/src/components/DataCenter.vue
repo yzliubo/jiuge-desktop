@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { domainCall, saveExport, healthCheck, runBackup, type HealthReport } from '../bridge';
+import { domainCall, saveExport, healthCheck, runBackup, listRestorable, restoreVersion,
+  metricsSummary, setMetricsEnabled,
+  type HealthReport, type RestorableVersion, type MetricsSummary } from '../bridge';
 import { callDomainRaw } from '../composables/useDomain';
 import { localDate } from '../types';
 
@@ -123,7 +125,105 @@ async function backupNow(): Promise<void> {
   }
 }
 
-onMounted(() => { void loadHealth(); void loadPackInfo(); });
+onMounted(() => { void loadHealth(); void loadPackInfo(); void loadVersions(); void loadMetrics(); });
+
+// ---- 本机使用指标（R-11）----
+// 指标只写本机 metrics.log（独立于 store.json，结构上进不了备份），从不上传。
+// 算不出来的指标写「尚无可判定样本」，绝不拿 0 冒充结论。
+const metrics = ref<MetricsSummary | null>(null);
+const metricsBusy = ref(false);
+
+async function loadMetrics(): Promise<void> {
+  try {
+    metrics.value = await metricsSummary();
+  } catch {
+    metrics.value = null;
+  }
+}
+
+async function toggleMetrics(): Promise<void> {
+  if (!metrics.value) return;
+  metricsBusy.value = true;
+  try {
+    await setMetricsEnabled(!metrics.value.enabled);
+    await loadMetrics();
+  } finally {
+    metricsBusy.value = false;
+  }
+}
+
+async function exportMetrics(): Promise<void> {
+  if (!metrics.value) return;
+  const name = '九格手记-使用指标-' + localDateStr() + '.json';
+  const r = await saveExport(name, JSON.stringify(metrics.value, null, 2));
+  message.value = r && r.path ? '已另存为 ' + r.path : '导出已取消';
+}
+
+function localDateStr(): string {
+  const d = new Date();
+  const p = (n: number) => (n < 10 ? '0' + n : String(n));
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+function ratioText(v: number | null): string {
+  return v === null ? '尚无可判定样本' : v + '%';
+}
+function retentionText(v: number | null): string {
+  if (v === null) return '尚无可判定样本';
+  return v ? '留存' : '未留存';
+}
+function msText(v: number | null): string {
+  return v === null ? '暂无样本' : v + ' ms';
+}
+
+// ---- 可回滚版本（R-10 / 术语按 D8）----
+// 「数据快照」是健康卡里的数量统计；这里是**可回滚版本**，能真的把数据退回去。
+// 采用两次点击确认，不弹原生对话框：一是可被 GUI 断言覆盖，二是避免模态吞掉焦点。
+const versions = ref<RestorableVersion[]>([]);
+const versionsBusy = ref(false);
+const pendingId = ref('');
+const restoringId = ref('');
+
+async function loadVersions(): Promise<void> {
+  try {
+    versions.value = await listRestorable();
+  } catch {
+    versions.value = [];
+  }
+}
+
+function askRestore(v: RestorableVersion): void {
+  pendingId.value = pendingId.value === v.id ? '' : v.id;
+}
+
+async function rollbackTo(v: RestorableVersion): Promise<void> {
+  if (pendingId.value !== v.id) return;
+  restoringId.value = v.id;
+  pendingId.value = '';
+  try {
+    const r = await restoreVersion(v.id);
+    if (r.ok) {
+      const before = r.before ? r.before.diaries : -1;
+      const after = r.after ? r.after.diaries : -1;
+      message.value = '已回到 ' + timeOf(v.createdAt) + ' 的版本'
+        + (before >= 0 && after >= 0 ? '（日记 ' + before + ' → ' + after + ' 篇）' : '')
+        + '；回滚前的状态已留为一份安全版本，可再退回。';
+    } else {
+      message.value = '回滚未执行：' + (r.message || r.code || '未知原因');
+    }
+  } catch (e) {
+    message.value = '回滚失败：' + String((e as Error)?.message || e);
+  } finally {
+    restoringId.value = '';
+    versionsBusy.value = true;
+    try {
+      await loadVersions();
+      await loadHealth();
+    } finally {
+      versionsBusy.value = false;
+    }
+  }
+}
 
 async function generate(): Promise<string> {
   const f = formats.find((x) => x.key === format.value) || formats[0];
@@ -266,6 +366,56 @@ function onFile(event: Event): void {
       </p>
     </section>
 
+    <!-- 可回滚版本（R-10）：不只告诉你「有几份快照」，而是能真的退回去 -->
+    <section class="panel" aria-label="可回滚版本">
+      <h2>可回滚版本</h2>
+      <p class="clipboard-hint">
+        这里是「可回滚版本」——能真的把数据退回到那一刻。与上面健康卡里的「快照 N 份」指同一批文件，
+        但只有这里能执行回滚。回滚前会自动给当前状态留一份安全版本，退错了还能再退回来。
+      </p>
+      <p v-if="!versions.length" class="health-empty">还没有可回滚的版本。点上面的「立即备份」生成一份。</p>
+      <ul v-else class="ver-list">
+        <li v-for="v in versions" :key="v.id" class="ver-item" :data-ver-id="v.id">
+          <span class="ver-when">{{ timeOf(v.createdAt) }}</span>
+          <span class="ver-meta">
+            {{ v.count >= 0 ? v.count + ' 篇' : '篇数未知' }} · {{ kb(v.bytes) }} · {{ v.auto ? '自动' : '手动' }}<template v-if="v.reason"> · {{ v.reason }}</template>
+          </span>
+          <span class="ver-spacer"></span>
+          <button
+            class="btn ver-btn"
+            :class="{ 'ver-ask': pendingId === v.id }"
+            :disabled="!!restoringId || versionsBusy"
+            @click="pendingId === v.id ? rollbackTo(v) : askRestore(v)"
+          >{{ restoringId === v.id ? '回滚中…' : pendingId === v.id ? '确认回到这一份？' : '回到这一份' }}</button>
+        </li>
+      </ul>
+    </section>
+
+    <!-- 本机使用指标（R-11）：只写本机、不写正文、从不上传；备份里结构性地不含它 -->
+    <section class="panel" aria-label="本机使用指标">
+      <h2>本机使用指标</h2>
+      <p class="clipboard-hint">
+        只记「哪一天写了、存一次花多久、有没有用检索」这类计数，不记任何正文，也从不上传。
+        它落在独立文件里，不在备份中——导出备份永远带不走这些数字。
+      </p>
+      <p v-if="!metrics" class="health-empty">正在读取指标…</p>
+      <template v-else>
+        <div class="metric-grid">
+          <div class="h-cell"><span class="h-k">周有效记录天数</span><span class="h-v">{{ metrics.metrics.weekActiveDays }} / 5 天</span></div>
+          <div class="h-cell"><span class="h-k">次日留存</span><span class="h-v">{{ retentionText(metrics.metrics.nextDayRetention) }}</span></div>
+          <div class="h-cell"><span class="h-k">第 4 周留存</span><span class="h-v">{{ retentionText(metrics.metrics.week4Retention) }}</span></div>
+          <div class="h-cell"><span class="h-k">迁移完成率</span><span class="h-v">{{ ratioText(metrics.metrics.migrateRate) }}</span></div>
+          <div class="h-cell"><span class="h-k">检索使用面</span><span class="h-v">{{ ratioText(metrics.metrics.searchUsageRate) }}</span></div>
+          <div class="h-cell"><span class="h-k">保存耗时 P50 / P95</span><span class="h-v">{{ msText(metrics.metrics.saveLatencyP50) }} / {{ msText(metrics.metrics.saveLatencyP95) }}</span></div>
+        </div>
+        <div class="row">
+          <button class="btn" :disabled="metricsBusy" @click="toggleMetrics">{{ metrics.enabled ? '停用本机指标' : '启用本机指标' }}</button>
+          <button class="btn" @click="exportMetrics">另存为文件</button>
+          <span class="muted">样本 {{ metrics.sampleSize }} 条{{ metrics.enabled ? '' : ' · 当前已停用' }}</span>
+        </div>
+      </template>
+    </section>
+
     <!-- V1.3「一个文件」：eDiary 27 年的信任状就是「你的记录是一个能拷走的文件」。
          九格不改内部存储，只把数据键打成一个可校验、可还原的 .jiuge 文本容器。 -->
     <section class="panel" aria-label="一个文件">
@@ -366,7 +516,7 @@ function onFile(event: Event): void {
 .hbtn { padding: 3px 10px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); cursor: pointer; }
 .hbtn:hover:not(:disabled) { border-color: var(--palette-border); background: var(--palette-soft); color: var(--palette-primary); }
 .hbtn:disabled { opacity: 0.5; cursor: default; }
-.health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
+.health-grid, .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
 .h-cell { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); min-width: 0; }
 .h-k { font-size: 11px; color: var(--surface-muted); }
 .h-v { font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -388,6 +538,20 @@ function onFile(event: Event): void {
 .text { width: 100%; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); outline: none; resize: vertical; }
 .file { font-size: 12px; }
 .clipboard-hint, .muted, .empty { font-size: 12px; color: var(--surface-muted); margin: var(--space-2) 0 0; }
+
+/* 可回滚版本（R-10） */
+.ver-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.ver-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 6px 8px; border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.ver-item:last-child { border-bottom: 0; }
+.ver-when { font-variant-numeric: tabular-nums; }
+.ver-meta { color: var(--surface-muted); }
+.ver-spacer { flex: 1; }
+.ver-btn { font-size: 12px; padding: 2px 10px; }
+.ver-ask { background: var(--warn-soft, #f7e6c8); border-color: var(--warn, #c98b2e); font-weight: 600; }
 .receipt { font-size: 12px; padding: var(--space-2); border-radius: var(--radius-md); background: var(--surface-raised); margin-top: var(--space-2); word-break: break-all; }
 .receipt-on { border: 0.5px solid var(--palette-border); color: var(--palette-primary); }
 .report, .hist { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: var(--space-2); }

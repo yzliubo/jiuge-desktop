@@ -127,8 +127,22 @@ function createRepository(opts) {
     return { flushed: true, bytes: res.bytes, revision: revision, reason: reason || 'unknown' };
   }
 
-  function contentHashMap() {
-    const out = {};
+  // 回滚 / 外部改盘后从磁盘重载（整改 R-10）。
+  // 关键点有两个，缺一个回滚就会「看起来成功、下一次 flush 被覆盖」：
+  //   ① 先把 journal 打到当前 seq（丢弃未落盘的回放记录），否则 load() 会把旧记录重放回来；
+  //   ② 清空内存 map 再 load()，否则被快照删掉的键仍留在内存里。
+  function reload(reason) {
+    journal.checkpoint(journal.seq);
+    map = new Map();
+    revision = 0;
+    dirty = false;
+    const r = load();
+    if (r && typeof r === 'object') r.reason = reason || 'reload';
+    emit(keys().concat(['__reload__']));
+    return r;
+  }
+
+  function contentHashMap() {    const out = {};
     const list = keys();
     for (let i = 0; i < list.length; i++) out[list[i]] = contract.contentHash(map.get(list[i]));
     return out;
@@ -166,6 +180,7 @@ function createRepository(opts) {
 
   return {
     load: load,
+    reload: reload,
     set: set,
     remove: remove,
     get: get,

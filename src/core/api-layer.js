@@ -55,6 +55,7 @@ function createApiLayer(opts) {
   route('v1/diaries:upsert', function (p) {
     const q = p || {};
     if (!q.record || !q.record.date) return contract.fail('INVALID_FORMAT', '缺少 record.date');
+    const t0 = Date.now();
     const requestId = q.requestId ? String(q.requestId) : '';
     if (requestId && seen.has(requestId)) return seen.get(requestId);
     const key = 'morning_diary_' + q.record.date;
@@ -79,6 +80,17 @@ function createApiLayer(opts) {
       });
     }
     if (requestId) seen.set(requestId, payload);
+    // 使用度量（R-11）：只记「哪一天保存 + 耗时」，不记任何正文。
+    // 这段耗时含 journal 的 writeSync + fsyncSync，正是用户感知的那一段。
+    try {
+      if (typeof opts.metricsRecord === 'function') {
+        opts.metricsRecord('entry_save', {
+          ts: new Date().toISOString(),
+          date: String(q.record.date),
+          ms: Date.now() - t0
+        });
+      }
+    } catch (e) { /* 度量失败绝不影响保存 */ }
     return payload;
   });
 
@@ -324,6 +336,10 @@ function createApiLayer(opts) {
     const args = Array.isArray(q.args) ? q.args : [];
     try {
       const result = fn.apply(null, args);
+      // 检索使用率（R-11）：只记「用了哪种检索」，不记关键词
+      if (name.indexOf('search.') === 0 && typeof opts.metricsRecord === 'function') {
+        try { opts.metricsRecord('search_use', { ts: new Date().toISOString(), mode: name }); } catch (e) { /* 度量失败不影响检索 */ }
+      }
       return contract.ok(result === undefined ? null : result);
     } catch (e) {
       return contract.fail((e && e.code) || 'CLIENT_EXCEPTION', (e && e.message) || String(e));
@@ -367,6 +383,59 @@ function createApiLayer(opts) {
   }
   route('v1/weather:sync', asyncDomain('weather.sync'));
   route('v1/weather:geocode', asyncDomain('weather.geocode'));
+
+  // ---- 可回滚版本（R-10）：列出与回滚都由主进程执行 ----
+  // 渲染层拿不到文件路径，只传一个 id；id 的合法性与快照可读性由主进程校验。
+  route('v1/snapshot:list', function () {
+    if (typeof opts.snapshotLister !== 'function') return contract.fail('CLIENT_EXCEPTION', '未提供快照列表');
+    try {
+      return contract.ok({ items: opts.snapshotLister() });
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
+
+  route('v1/snapshot:restore', function (p) {
+    if (typeof opts.snapshotRestorer !== 'function') return contract.fail('CLIENT_EXCEPTION', '未提供回滚能力');
+    const q = p || {};
+    try {
+      const r = opts.snapshotRestorer(q.id);
+      if (r && r.ok === false) return contract.fail(r.code || 'RESTORE_FAILED', r.msg || '回滚失败', r);
+      return contract.ok(r);
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
+
+  // ---- 使用度量（R-11）：只读汇总 + 开关；渲染层不能写原始事件 ----
+  route('v1/metrics:summary', function () {
+    if (typeof opts.metricsSummary !== 'function') return contract.fail('CLIENT_EXCEPTION', '未提供度量');
+    try {
+      return contract.ok(opts.metricsSummary());
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
+
+  route('v1/metrics:setEnabled', function (p) {
+    if (typeof opts.metricsSetEnabled !== 'function') return contract.fail('CLIENT_EXCEPTION', '未提供度量开关');
+    try {
+      return contract.ok(opts.metricsSetEnabled({ enabled: !!(p && p.enabled) }));
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
+
+  // ---- 快速记录（R-09）：托盘点「快速记录」或热键都走这里 ----
+  // 热键本身在主进程注册；这条路由是给托盘菜单与「窗口未就绪时补发」用的。
+  route('v1/quickcapture:trigger', function (p) {
+    if (typeof opts.quickCapture !== 'function') return contract.fail('CLIENT_EXCEPTION', '未提供快速记录');
+    try {
+      return contract.ok(opts.quickCapture((p && p.source) || 'ipc'));
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
 
   return {
     handle: handle,

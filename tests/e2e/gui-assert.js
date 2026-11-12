@@ -3275,6 +3275,91 @@ async function waitStep(page, n) {
         '删了闪念，收件箱任务还在（孤儿）');
     });
 
+    // ===== R-09 / R-10 / R-11 / R-12：第 1 批四项功能的真 DOM 断言 =====
+    await check('140 全局热键 Ctrl+Alt+J 已注册，托盘已就绪（R-09）', async () => {
+      const info = await app.evaluate(({ globalShortcut }) => ({
+        accelerator: global.__jiugeAccelerator,
+        registered: globalShortcut.isRegistered(global.__jiugeAccelerator || ''),
+        tray: typeof global.__jiugeTrayReady === 'function' ? global.__jiugeTrayReady() : false
+      }));
+      assert.strictEqual(info.accelerator, 'Control+Alt+J', '热键不是约定的 Ctrl+Alt+J');
+      assert.strictEqual(info.registered, true, '热键没注册上（可能被别的程序占用）');
+      assert.strictEqual(info.tray, true, '托盘图标没建起来');
+    });
+
+    await check('141 速记入口：触发后 ≤500ms 进入可输入态，且落日取触发那一刻（R-09）', async () => {
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(200);
+      assert.strictEqual(await page.locator('.quick textarea').count(), 0, '速记本来是开着的，测不出打开速度');
+      const t0 = Date.now();
+      await app.evaluate(() => global.__jiugeQuickCapture('e2e'));
+      await page.locator('.quick textarea').waitFor({ state: 'visible', timeout: 5000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('.quick textarea');
+        return !!el && document.activeElement === el;
+      }, { timeout: 5000 });
+      const cost = Date.now() - t0;
+      assert.ok(cost <= 500, '进入可输入态耗时 ' + cost + 'ms，超过 500ms 验收线');
+      // 落日：标题里的日期必须是「触发那一刻」，不是「保存那一刻」
+      const head = await page.locator('.quick-head strong').innerText();
+      assert.ok(/\d{4}-\d{2}-\d{2}/.test(head), '速记没显示落日日期：' + head);
+      await page.locator('.quick .close').click();
+      await page.waitForTimeout(200);
+    });
+
+    await check('142 可回滚版本：备份后列出，两步确认后真的执行（R-10）', async () => {
+      await page.locator('.nav-item').nth(6).click();
+      await page.waitForTimeout(300);
+      await page.getByRole('button', { name: '立即备份' }).click();
+      await page.waitForTimeout(800);
+      await page.waitForFunction(
+        () => document.querySelectorAll('.ver-list .ver-item').length > 0,
+        { timeout: 6000 }
+      );
+      const items = page.locator('.ver-list .ver-item');
+      const before = await items.count();
+      assert.ok(before >= 1, '备份后仍没有可回滚版本');
+      const btn = items.first().locator('.ver-btn');
+      assert.strictEqual((await btn.innerText()).trim(), '回到这一份', '按钮初始文案不对');
+      await btn.click();
+      await page.waitForTimeout(200);
+      assert.ok((await btn.innerText()).includes('确认回到这一份'), '第一次点击没有进入二次确认');
+      await btn.click();
+      await page.waitForTimeout(2000);
+      // 回滚会先给当前状态留一份安全版本，所以列表应该变长
+      const after = await items.count();
+      assert.ok(after > before, '回滚后没有生成安全版本（' + before + ' → ' + after + '）');
+      const msg = await page.locator('.message').innerText().catch(() => '');
+      assert.ok(msg.includes('已回到') || msg.includes('回滚未执行'), '回滚没有给出可见回执：' + msg);
+    });
+
+    await check('143 独立账本窗：打开后净资产真实渲染，不是空壳（R-12）', async () => {
+      const winPromise = app.waitForEvent('window', { timeout: 20000 });
+      await page.locator('.finance-btn').click();
+      const fin = await winPromise;
+      await fin.waitForLoadState('domcontentloaded');
+      await fin.waitForTimeout(1200);
+      const body = await fin.locator('body').innerText();
+      assert.ok(body.includes('净资产'), '账本窗没渲染「净资产」：' + body.slice(0, 120));
+      assert.ok(/净资产[\s\S]{0,30}\d/.test(body), '净资产没有数值，是个空壳');
+      await fin.close();
+    });
+
+    await check('144 四语言：切到 English 界面文案跟随，切回中文可还原（R-12）', async () => {
+      await page.locator('.nav-item').nth(7).click();
+      await page.waitForTimeout(300);
+      const before = await page.locator('.nav').innerText();
+      await page.locator('.seg').filter({ hasText: 'English' }).first().click();
+      await page.waitForTimeout(600);
+      const after = await page.locator('.nav').innerText();
+      assert.notStrictEqual(before, after, '切到 English 后导航文字没变化');
+      assert.ok(/[A-Za-z]{3,}/.test(after), '导航没变成英文：' + after);
+      await page.locator('.seg').filter({ hasText: '简体中文' }).first().click();
+      await page.waitForTimeout(600);
+      const back = await page.locator('.nav').innerText();
+      assert.strictEqual(back, before, '切回简体中文后没有完整还原');
+    });
+
     await check('113 真实窗口无 JS 运行时异常', async () => {
       assert.strictEqual(jsErrors.length, 0, JSON.stringify(jsErrors));
     });

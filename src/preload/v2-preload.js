@@ -23,7 +23,15 @@ const CHANNELS = [
   // 首页天气：两条会发远程 HTTP 的通道（取天气 / 手填城市检索）。
   // 渲染层只说「取今天的天气」，域名、超时、body 上限全在主进程的 weather/client.js。
   'v1/weather:sync',
-  'v1/weather:geocode'
+  'v1/weather:geocode',
+  // 可回滚版本（R-10）：渲染层只说「回到这一份」，文件读写与合法性校验全在主进程
+  'v1/snapshot:list',
+  'v1/snapshot:restore',
+  // 使用度量（R-11）：只读汇总与开关，没有写原始事件的通道
+  'v1/metrics:summary',
+  'v1/metrics:setEnabled',
+  // 快速记录（R-09）：托盘菜单与「窗口未就绪补发」走这条
+  'v1/quickcapture:trigger'
 ];
 
 contextBridge.exposeInMainWorld('jiugeBridge', {
@@ -48,5 +56,12 @@ contextBridge.exposeInMainWorld('jiugeBridge', {
     const listener = function (_event, data) { callback(data); };
     ipcRenderer.on('v1/data:changed', listener);
     return function () { ipcRenderer.removeListener('v1/data:changed', listener); };
+  },
+  // 全局热键 / 托盘速记（R-09）：主进程推过来的是「现在可以记了」，
+  // 载荷里的 date 是**按键那一刻**的日期，跨 00:00 也落对天。
+  onQuickCapture: function (callback) {
+    const listener = function (_event, payload) { callback(payload || {}); };
+    ipcRenderer.on('v1/quickcapture:open', listener);
+    return function () { ipcRenderer.removeListener('v1/quickcapture:open', listener); };
   }
 });

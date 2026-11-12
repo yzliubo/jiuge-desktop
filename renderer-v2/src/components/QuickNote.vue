@@ -2,7 +2,7 @@
 // 速记浮窗：一句话写完，选去处。
 // 四个去处各有语义：自由格=当日记、收件箱=当待办、胶囊=封起来、参考资料=先存着。
 // 记住上次选择，所以「回车即存」依然成立——分流不牺牲速度。
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 
 const props = defineProps<{ date: string }>();
 
@@ -14,6 +14,16 @@ const emit = defineEmits<{
 }>();
 
 const TARGET_KEY = 'jiuge.quickTarget';
+
+// 全局热键 / 托盘点进来时，用户预期「打开就能打字」，不该再点一下输入框（R-09 验收 ≤500ms 可输入）
+const inputEl = ref<HTMLTextAreaElement | null>(null);
+onMounted(() => {
+  const el = inputEl.value;
+  if (el) {
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
+});
 
 const TARGETS = [
   { key: 'free', label: '自由格', hint: '写进今天「自由」格，当日记' },
@@ -67,6 +77,7 @@ function submit(): void {
       <button class="close" aria-label="关闭速记" @click="emit('close')">关闭</button>
     </header>
     <textarea
+      ref="inputEl"
       v-model="text"
       class="quick-input"
       :class="{ 'input-on': canSave }"

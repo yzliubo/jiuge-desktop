@@ -2,7 +2,8 @@
 // B 架构 M3 最小可运行入口：加载 Vue3/Vite 静态产物，接上 M0/M1 数据层。
 // 本文件不覆盖 src/main/main.js（旧等价移植入口保持可用，便于回滚对比）。
 // 启动：npm run start:v2 （需先 npm run build:view）
-const { app, BrowserWindow, ipcMain, powerMonitor, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, powerMonitor, dialog, shell,
+  globalShortcut, Tray, Menu, nativeImage } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,6 +14,8 @@ const { createApiLayer } = require('../core/api-layer.js');
 const { createMigrator } = require('../core/migrate.js');
 const { createRecycle } = require('../core/recycle.js');
 const persistence = require('../core/persistence.js');
+// 本地使用度量（R-11）：只写事件类型 + 日期 + 计数/耗时，独立于 store.json，不联网
+const { createMetrics } = require('../core/metrics.js');
 // 本地电子书正文 / 目录解析：EPUB 走 ZIP，TXT/MD 分章，零第三方依赖
 const readerSource = require('../reading/reader-source.js');
 // 本机时间源：只读订阅 ActivityWatch（127.0.0.1:5600），不采集、不写回、不落窗口标题
@@ -30,6 +33,9 @@ const READER_HTML = path.resolve(__dirname, '../../renderer-v2/reader/index.html
 // 与主窗共用同一个 v2-preload，所以 finance.* 仍走 v1/domain:call 白名单。
 const FINANCE_HTML = path.resolve(__dirname, '../../renderer-v2/dist/finance.html');
 const PROBE = process.env.JIUGE_V2_PROBE === '1';
+// 全局速记热键（R-09）：选 Ctrl+Alt+J 是因为它与「九格 / Jiuge」同字母，
+// 且不与 Windows 的 Win+Shift+S、Ctrl+Alt+Del 等系统级组合冲突。
+const QUICK_CAPTURE_ACCELERATOR = 'Control+Alt+J';
 // 干净机 / 数据隔离：E2E 用独立 userData，绝不碰真实用户日记
 if (process.env.JIUGE_V2_USERDATA) app.setPath('userData', process.env.JIUGE_V2_USERDATA);
 let mainWindow = null;
@@ -56,6 +62,9 @@ function bootCore() {
     throw new Error('视图层产物不存在，请先执行 npm run build:view：' + DIST);
   }
   const dataDir = path.join(app.getPath('userData'), 'jiuge-data');
+  // 使用度量（R-11）：落 metrics.log，与 store.json 并列但**不在其中**，
+  // 所以导出备份时结构上不可能带出指标数据；内容只有日期与计数。
+  const metrics = createMetrics(dataDir);
   // 封面是小文件，落在本机数据目录；store 里只存 coverId，不塞 base64 进备份
   const coverDir = path.join(dataDir, 'covers');
   // 梦想的具象化图片：同一条目标一张，文件名 <dreamId>.<ext>，store 里只记文件名。
@@ -1778,6 +1787,75 @@ function bootCore() {
   // 并把状态翻译成用户看得懂的话——数据层其实很强，只是一直没告诉用户。
   function snapshotDirOf(id) { return path.join(dataDir, 'snapshots', id); }
 
+  // ---- 可回滚版本：列出 / 回滚（整改 R-10）----
+  // 术语按 D8 统一：这里叫「可回滚版本」，与数据中心页的「导出记录」、
+  // 健康卡里的「数据快照数量」是三个不同的东西，文案不混用。
+  const SNAPSHOT_ID_RE = /^\d{10,16}-[A-Za-z0-9_-]{1,40}$/;
+
+  function listRestorable() {
+    return persistence.listSnapshots(dataDir).map(function (id) {
+      let meta = null, createdAt = '', bytes = 0;
+      try {
+        meta = persistence.readJsonSafe(path.join(snapshotDirOf(id), 'meta.json'));
+        createdAt = (meta && meta.createdAt) || '';
+      } catch (e) { /* 元数据缺失不影响列出 */ }
+      const snapFile = path.join(snapshotDirOf(id), 'store.json');
+      try { bytes = fs.statSync(snapFile).size; } catch (e) { bytes = 0; }
+      return {
+        id: id,
+        createdAt: createdAt,
+        bytes: bytes,
+        count: countEntries(snapFile),
+        auto: /-auto$/.test(id),
+        reason: (meta && meta.meta && meta.meta.reason) || ''
+      };
+    });
+  }
+
+  // 回滚语义（三条不可省）：
+  // ① 先校验 id 与快照可解析——坏快照宁可拒绝，也不能把主库覆盖成坏文件；
+  // ② 覆盖前给「当前状态」留一份安全快照——回滚本身也必须可回滚；
+  // ③ 覆盖后 repo.reload() 让内存认账，否则下一次 flush 会把回滚结果原样盖回去。
+  function restoreSnapshotById(id) {
+    const target = String(id || '');
+    if (!SNAPSHOT_ID_RE.test(target)) {
+      return { ok: false, code: 'INVALID_ID', msg: '版本 id 格式不合法，已中止' };
+    }
+    if (persistence.listSnapshots(dataDir).indexOf(target) < 0) {
+      return { ok: false, code: 'NOT_FOUND', msg: '这个版本已不存在' };
+    }
+    const snapFile = path.join(snapshotDirOf(target), 'store.json');
+    let doc = null;
+    try { doc = persistence.readJsonSafe(snapFile); } catch (e) { doc = null; }
+    if (!doc || !doc.entries || typeof doc.entries !== 'object') {
+      return { ok: false, code: 'BAD_SNAPSHOT', msg: '这个版本的文件读不出来，已中止' };
+    }
+
+    const before = { diaries: -1, keys: repo.keys().length, revision: repo.revision };
+    try { before.diaries = (((diary.listDates() || {}).data) || []).length; } catch (e) { /* 计数失败不影响回滚 */ }
+
+    if (repo.isDirty()) {
+      try { repo.flush('pre-restore'); } catch (e) { /* 落盘失败不阻断：安全快照仍会留下 */ }
+    }
+    let safetyId = '';
+    try {
+      safetyId = persistence.createSnapshot(dataDir, 'pre-restore', { reason: 'before-rollback:' + target }).id;
+    } catch (e) {
+      return { ok: false, code: 'SAFETY_SNAPSHOT_FAILED', msg: '无法为当前数据留底，已中止回滚' };
+    }
+
+    if (!persistence.restoreSnapshot(dataDir, target)) {
+      return { ok: false, code: 'RESTORE_FAILED', msg: '覆盖主库失败' };
+    }
+    const reloaded = repo.reload('snapshot-restore');
+
+    const after = { diaries: -1, keys: repo.keys().length, revision: repo.revision };
+    try { after.diaries = (((diary.listDates() || {}).data) || []).length; } catch (e) { /* 同上 */ }
+
+    metrics.record('snapshot_restore', { ts: new Date().toISOString(), id: target });
+    return { ok: true, restored: target, safetyId: safetyId, before: before, after: after, reloaded: reloaded };
+  }
+
   function pruneAutoSnapshots() {
     const all = persistence.listSnapshots(dataDir); // 目录名以时间戳开头，天然倒序
     const autos = all.filter(function (id) { return /-auto$/.test(id); });
@@ -1974,6 +2052,15 @@ function bootCore() {
     domain: domain,
     healthChecker: buildHealth,
     backupRunner: runAutoBackup,
+    // 可回滚版本（R-10）：列出与回滚都放主进程，渲染层只说「回到这一份」
+    snapshotLister: listRestorable,
+    snapshotRestorer: restoreSnapshotById,
+    // 使用度量（R-11）：渲染层只读汇总，不能写也不能读原始事件
+    metricsSummary: function () { return metrics.summary(); },
+    metricsSetEnabled: function (p) { return metrics.setEnabled(!!(p && p.enabled)); },
+    metricsRecord: function (kind, fields) { return metrics.record(kind, fields); },
+    // 快速记录（R-09）：托盘/热键由主进程注册，渲染层只能问「现在有哪些入口」
+    quickCapture: function (source) { return triggerQuickCapture(source); },
     // 独立阅读窗口（目录 / 正文 / 笔记三栏）：开窗是主进程职责，渲染层只传 bookId
     readerOpener: openReaderWindow,
     // 独立账本窗口（导航 / 模块 / 洞察三栏）：渲染层只说「开账本」，不碰窗口句柄
@@ -2036,6 +2123,14 @@ function bootCore() {
   // 暴露给 E2E 探针：产物端到端要能验证"备份真的在跑"，而不只是"函数存在"
   global.__jiugeHealth = buildHealth;
   global.__jiugeBackup = runAutoBackup;
+  // 暴露给 E2E：热键/托盘无法被 Playwright 直接按键触发，但可以验证
+  // 「热键真的注册了」「托盘真的建起来了」「触发后渲染层真的进到可输入态」。
+  global.__jiugeMetrics = metrics;
+  global.__jiugeQuickCapture = triggerQuickCapture;
+  global.__jiugeAccelerator = QUICK_CAPTURE_ACCELERATOR;
+  global.__jiugeTrayReady = function () { return !!tray; };
+  global.__jiugeSnapshotRestore = restoreSnapshotById;
+  global.__jiugeSnapshotList = listRestorable;
 
   // 自动备份：启动一份 + 定时滚动（默认 30 分钟 / 保留 5 份）
   // 内部会先 flush 再判断有没有可备份内容：干净机首启且没写过东西时自动跳过，不造空快照。
@@ -2094,6 +2189,8 @@ function createWindow() {
     }
   });
   mainWindow.loadFile(DIST);
+  // 热键在窗口加载完成前按下时，排队的速记请求在这里补发（R-09 第②条）
+  mainWindow.webContents.on('did-finish-load', flushQuickCapture);
   mainWindow.webContents.on('did-finish-load', function () {
     if (!PROBE) return;
     try {
@@ -2118,6 +2215,106 @@ function createWindow() {
     }
   });
   mainWindow.on('closed', function () { mainWindow = null; });
+}
+
+// ======================= 全局热键 + 托盘速记（整改 R-09）=======================
+// F-09 是 PRD「次日留存 ≥60%」唯一载体，而此前 globalShortcut / new Tray 生产源码零命中。
+// 两条硬要求：
+//   ① 窗口未就绪时按键不能丢——先 arm 住，等 did-finish-load 再补发；
+//   ② 跨 00:00 正确落日——日期在**按键那一刻**取定，不是保存那一刻。
+let tray = null;
+let quickCaptureArmed = null;   // { date, source, at }
+
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function localToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+// 16×16 九格图标，内嵌 base64：不为一张托盘图标再加一个构建产物与一条打包清单
+const TRAY_ICON_B64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALklEQVR42mNgoAbQz/f/D8Okig0SAwYeYHNa/7UV/2GYrDCgrwGDMxBHUyLxAADfD6XN+UBAjwAAAABJRU5ErkJggg==';
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return false;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  return true;
+}
+
+// 触发一次快速记录；返回 queued 表示窗口还没准备好，已排队等加载完成补发
+function triggerQuickCapture(source) {
+  const payload = { date: localToday(), source: String(source || 'hotkey'), at: Date.now() };
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    quickCaptureArmed = payload;
+    return { ok: true, queued: true, reason: 'window-created' };
+  }
+  focusMainWindow();
+  if (mainWindow.webContents.isLoading()) {
+    quickCaptureArmed = payload;
+    return { ok: true, queued: true, reason: 'loading' };
+  }
+  mainWindow.webContents.send('v1/quickcapture:open', payload);
+  return { ok: true, queued: false, date: payload.date };
+}
+
+// 加载完成后补发被 arm 的那一次（窗口未就绪也不丢）
+function flushQuickCapture() {
+  if (!quickCaptureArmed || !mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.webContents.isLoading()) return;
+  const payload = quickCaptureArmed;
+  quickCaptureArmed = null;
+  try {
+    mainWindow.webContents.send('v1/quickcapture:open', payload);
+  } catch (e) { /* 窗口刚好被销毁：这一次算丢，但不静默崩主进程 */ }
+}
+
+function trayImage() {
+  return nativeImage.createFromDataURL('data:image/png;base64,' + TRAY_ICON_B64);
+}
+
+function requestQuit() {
+  let choice = 1;
+  try {
+    choice = dialog.showMessageBoxSync({
+      type: 'question',
+      buttons: ['取消', '退出'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '退出九格手记',
+      message: '确定要退出吗？',
+      detail: '退出前会把未落盘的内容写入磁盘。以后要记录，重新打开即可。'
+    });
+  } catch (e) {
+    choice = 1; // 对话框不可用时不要卡住退出流程
+  }
+  if (choice === 1) {
+    app.isQuitting = true;
+    app.quit();
+  }
+}
+
+function ensureTray() {
+  if (tray) return tray;
+  try {
+    tray = new Tray(trayImage());
+    tray.setToolTip('九格手记 · 记录今天');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '打开九格手记', click: function () { focusMainWindow(); } },
+      { label: '快速记录（Ctrl+Alt+J）', click: function () { triggerQuickCapture('tray'); } },
+      { type: 'separator' },
+      { label: '退出', click: function () { requestQuit(); } }
+    ]));
+    tray.on('click', function () { focusMainWindow(); });
+    return tray;
+  } catch (e) {
+    tray = null;
+    return null;
+  }
 }
 
 // 单实例锁：取锁失败时连 KV 都不初始化
@@ -2155,6 +2352,18 @@ if (!gotLock) {
   app.whenReady().then(function () {
     bootCore();
     createWindow();
+    // ---- 全局热键 + 托盘（R-09）----
+    // 注册失败不阻断启动：可能被其它程序占用，此时托盘条目仍可用。
+    try {
+      globalShortcut.register(QUICK_CAPTURE_ACCELERATOR, function () { triggerQuickCapture('hotkey'); });
+    } catch (e) { /* 占用/无权限时静默降级到托盘入口 */ }
+    ensureTray();
+    // 启动即记一条 app_start：留存率与「第 4 周」都要有起点
+    try { if (global.__jiugeMetrics) global.__jiugeMetrics.record('app_start', { ts: new Date().toISOString(), version: app.getVersion() }); } catch (e) { /* 度量失败不影响启动 */ }
+  });
+  app.on('will-quit', function () {
+    try { globalShortcut.unregisterAll(); } catch (e) { /* already gone */ }
+    try { if (tray) { tray.destroy(); tray = null; } } catch (e) { /* noop */ }
   });
   app.on('window-all-closed', function () {
     if (process.platform !== 'darwin') app.quit();

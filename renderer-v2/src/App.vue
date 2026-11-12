@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import NavSidebar from './components/NavSidebar.vue';
 import GridEditor from './components/GridEditor.vue';
 import ContextPanel from './components/ContextPanel.vue';
@@ -30,7 +30,7 @@ import ReadingView from './views/ReadingView.vue';
 import CapsuleModal from './components/CapsuleModal.vue';
 import FreeView from './views/FreeView.vue';
 import { emptyRecord, localDate, GRID_KEYS, SKINS, type DiaryRecord, type SkinId, type ViewKey } from './types';
-import { listDiaries, upsertDiary, flush, onDataChanged, isMockBridge, openFinance } from './bridge';
+import { listDiaries, upsertDiary, flush, onDataChanged, isMockBridge, openFinance, onQuickCapture } from './bridge';
 import { callDomain } from './composables/useDomain';
 import { useTheme } from './composables/useTheme';
 import { useWeather } from './composables/useWeather';
@@ -59,6 +59,8 @@ const growthSel = ref('');
 // 当前选中的梦想目标：中栏点一行 → 右栏换成它的量化 / 账户 / 日期 / 图片
 const dreamSel = ref('');
 const quickOpen = ref(false);
+// 热键 / 托盘速记落哪一天：取**按键那一刻**的日期，不取保存那一刻（R-09 跨 00:00 落日）
+const quickDate = ref(today);
 // 胶囊：顶栏按钮 + 两个弹窗态（写新 / 到期）。角标只显示待开启数，不再占一级导航。
 type CapTab = 'write' | 'due';
 const capModalOpen = ref(false);
@@ -85,6 +87,7 @@ weather.onSaveToToday(async function (w) {
 });
 const toast = ref('');
 let off: (() => void) | null = null;
+let offQuick: (() => void) | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const written = computed(() => Object.values(record.value.cells).join('').length);
@@ -279,6 +282,23 @@ function notify(text: string): void {
 
 // 速记四处分流：一句话写完，去处决定它变成什么。
 // 自由格=当日记、收件箱=当待办、胶囊=封起来、参考资料=先存着（没有独立资料库，用 #资料 标记）。
+// 全局热键 / 托盘速记（R-09）：收到就切到**按键那一刻**的那一天，再开浮窗。
+// 必须切日子：quickSaved 写的是 record.value（当前选中日），
+// 不切的话「23:59 按键、00:01 保存」会落进错的一天。
+async function openQuickCapture(p: { date?: string; source?: string }): Promise<void> {
+  const day = p && p.date ? String(p.date) : today;
+  quickDate.value = day;
+  if (day !== selectedDate.value) {
+    try {
+      await goDate(day);
+    } catch {
+      // 切不过去也不阻断速记：至少浮窗能开，文本不丢
+    }
+  }
+  quickOpen.value = true;
+  await nextTick();
+}
+
 async function quickSaved(payload: { target: string; text: string; openAt: string }): Promise<void> {
   const text = String(payload.text || '').trim();
   if (!text) return;
@@ -346,6 +366,8 @@ onMounted(async () => {
   await loadTheme();
   await refresh();
   off = onDataChanged(() => { void refresh(); });
+  // 全局热键 / 托盘速记：主进程推「现在可以记了」，这里负责切日 + 开浮窗（R-09）
+  offQuick = onQuickCapture((p) => { void openQuickCapture(p); });
   window.addEventListener('keydown', onKeydown);
   void refreshWtOn();
   // 天气走独立状态源（useWeather 单例）：这里只负责首屏取一次，
@@ -373,6 +395,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (off) off();
+  if (offQuick) offQuick();
   if (toastTimer) clearTimeout(toastTimer);
   window.removeEventListener('keydown', onKeydown);
 });
@@ -688,7 +711,7 @@ onUnmounted(() => {
 
     <QuickNote
       v-if="quickOpen"
-      :date="today"
+      :date="quickDate"
       @close="quickOpen = false"
       @saved="quickSaved"
     />

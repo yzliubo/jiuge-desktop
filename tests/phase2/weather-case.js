@@ -13,6 +13,8 @@ const client = require('../../src/weather/client.js');
 
 let passed = 0;
 let failed = 0;
+// R-30：未验收项（环境不具备而跳过）单独计数，不混进通过数
+let unverified = 0;
 const queue = [];
 
 function check(name, fn) {
@@ -193,11 +195,16 @@ if (process.env.JIUGE_WX_LIVE === '1') {
             + '°C 天气代码=' + raw.current.weather_code);
     });
 } else {
-    console.log('  SKIP  未设置 JIUGE_WX_LIVE=1，跳过真联调');
+    // R-30（2026-11-12）：这一条不是「通过」，是「未验收」。
+    // 单独计数并单独打印，避免 SKIP 被读成绿色覆盖——天气是本产品唯一的公网出口，
+    // 它没被真实验证过这件事必须显式写出来。
+    unverified += 1;
+    console.log('  UNVERIFIED  真联调未验收：未设置 JIUGE_WX_LIVE=1（该项不计入通过数）');
 }
 
 (async function () {
     for (const run of queue) await run();
-    console.log('\n  PASS ' + passed + ' | FAIL ' + failed);
+    console.log('\n  PASS ' + passed + ' | FAIL ' + failed
+        + (unverified ? ' | UNVERIFIED ' + unverified : ''));
     process.exitCode = failed > 0 ? 1 : 0;
 })();

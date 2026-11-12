@@ -3191,15 +3191,18 @@ async function waitStep(page, n) {
       const row = page.locator('.fw-flash').filter({ hasText: stamp }).first();
       assert.strictEqual(await row.count(), 1, '闪念原文没落库');
       assert((await row.innerText()).includes('已同步'), '同步状态不是「已同步」');
-      // 到工作模块收件箱验收真链路。双击九格标题时第二次 click 可能落在新页面的分组 tab 上，
-      // 所以进 GTD 后显式点回「收件箱」，不让视图残留状态决定断言成败。
+      // R-29 验收：不再补偿。双击九格标题进 GTD 后必须**自己**停在收件箱，
+      // 由产品修复（WorkView.pickStatus 忽略 UIEvent.detail>1 的第二次 click）保证，
+      // 而不是靠测试端点回第 0 个 tab 把断言拉绿。
       await page.locator('.nav-item').first().click();
       await page.waitForTimeout(250);
       await page.locator('.cell[data-cell="work"] .cell-label').dblclick();
       await page.waitForTimeout(400);
       assert.strictEqual(await page.locator('.gtd-view').count(), 1);
-      await page.locator('.gtd-tab').nth(0).click();
-      await page.waitForTimeout(250);
+      assert.strictEqual(
+        await page.locator('.gtd-tab').nth(0).getAttribute('aria-selected'), 'true',
+        '双击进 GTD 后没停在收件箱（分组被第二次 click 切走）');
+      await page.waitForTimeout(150);
       const hit = page.locator('.gtd-item').filter({ hasText: stamp });
       assert.strictEqual(await hit.count(), 1, '收件箱没同步到这一条（或多同步了一条）');
       // 再回一次自由记录：onMounted 会补跑 pending 同步，按 source 去重不应产生第二条

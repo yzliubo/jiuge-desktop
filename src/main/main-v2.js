@@ -168,7 +168,11 @@ function bootCore() {
   const secureMod = require('../secure/vault.js');
   const attachMod = require('../attach/links.js');
   // 图书馆（休闲娱乐阅读 + 主题阅读）与「读书笔记」数据库：md_reading 单键。
-  // 主题阅读的书单权威源仍是 md_growth，这里只放休闲书与全部笔记，绝不复制书单。
+  // 【R-24 实测口径，2026-11-12】主题**本身**（themes）的权威源已迁到 md_reading；
+  // 但主题**书单**仍只从 md_growth 只读派生（见 themeBooksFlat），
+  // 而 reading.addBook 带 themeId 时写入的是 md_reading.books —— 两者并存，属已知双源。
+  // 收敛需要一次性迁移（把 md_reading 里带 themeId 的书并回 md_growth 或反之），
+  // 本轮**不动数据语义**，避免丢历史书单；只把注释改成与实现一致。
   const readingMod = require('../reading/board.js');
   // 本地电子书：只用 Node 内置 fs + zlib 读 EPUB 元数据 / 封面，零第三方依赖
   const readingEpub = require('../reading/epub.js');
@@ -1025,7 +1029,8 @@ function bootCore() {
       return b;
     },
     'reading.notes': function (opts) { return readingMod.notesQuery(readingStore.read(), opts || {}); },
-    // 主题阅读书单只读派生自 md_growth：图书馆不存第二份书单
+    // 主题阅读书单：**只读派生自 md_growth 的 themes[].books**（不复制、不落第二份）。
+    // 注意：reading.addBook 带 themeId 时写的是 md_reading.books，不会被这里列出（见 R-24 已知双源）。
     'reading.themeBooks': function () { return themeBooksFlat(); },
     'reading.addBook': function (patch) {
       return readingStore.mutate(function (s) { return readingMod.addBook(s, patch || {}); });

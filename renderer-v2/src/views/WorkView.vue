@@ -513,7 +513,12 @@ function select(id: string): void {
   emit('select-task', props.selected === id ? '' : id);
 }
 
-function pickStatus(k: string): void {
+// R-29（2026-11-12）：九格标题「单击即进入模块」，所以双击标题时**第一次 click 就切走了视图**，
+// 第二次 click 会落在刚渲染出来的本视图上——正好压在分组 tab 上，把分组切错。
+// 这里按 UIEvent.detail 识别「双击手势里的第二次点击」（detail=2），直接忽略它：
+// 真人单击 detail 恒为 1，不受影响；也不需要给单击加延迟（那会拖慢所有导航）。
+function pickStatus(k: string, ev?: MouseEvent): void {
+  if (ev && ev.detail > 1) return;
   activeStatus.value = k;
   blockedId.value = '';
 }
@@ -1302,7 +1307,7 @@ onUnmounted(function () {
             :class="{ 'gtd-tab-on': activeStatus === k, 'gtd-drop-hot': dropKey === 'st:' + k }"
             role="tab"
             :aria-selected="activeStatus === k"
-            @click="pickStatus(k)"
+            @click="pickStatus(k, $event)"
             @contextmenu.prevent.stop="openBlankCreate(k)"
             @dragover="dropHover('st:' + k, $event)"
             @dragleave="dropLeave('st:' + k)"
@@ -1317,7 +1322,7 @@ onUnmounted(function () {
             :class="{ 'gtd-tab-on': activeStatus === 'done', 'gtd-drop-hot': dropKey === 'st:done' }"
             role="tab"
             :aria-selected="activeStatus === 'done'"
-            @click="pickStatus('done')"
+            @click="pickStatus('done', $event)"
             @dragover="dropHover('st:done', $event)"
             @dragleave="dropLeave('st:done')"
             @drop.prevent="dropToStatus('done')"

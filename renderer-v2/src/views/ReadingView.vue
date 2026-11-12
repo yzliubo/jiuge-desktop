@@ -386,9 +386,16 @@ async function appendLine(cell: string, line: string): Promise<string> {
   }
   base.date = props.today;
   const old = base.cells[target] || '';
+  // R-21（2026-11-12）：行级去重。原先「追加九格」与「markPushed」是两次独立 IPC，
+  // 第二步失败后重试会把同一行再追加一遍，污染当天的日记。
+  // 这里在写入前按行比对：该行已存在就只当成功返回，交给调用方继续 markPushed。
+  // 这样整条链路可以安全重试，且不需要把两个动作合成一次事务。
+  if (old.split('\n').some((l) => l.trim() === line.trim())) {
+    emit('changed');
+    return target;
+  }
   // 唯一的写入形态：追加。绝不覆盖（那会抹掉用户今天写过的话）
-  base.cells[target] = old ? old + '\n' + line : line;
-  await upsertDiary(base, 'reading-' + target + '-' + Date.now());
+  base.cells[target] = old ? old + '\n' + line : line;  await upsertDiary(base, 'reading-' + target + '-' + Date.now());
   emit('changed');
   return target;
 }

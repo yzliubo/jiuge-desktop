@@ -479,7 +479,7 @@ function onFile(event: Event): void {
         <span class="stat">{{ h.time }}</span><span class="path">{{ h.path }}</span><span class="muted">{{ h.bytes }} B</span>
       </div>
       <p v-if="history.length === 0" class="empty">暂无备份记录，先到「导出备份」生成一份</p>
-      <p class="clipboard-hint">快照 / .bak / 版本历史物理隔离于日记命名空间；回滚前会强制导出一份 v7 备份，不假装无损</p>
+      <p class="clipboard-hint">数据快照 / .bak / 可回滚版本三者物理隔离于日记命名空间；回滚前会强制导出一份数据快照，不假装无损</p>
     </div>
 
     <div v-else class="panel">

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 参与前请先读贡献指南
+    url: https://github.com/yzliubo/jiuge-desktop/blob/main/CONTRIBUTING.md
+    about: 环境搭建、门禁命令、提交与 PR 约定都在这里
+  - name: 查看项目现状
+    url: https://github.com/yzliubo/jiuge-desktop/blob/main/docs/CURRENT-STATE.md
+    about: README 是 v1 快照，当前版本脉络与已知边界见此

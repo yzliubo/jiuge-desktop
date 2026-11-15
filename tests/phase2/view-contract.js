@@ -90,7 +90,16 @@ check('三栏布局 + 左右边界可拖 + 1024 断点 + 中部最小宽度', fu
   assert(/setPointerCapture/.test(app), '边界没做指针捕获（拖快点就丢手）');
   assert(/localStorage\.setItem\(LAYOUT_KEY/.test(app), '栏宽没持久化（重开就丢）');
   assert(/CENTER_MIN = 420/.test(app), '中栏最小宽度没锁死（两侧能把主栏挤没）');
-  assert(/max-width:\s*1024px/.test(app), '缺少 1024 断点');
+  // 2026-11-13 整改：最小窗实测视口 1025，max-width:1024 永不命中；
+  // D1 裁决改为 1120 折右栏、保左栏 240，并要求抽屉/唤起/Esc 三件齐备。
+  assert(/max-width:\s*1120px/.test(app), '缺少 1120 窄态断点');
+  assert(!/max-width:\s*1024px/.test(app), '旧 1024 断点回来了（窄态分支不可达）');
+  // 窄态必须是「折右栏 + 可唤起抽屉」，不是把左栏压成 64px 图标化（无图标资源会竖排崩坏）
+  assert(/\.columns\.rail-open :deep\(\.context\)/.test(app), '窄态右栏抽屉选择器不对（会点了没反应）');
+  assert(/\.columns :deep\(\.context\) \{ display: none/.test(app), '窄态右栏没先隐藏（会算成视口外溢出）');
+  assert(/\.columns :deep\(\.nav\) \{ width: 240px/.test(app), '窄态左栏没保住 240px');
+  assert(/rail-toggle/.test(app) && /rail-scrim/.test(app), '窄态缺右栏唤起按钮或遮罩');
+  assert(/Escape' && railOpen\.value/.test(app) && /closeRail\(\)/.test(app), '抽屉没有 Esc 关闭');
   assert(/minWidth:\s*1024/.test(read('src/main/main-v2.js')), '窗口最小宽度未锁定 1024');
 });
 
@@ -241,12 +250,13 @@ check('原小程序 5 页能力桌面化 + V1.1 新增视图全部接入主窗',
   // 右栏能写的是设置类数据，正文仍只在主栏
   assert(/@save/.test(opts) && /emit\('save'/.test(opts), '本页选项没接 save（改了存不下去）');
   const types = read('renderer-v2/src/types.ts');
-  // 2026-11-12：胶囊功能单一，从一级导航降到顶栏（书写 / 到期两个弹窗），
-  // 腾出的位置给三合一的「自由记录」。导航仍 7 项 + 设置（GUI #09 / #122）。
-  ['今天', '时间轴', '回顾', '自由记录', '坚持', '数据中心'].forEach(function (n) {
+  // 2026-11-13：一级导航里的「自由记录」撤掉——它与九格「自由」格是同一个视图，
+  // 同一功能两个入口。入口收敛到「今天 → 自由记录」这条九格目录。导航 6 项 + 设置。
+  ['今天', '时间轴', '回顾', '坚持', '数据中心'].forEach(function (n) {
     assert(types.indexOf("label: '" + n + "'") >= 0, '一级导航缺少 ' + n);
   });
   assert(!/label: '胶囊'/.test(types), '胶囊仍在占一级导航');
+  assert(!/key: 'free', label/.test(types), '自由记录仍占着一级导航（与九格同功能）');
   assert(/class="capsule-btn"/.test(app), '顶栏缺少胶囊按钮');
   assert(/mode="timeline"/.test(app) && /mode="retro"/.test(app), '时间轴 / 回顾未分别指定单一职责');
   assert(/@go-data="navigate\('data'\)"/.test(app), '设置页未跳转数据中心');
@@ -284,13 +294,18 @@ check('九格一律四字名，且数据键一个不动', function () {
   const types = read('renderer-v2/src/types.ts');
   const want = {
     work: '工作推进', money: '金钱收支', health: '身心健康', relation: '关系经营',
-    future: '今日六条', emotion: '情绪觉察', leisure: '休闲娱乐', growth: '学习成长', free: '自由记录'
+    future: '今日六条', emotion: '情绪觉察', dream: '休闲娱乐', growth: '学习成长', free: '自由记录'
   };
   Object.keys(want).forEach(function (k) {
     assert(new RegExp(k + ": '" + want[k] + "'").test(types), '九格名不是四字或缺失：' + k + ' 应为 ' + want[k]);
   });
   // 键顺序仍是「九格」原顺序（改标签不许动数据契约）
   assert(/'work', 'money', 'health', 'relation', 'future',/.test(types), 'GRID_KEYS 键顺序被改动');
+  // 2026-11-13 整改（T6/Q6）：渲染层第 7 键 leisure 与冻结领域层 dream 不一致，
+  // 曾导致「休闲娱乐」格写进去的内容被 save() 静默丢弃。键回归 dream，只换显示名。
+  assert(/'emotion', 'dream', 'growth', 'free'/.test(types), 'GRID_KEYS 第 7 键没回归 dream');
+  assert(!/'leisure'/.test(types), '渲染层又出现 leisure 键（会再次静默丢字）');
+  assert(/dream: '休闲娱乐'/.test(types), 'dream 键的显示名不是「休闲娱乐」');
 });
 
 check('职责单一：时间轴=日记 / 回顾=复盘 / 全局概览并入单格洞察下方', function () {
@@ -504,10 +519,12 @@ check('梦想升成一级目标板、娱乐补进九格：格数、目录、账�
   const keys = types.slice(types.indexOf('export const GRID_KEYS'), types.indexOf('] as const;'));
   const list = keys.match(/'[a-z]+'/g) || [];
   assert(list.length === 9, '九格不是 9 个：' + keys);
-  assert(list.indexOf("'leisure'") >= 0, '九格里没有「娱乐」格');
-  assert(list.indexOf("'dream'") < 0, 'dream 还占着九格（应让位给娱乐）');
+  // 2026-11-13 整改：第 7 格数据键回归领域层 dream，显示名改「休闲娱乐」。
+  // 旧口径「leisure 替掉 dream」会让 save() 丢字，已作废。
+  assert(list.indexOf("'dream'") >= 0, '九格里没有第 7 格 dream');
+  assert(list.indexOf("'leisure'") < 0, '渲染层残留 leisure 键（会静默丢字）');
   // 标签要保留：旧数据的 cells.dream 仍要能显示名字
-  assert(/dream: '梦想'/.test(types), '把「梦想」标签一起删了，旧数据会显示成空标签');
+  assert(/dream: '休闲娱乐'/.test(types), '把第 7 格标签删了，旧数据会显示成空标签');
   assert(/\{ key: 'dream', label: '梦想' \}/.test(types), '左栏没有「梦想」一级目录');
 
   const app = read('renderer-v2/src/App.vue');
@@ -1078,10 +1095,15 @@ check('皮肤收进标题栏、版权声明只留在全局底栏、本页选项�
   const status = read('renderer-v2/src/components/StatusBar.vue');
   assert(/V1\.0/.test(status), '底栏没有版本号');
   assert(/纯本地/.test(status), '底栏没有「纯本地」声明（合规口径不能说没就没）');
-  // 2026-11-11：接入本机时间源后，「零网络」不能一句写死——
-  // 关闭＝零网络，开启＝仅本机回环。两态都必须存在，且必须接上开关状态。
-  assert(/零网络/.test(status) && /仅本机回环/.test(status), '底栏没有双态声明（关闭＝零网络 / 开启＝仅本机回环）');
-  assert(/wtOn/.test(status) && /wt-on/.test(app), '底栏双态没接上时间源开关状态（会一边读回环一边写零网络）');
+  // 接入本机时间源 + 首页天气后，「零网络」不能一句写死。
+  // 2026-11-13 术语降级：「仅本机回环」是内部术语，面向用户改「仅本机使用」。
+  // 四态都必须存在，且必须接上 wxOn / wtOn 两个开关，不能一边开天气一边写零网络。
+  ['零网络', '仅本机使用', '仅天气联网', '仅本机 + 天气联网'].forEach(function (s) {
+    assert(status.indexOf(s) >= 0, '底栏缺声明态：' + s);
+  });
+  assert(!/仅本机回环/.test(status), '底栏又出现内部术语「仅本机回环」');
+  assert(/wtOn/.test(status) && /wt-on/.test(app), '底栏没接上时间源开关状态');
+  assert(/wxOn/.test(status), '底栏没接上天气开关状态（开天气仍会写零网络）');
   assert(/不上传/.test(status), '底栏声明没写清「不上传」');
   // .cell 是九格的类：底栏一用，GUI 里数格子就数成 11 个（本轮真实踩过）
   assert(!/class="cell"/.test(status) && !/^\.cell\s*\{/m.test(status), '底栏用了 .cell，会和九格撞名');
@@ -1299,20 +1321,26 @@ check('V2 界面减负：元解释不常驻主界面，必要边界统一收进�
 });
 
 // ---------- 图书馆 / 读书笔记（docs/13）----------
-check('图书馆接线：顶栏入口 / ViewKey / 视图 / 右栏四处在位，一级导航仍 7+1', function () {
+check('图书馆接线：顶栏入口 / ViewKey / 独立窗口 / 右栏四处在位，一级导航仍 6+1', function () {
   const app = read('renderer-v2/src/App.vue');
-  assert(app.indexOf("import ReadingView from './views/ReadingView.vue'") >= 0, 'App 未接入 ReadingView');
-  assert(app.indexOf("view === 'reading'") >= 0, 'App 缺少 reading 视图分支');
+  // V3.14：图书馆改成独立窗口，主窗不再内嵌视图；顶栏按钮与 ViewKey 仍必须留着，
+  // 否则右栏「图书馆 →」、学习台的在读书等旧入口会跳空。
   assert(app.indexOf('class="reading-btn"') >= 0, '顶栏缺少「图书馆」按钮');
+  assert(app.indexOf('openLibrary') >= 0, '顶栏按钮没接开窗');
+  assert(app.indexOf("if (key === 'reading')") >= 0, "navigate('reading') 没保留（旧入口会跳空）");
   assert(app.indexOf('LibraryView v-else-if') >= 0, 'LibraryView（语料库）被串到别的视图了');
   const types = read('renderer-v2/src/types.ts');
   assert(types.indexOf("'reading'") >= 0, 'ViewKey 缺少 reading');
   const decl = types.match(/NAV_ITEMS[\s\S]*?\];/);
-  assert(decl && (decl[0].match(/\{ key: '/g) || []).length === 7, '一级导航必须仍是 7 项 + 设置（GUI #122）');
+  assert(decl && (decl[0].match(/\{ key: '/g) || []).length === 6, '一级导航必须仍是 6 项 + 设置（GUI #122）');
+  // 右栏的 ReadingContext 仍在（主窗右栏的 reading 分支保留，只是主窗不再切到该页；
+  // ContextPanel 仍是 reading 页面的定义处，独立窗口改用自带三栏，故这里只锁「不被拆掉」）
   const panel = read('renderer-v2/src/components/ContextPanel.vue');
   assert(panel.indexOf('import ReadingContext from') >= 0, '右栏未接入 ReadingContext');
   assert(panel.indexOf("view === 'reading'") >= 0, '右栏缺少 reading 分支');
   assert(panel.indexOf("reading: ''") >= 0, '右栏 HINTS 缺少 reading');
+  const win = read('renderer-v2/src/views/LibraryWindow.vue');
+  assert(win.indexOf('九格手记 · 图书馆') >= 0 || win.indexOf('图书馆独立窗口') >= 0, '独立窗口视图没立起来');
 });
 
 check('图书馆：主题阅读 V2.14 自建书单（md_reading），功能与休闲一致', function () {
@@ -1433,6 +1461,59 @@ check('本地电子书：拖放 / 选择 / 详细列表 / 封面预览四个入�
   assert(v.indexOf('openReader') >= 0 && v.indexOf('startBook') >= 0, '「翻开读」没接独立阅读窗口');
 });
 
+check('书架整理：搜索 / 排序 / 拖动 / 编辑信息 / 再读 / 按书导出', function () {
+  const v = read('renderer-v2/src/views/ReadingView.vue');
+  // V3.14：搜索与排序并进页签行，原来那一整行「书架整理」（rd-tools）已拆掉，
+  // 钩子改为直接锁「搜索框 + 排序组」这两个实体，别锁容器名。
+  ['rd-search', 'rd-sort', 'shelfKw', 'sortMode', 'onDragStart', 'onDropBook', 'openEdit', 'saveEdit',
+    'pickCover', 'resetCover', 'reread', 'markDone', 'exportBook', 'lastReadAt', 'fmtRecent',
+    'reading.reorder', 'reading.reread', 'reading.updateBook', 'reading.setCover'].forEach(function (w) {
+    assert(v.indexOf(w) >= 0, '书架整理缺少：' + w);
+  });
+  // 搜索与排序只作用于渲染层：两处列表都必须用过滤后的 shelfBooks，否则搜索形同虚设
+  assert((v.match(/v-for="b in shelfBooks"/g) || []).length >= 2, '详细列表 / 封面预览没接过滤后的书架');
+  assert(v.indexOf(':draggable="canDrag"') >= 0, '拖动没接 canDrag');
+  assert(v.indexOf("sortMode.value === 'manual' && !shelfKw.value.trim()") >= 0,
+    '搜索态或最近在读态下仍可拖，会把看不见的书挤出可见区');
+  assert(v.indexOf('rd-modal') >= 0 && v.indexOf('aria-modal="true"') >= 0, '编辑书籍信息缺模态语义');
+  assert(v.indexOf('原文件没动') >= 0, '改书名必须明确「不动原文件」的口径');
+  // 领域层：顺序与最近在读都由 board 统一重排，渲染层不许自己动数组
+  const b = read('src/reading/board.js');
+  ['reorderBooks', 'rereadBook', 'touchBook', 'lastReadAt:', 'order: num'].forEach(function (w) {
+    assert(b.indexOf(w) >= 0, '领域层缺少：' + w);
+  });
+  // 主进程四条新路由 + 白名单：少一条就是「按钮点了没反应」
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  ["'reading.reorder'", "'reading.reread'", "'reading.touch'", "'reading.setCover'"].forEach(function (w) {
+    assert(main.indexOf(w) >= 0, '主进程缺路由：' + w);
+    assert(api.indexOf(w) >= 0, '白名单缺：' + w);
+  });
+});
+
+check('阅读窗口本机字体：只读枚举 / 不起子进程 / 换字只换规则', function () {
+  const html = read('renderer-v2/reader/index.html');
+  const js = read('renderer-v2/reader/reader.js');
+  const fonts = read('src/reading/fonts.js');
+  assert(html.indexOf('rrSystemFonts') >= 0 && html.indexOf('本机已装字体') >= 0, '缺少「本机字体」这一档');
+  // 只占一个控件位：实测多一个下拉就会把「缩放 / 行距」挤到工具栏第二行
+  assert((html.match(/<select/g) || []).length === 4, '工具栏下拉从 4 个变多了，先确认缩放/行距没被挤到第二行');
+  assert(js.indexOf("const SYS_PREFIX = 'sys:'") >= 0, '本机字体没加前缀，会和 fixed 方案值撞键');
+  assert(js.indexOf("'reading.systemFonts'") >= 0, '本机字体没走领域白名单');
+  assert(js.indexOf('applyDeviceFont') >= 0 && js.indexOf('rr-device-font') >= 0,
+    '按族名生成的规则没单独成表，选什么字体都不会生效');
+  assert(js.indexOf('fontListCache') >= 0, '字体清单没缓存，每切一次方案都要重扫一遍');
+  // 字体枚举放在主进程：直接读字体文件，不 spawn PowerShell（那条路要靠 Base64 绕开代码页）
+  assert(fonts.indexOf("require('fs')") >= 0, '字体枚举没走文件系统');
+  ['child_process', 'execSync', 'spawn(', 'powershell'].forEach(function (w) {
+    assert(fonts.indexOf(w) < 0, '字体枚举起了子进程：' + w);
+  });
+  // nameID 16 是 Chromium 按 CSS font-family 匹配的那一套，只收 1 会让新式字体永远命中不了
+  assert(fonts.indexOf('nameID !== 1 && nameID !== 16') >= 0, '族名只收 nameID 1，新式字体命不中');
+  assert(fonts.indexOf('0x0804') >= 0, '没认中文语言位，中文族名会退化成英文名');
+  assert(read('src/main/main-v2.js').indexOf("'reading.systemFonts'") >= 0, '主进程缺字体路由');
+});
+
 check('独立阅读窗口：三栏骨架、正文沙箱、渲染层零越权', function () {
   const html = read('renderer-v2/reader/index.html');
   const js = read('renderer-v2/reader/reader.js');
@@ -1461,6 +1542,363 @@ check('独立阅读窗口：三栏骨架、正文沙箱、渲染层零越权', f
   assert(read('src/preload/v2-preload.js').indexOf("'v1/reader:open'") >= 0, 'preload 未放行阅读窗口通道');
   assert(read('electron-builder-v2.yml').indexOf('renderer-v2/reader/**/*') >= 0, '打包清单漏了 reader 目录');
   assert(read('src/reading/reader-source.js').indexOf('MAX_TEXT_BYTES') >= 0, '缺文本体积上限');
+});
+
+check('V3.5 阅读方式：PDF 原页 / 连续滚动 / 双页 / 全屏', function () {
+  const html = read('renderer-v2/reader/index.html');
+  const js = read('renderer-v2/reader/reader.js');
+  const css = read('renderer-v2/reader/reader.css');
+  const src = read('src/reading/reader-source.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  // 解码器必须真的随包分发：只写个 script 标签、文件却漏了，打包后就是白屏
+  assert(read('renderer-v2/reader/vendor/pdf.min.js').length > 100000, 'PDF 解码器主文件缺失');
+  assert(read('renderer-v2/reader/vendor/pdf.worker.min.js').length > 500000, 'PDF 解码器 worker 缺失');
+  // worker 先于 pdf.min.js 才有全局 WorkerMessageHandler，才能走主线程 fake worker
+  assert(html.indexOf('<script src="./vendor/pdf.worker.min.js"') < html.indexOf('<script src="./vendor/pdf.min.js"'),
+    'worker 必须排在解码器前面（注释里也提到了文件名，所以按完整 script 标签比）');
+  assert(html.indexOf("connect-src 'none'") >= 0 && html.indexOf("object-src 'none'") >= 0,
+    'PDF 解码不许放宽网络出口 / 插件对象');
+  ['rrPdf', 'rrFlow', 'rrSpread', 'rrFull', 'rrFullExit', 'rrModes'].forEach(function (w) {
+    assert(html.indexOf(w) >= 0, '阅读窗缺少阅读方式控件：' + w);
+  });
+  assert(/pdf:\s*\{ supported: true/.test(src), 'PDF 仍被登记为不支持渲染');
+  assert(src.indexOf('MAX_PDF_BYTES') >= 0, 'PDF 没有体积上限');
+  assert(main.indexOf("'reading.readerPdfData'") >= 0 && api.indexOf("'reading.readerPdfData'") >= 0,
+    'PDF 字节通道没接主进程与白名单');
+  ['getDocument({ data: bytes', 'IntersectionObserver', 'useSystemFonts: true'].forEach(function (w) {
+    assert(js.indexOf(w) >= 0, 'PDF 渲染链路缺：' + w);
+  });
+  assert(js.indexOf('function currentToc') >= 0, '目录重建没统一入口，书签刷新会把「第 N 页」冲成「第 N 节」');
+  ['function loadFlow', 'function appendFlowChapter', 'function onFlowScroll', 'function mapRoot',
+    'function setSpreadMode', 'function setFullMode', 'requestFullscreen', 'fullscreenchange'].forEach(function (w) {
+    assert(js.indexOf(w) >= 0, '阅读方式缺实现：' + w);
+  });
+  assert(js.indexOf('FLOW_MAX') >= 0, '连续滚动没有章节拼接上限');
+  assert(js.indexOf('const map = buildTextMap(root)') >= 0, '连续滚动没按章建文本表，标注会错位');
+  assert(css.indexOf('rr-pdf-spread') >= 0 && css.indexOf('data-full="1"') >= 0, '双页 / 全屏样式缺失');
+  assert(css.indexOf('body[data-full="1"] .rr-ask') >= 0, '全屏没收起伴读浮窗');
+});
+
+check('V3.11 书架三陈列 + 封面按书封比例 + 底栏选项条居中', function () {
+  const view = read('renderer-v2/src/views/ReadingView.vue');
+  const epub = read('src/reading/epub.js');
+  const main = read('src/main/main-v2.js');
+  const css = read('renderer-v2/reader/reader.css');
+  const html = read('renderer-v2/reader/index.html');
+  // 三种陈列：详细列表 / 封面预览 / 封面墙（只摆封面）
+  assert(view.indexOf("viewMode === 'shelf'") >= 0, '缺「封面墙」第三种陈列');
+  assert(view.indexOf('rd-wall') >= 0 && view.indexOf('rd-spine-box') >= 0, '封面墙结构缺失');
+  assert(view.indexOf("setViewMode('shelf')") >= 0, '封面墙没有切换入口');
+  // 封面比例：列表封面固定 2:3 并居中，不能再被行高 stretch 拉成窄条
+  assert(/\.rd-cover \{[^}]*aspect-ratio: 2 \/ 3/.test(view), '列表封面没有固定 2:3 比例');
+  assert(/\.rd-cover \{[^}]*align-self: center/.test(view), '列表封面仍会被行高拉满');
+  // 封面一律取书内图：旧 500KB 上限会让「书里明明有」的书回落成色块
+  assert(epub.indexOf('MAX_COVER_BYTES = 4 * 1024 * 1024') >= 0, '封面上限仍是旧的 500KB');
+  assert(epub.indexOf('function firstImageHref') >= 0 && epub.indexOf('function sniffExt') >= 0,
+    '封面抽取缺「封面页首图」与「按魔数纠格式」');
+  assert(epub.indexOf("type=[\"']cover[\"']") >= 0, 'guide type=cover 的封面页兜底没接');
+  // 老书回填 + 请求去重：没有这两条，升级后旧书的封面永远是色块
+  assert(main.indexOf('function coverDataUrl') >= 0 && main.indexOf('const coverMiss = new Map()') >= 0,
+    '主进程缺封面回填 / 未命中缓存');
+  assert(view.indexOf('const coverTried = new Set') >= 0, '封面请求没有去重，每次刷新都会重解一遍 EPUB');
+  // 阅读窗底栏：三栏 grid 让选项条真正居中，页码仍贴右
+  assert(html.indexOf('rr-modes-group') >= 0, '底栏选项条没有独立包裹层，无法脱离左对齐');
+  assert(/\.rr-modes \{[^}]*grid-template-columns: 1fr auto 1fr/.test(css), '底栏仍用 flex，选项条不会居中');
+  assert(/\.rr-modes-pages \{[^}]*justify-self: end/.test(css), '底栏页码没贴右');
+});
+
+check('V3.12 分页阅读：真分页（一页一屏 + 滚轮翻页），双页是连续两页', function () {
+  const html = read('renderer-v2/reader/index.html');
+  const js = read('renderer-v2/reader/reader.js');
+  const css = read('renderer-v2/reader/reader.css');
+  assert(html.indexOf('id="rrPaged"') >= 0 && html.indexOf('分页阅读') >= 0, '缺「分页阅读」这一档');
+  ['function pagedBuild', 'function pagedMeasure', 'function pagedGoPage', 'function pagedFlip',
+    'function pagedReveal', 'function onPagedWheel', 'function onPagedKey'].forEach(function (w) {
+    assert(js.indexOf(w) >= 0, '分页缺实现：' + w);
+  });
+  // 分页的骨架必须是「多栏 + 锁高 + 横移」，而不是把整章切两栏往下滚
+  assert(js.indexOf('column-fill:auto') >= 0, '分页容器没锁成一页高（column-fill:auto 缺失）');
+  assert(js.indexOf('inner.style.columnWidth') >= 0, '列宽没交给 column-width：写成 column-count 会被当成上限，内容只会往下溢出');
+  assert(js.indexOf('rr-pg-clip') >= 0, '缺裁切层：overflow 只在 padding box 裁，右边留白会漏出下一栏的字');
+  assert(js.indexOf("b.style.columnCount = '2'") < 0, '还在用旧做法：把整章正文分成两栏（右栏会变成后半章）');
+  // 双页并排必须寄在分页上：翻开两页、滚一下翻过去两页
+  assert(js.indexOf('if (want) { pref.paged = true;') >= 0, '双页并排没挂到分页态上');
+  assert(js.indexOf('PAGED_GAP') >= 0 && js.indexOf('paged.step = cols * pitch') >= 0,
+    '双页的翻页步长没按「两页」算');
+  // 分页态没有 scroll 事件：进度与位置要自己记，否则章内进度永远是 0
+  assert(js.indexOf('if (paged.on) return paged.pages <= 1 ? 100') >= 0, '分页态本章进度没按页算');
+  assert(js.indexOf('if (paged.on) return pagedRatio();') >= 0, '分页态位置没按页记');
+  assert(js.indexOf('new ResizeObserver') >= 0, '窗口 / 侧栏变宽没重排页，一页里装多少字就错了');
+  assert(css.indexOf('.rr-pg-btn') >= 0, '页码两侧的翻页按钮没样式');
+});
+
+check('V3.13 图书馆：主题书不进休闲书架 / 占位印完整书名 / calibre 式列表 / 豆瓣封面只在主进程', function () {
+  const board = read('src/reading/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const preload = read('src/preload/v2-preload.js');
+  const bridge = read('renderer-v2/src/bridge.ts');
+  const shelf = read('renderer-v2/src/views/ReadingView.vue');
+  const net = read('src/reading/cover-net.js');
+
+  // ① 主题书与休闲书架分开：领域层要给出「只含休闲书」的那一份，字段一行算出主题数
+  assert(board.indexOf('leisureBooks: leisureBooks') >= 0, '领域层没给书架单独一份（leisureBooks）');
+  assert(board.indexOf('const leisureBooks = books.filter') >= 0, '书架没把主题书排除掉');
+  assert(board.indexOf('themeBooks: s.books.length - leisureCount') >= 0, '统计头没有分开算主题书');
+  assert(board.indexOf('themeGroups: themeGroups') >= 0, '主题分组没在领域层派生（渲染层各算一套必然口径不一）');
+  assert(shelf.indexOf('bd.leisureBooks ||') >= 0, '书架没取 leisureBooks（主题书还会混进来）');
+  // 主题书行必须与书架同一套派生：进度 / 状态 / 笔记数，缺一个就是「主题下显示 0 条笔记」
+  assert(board.indexOf('function decorateRow') >= 0 && board.indexOf('g.rows.push(rowsById[b.id])') >= 0,
+    '主题书行没走同一套派生字段');
+
+  // ② 没有封面时占位印完整书名（不是首字），字号按字数分级
+  assert(shelf.indexOf('function coverNameStyle') >= 0, '缺占位封面的字号分级');
+  assert(shelf.indexOf("{{ b.title }}</span>") >= 0, '占位封面没印完整书名');
+  assert(shelf.indexOf("b.title.slice(0, 1)") < 0 && shelf.indexOf('class="rd-card-initial" aria-hidden="true">{{ initialOf') < 0,
+    '占位封面还在印首字');
+
+  // ③ 详细列表是表：列头 + 可点排序 + 紧凑行，而不是每行一条卡片
+  ['rd-thead', 'rd-trow', 'toggleSort', 'ariaSort', '最近读过', '格式 · 大小'].forEach(function (w) {
+    assert(shelf.indexOf(w) >= 0, 'calibre 式列表缺：' + w);
+  });
+  assert(shelf.indexOf('if (sortMode.value === \'manual\') return list;') >= 0, '手动排序（书架自己的顺序）被列排序顶掉了');
+  // 表格容器沿用 rd-shelf 这个老钩子（用例按「书架容器」找行），必须同时是 rd-table
+  assert(shelf.indexOf('class="rd-table rd-shelf"') >= 0, '列表容器不是表格（或丢了书架那个老钩子）');
+
+  // ④ 豆瓣封面：网络只在主进程，白名单写在客户端里，渲染层一个 URL 都没有
+  assert(net.indexOf("book.douban.com") >= 0 && net.indexOf('HOST_IMG') >= 0, '豆瓣客户端缺域名白名单');
+  assert(net.indexOf('/^img\\d+\\.doubanio\\.com$/') >= 0, '图片域名不是按 host 严格匹配的（后缀通配会被 img.doubanio.com.evil.com 绕过）');
+  assert(net.indexOf('function sniffExt') >= 0, '封面格式没按魔数认（.jpg 里装 webp 会打不开）');
+  assert(main.indexOf("'reading.doubanCovers'") >= 0 && main.indexOf("'reading.doubanApply'") >= 0, '主进程缺豆瓣路由');
+  assert(api.indexOf("route('v1/reading:doubanCovers'") >= 0 && api.indexOf("route('v1/reading:doubanApply'") >= 0,
+    '豆瓣路由没走专用异步通道（挤进 domain:call 会因返回 Promise 直接序列化失败）');
+  // 名字只应出现一次：asyncPass 注册那一处。出现在白名单数组里就是又走回同步通道了
+  const cnt = function (s, sub) { return s.split(sub).length - 1; };
+  assert(cnt(api, "'reading.doubanCovers'") === 1 && cnt(api, "'reading.doubanApply'") === 1,
+    '豆瓣路由被登记进同步白名单了（domain:call 返回 Promise 会在序列化时报 could not be cloned）');
+  assert(preload.indexOf("'v1/reading:doubanCovers'") >= 0 && preload.indexOf("'v1/reading:doubanApply'") >= 0,
+    'preload 通道白名单没加豆瓣两条');
+  assert(bridge.indexOf('export function doubanCovers') >= 0 && bridge.indexOf('export function doubanApply') >= 0,
+    '渲染层缺豆瓣桥函数');
+  // 渲染层不许出现任何豆瓣地址：能出现的只有「按钮」和「候选图 dataURL」
+  assert(shelf.indexOf('doubanio') < 0 && shelf.indexOf('douban.com') < 0, '渲染层出现了豆瓣域名（网络必须只留在主进程）');
+  assert(shelf.indexOf('doubanCovers(b.id)') >= 0 && shelf.indexOf('doubanApply(b.id') >= 0, '界面没接豆瓣桥');
+});
+
+check('V3.14 图书馆独立窗口：三栏 / 左栏文件夹树 / 搜索并进页签行 / 手写加书下线', function () {
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const preload = read('src/preload/v2-preload.js');
+  const bridge = read('renderer-v2/src/bridge.ts');
+  const app = read('renderer-v2/src/App.vue');
+  const shelf = read('renderer-v2/src/views/ReadingView.vue');
+  const win = read('renderer-v2/src/views/LibraryWindow.vue');
+  const vite = read('renderer-v2/vite.config.ts');
+  const html = read('renderer-v2/library.html');
+
+  // ① 第三个 Vite 入口 + 主进程独立窗口 + 一条白名单通道
+  assert(vite.indexOf("library: 'library.html'") >= 0, 'Vite 没加图书馆入口');
+  assert(html.indexOf('九格手记 · 图书馆') >= 0, '独立窗口 HTML 的标题不对');
+  assert(main.indexOf('const LIBRARY_HTML') >= 0 && main.indexOf('function openLibraryWindow') >= 0,
+    '主进程缺图书馆窗口创建');
+  assert(main.indexOf('libraryOpener: openLibraryWindow') >= 0, '开窗函数没接进 API 层');
+  assert(api.indexOf("route('v1/library:open'") >= 0, 'API 层缺 library:open 路由');
+  assert(preload.indexOf("'v1/library:open'") >= 0, 'preload 白名单缺 library:open');
+  assert(bridge.indexOf('export function openLibrary') >= 0, '渲染层缺开窗桥函数');
+  // 复用不叠窗：有活窗口就 focus，不许再 new 一个
+  assert(main.indexOf('if (libraryWindow && !libraryWindow.isDestroyed())') >= 0, '重复点会叠出第二个图书馆窗口');
+
+  // ② 三栏 + 皮肤作用域：独立窗口不继承主窗的 data-skin，漏了 --palette-* 全是空值
+  ['lib-left', 'lib-main', 'lib-right', 'lib-tree', 'lib-kids', 'lib-book'].forEach(function (c) {
+    assert(win.indexOf(c) >= 0, '三栏 / 层级缺：' + c);
+  });
+  assert(win.indexOf(':data-skin="skin"') >= 0 && win.indexOf('data-surface="light"') >= 0,
+    '独立窗口没挂皮肤作用域（图标、选中态、右侧数字会一起变透明）');
+  assert(win.indexOf('休闲阅读') >= 0 && win.indexOf('主题阅读') >= 0, '左栏缺两个栏目');
+  assert(win.indexOf('class="lib-count"') >= 0, '左栏每一行缺右侧册数');
+  // 中栏必须复用同一套 ReadingView：另写一份书架等于两套口径
+  assert(win.indexOf("import ReadingView from './ReadingView.vue'") >= 0, '中栏没复用 ReadingView');
+  // 「全部藏书」这类重复叶子不画：根节点自己就是「这一摞全看」
+  // 只扫树块：右栏在没有选中书时，标题就叫「全部藏书」（那是范围的说明，不是又一个节点）
+  const treeStart = win.indexOf('class="lib-tree"');
+  const treeBlock = win.slice(treeStart, win.indexOf('</aside>', treeStart));
+  assert(treeStart >= 0 && treeBlock.indexOf('>全部藏书<') < 0, '左栏又画了一个与根节点等价的「全部藏书」叶子');
+
+  // ③ 主窗不再内嵌图书馆：入口只剩「开窗」这一个动作
+  assert(app.indexOf("import ReadingView from './views/ReadingView.vue'") < 0, '主窗还内嵌着图书馆视图');
+  assert(app.indexOf("if (key === 'reading') { void openLibrary(); return; }") >= 0,
+    "旧入口 navigate('reading') 没改成开窗（右栏 / 学习台的链接会跳空）");
+  assert(app.indexOf('@click="openLibrary()"') >= 0, '顶栏「图书馆」按钮没接开窗');
+
+  // ④ 搜索并进页签行最左侧；手写加书那一行下线
+  const navStart = shelf.indexOf('<nav class="rd-tabs"');
+  const navEnd = shelf.indexOf('</nav>', navStart);
+  assert(navStart >= 0 && navEnd > navStart, '图书馆没有页签行');
+  const navBlock = shelf.slice(navStart, navEnd);
+  assert(navBlock.indexOf('class="rd-input rd-search"') >= 0, '搜索框没并进页签行');
+  assert(navBlock.indexOf('rd-search') < navBlock.indexOf('class="rd-tab"'), '搜索框没在页签行的最左侧');
+  assert((navBlock.match(/class="rd-tab"/g) || []).length === 3, '页签行不是三个分区');
+  assert(shelf.indexOf('class="rd-tools"') < 0, '页签行并入后还留着一整行「书架整理」');
+  assert(shelf.indexOf('＋ 放上书架') < 0, '手写书名那一行（放上书架）还在');
+  assert(shelf.indexOf('function addBook') < 0 && shelf.indexOf('newTitle') < 0, '手写加书的代码没拆干净');
+  // 左栏点节点 → 中栏换范围：这条线只认 scope 一个来源
+  assert(shelf.indexOf('props.scope') >= 0 && shelf.indexOf('function applyScope') >= 0,
+    '中栏没接左栏的 scope（两侧各存一份范围，迟早对不上）');
+  assert(win.indexOf(':scope="scope"') >= 0, '左栏的范围没传给中栏');
+});
+
+check('V3.15 主题阅读也走 calibre 式表格：同一套列 / 静态表头 / 不再是大卡片', function () {
+  const shelf = read('renderer-v2/src/views/ReadingView.vue');
+  const themeStart = shelf.indexOf('v-for="g in themeGroups"');
+  const themeEnd = shelf.indexOf('主题批注器', themeStart);
+  assert(themeStart >= 0 && themeEnd > themeStart, '找不到主题阅读区块');
+  const block = shelf.slice(themeStart, themeEnd);
+
+  // ① 主题下的书是表格，不是每本一张大卡片
+  assert(block.indexOf('class="rd-table rd-theme-table"') >= 0, '主题下的书不是表格');
+  assert(block.indexOf('class="rd-trow rd-book"') >= 0, '主题行没走表格行（rd-trow）');
+  // 行必须同时留 rd-book：GUI 用例按「.rd-group .rd-book」找行，类名不能删
+  assert(block.indexOf('rd-book-main') < 0 && block.indexOf('rd-thick') < 0, '主题里还留着大卡片的主体结构');
+  assert(block.indexOf('+10 {{ b.unit }}') < 0, '主题卡片那种「+10 页」大按钮还在');
+
+  // ② 六列与休闲书架同口径
+  ['书名', '作者', '格式 · 大小', '最近读过', '进度', '操作'].forEach(function (w) {
+    assert(block.indexOf('>' + w + '<') >= 0, '主题表缺列：' + w);
+  });
+  assert(block.indexOf('rd-tbar') >= 0 && block.indexOf('rd-tpct') >= 0, '主题表进度列不是「条 + 百分比」');
+
+  // ③ 表头静态：只做列名、不排序（排序只作用于书架，主题点表头没反应才是问题）
+  assert(block.indexOf('rd-thead-static') >= 0, '主题表头不是静态的');
+  assert(block.indexOf("toggleSort('title')") < 0, '主题表头接上了只作用于书架的排序');
+  assert(shelf.indexOf('.rd-thead-static .rd-th-title') >= 0, '静态表头没把「手型 + 悬停变色」关掉');
+
+  // ④ 路径仍是「只登记路径」这条承诺的可见证据；手写的书要写清没有文件
+  assert(block.indexOf('class="rd-tpath"') >= 0, '主题表把路径丢了');
+  assert(block.indexOf('手工登记，仅记笔记') >= 0, '没有电子书的主题书没标清楚');
+
+  // ⑤「未分组」是保留值，不是分组名：左栏传 \u0000none 过来，中栏必须按「group 为空」筛。
+  // 踩过的坑：拿保留值去和 book.group 严格比较，永远是 0 本（右栏 KPI 有数、书架空着）。
+  const win = read('renderer-v2/src/views/LibraryWindow.vue');
+  assert(shelf.indexOf("const GROUP_NONE = '\\u0000none'") >= 0, '中栏缺「未分组」这个保留值');
+  assert(win.indexOf("const UNGROUPED = '\\u0000none'") >= 0,
+    '左栏「未分组」的保留值变了（两处必须同一字面量，否则又是两个口径）');
+  assert(shelf.indexOf('g === GROUP_NONE) list = list.filter((b) => !b.group)') >= 0,
+    '中栏没按「group 为空」筛未分组');
+  assert(shelf.indexOf('g !== GROUP_FAV && g !== GROUP_NONE') >= 0, '「未分组」会被「分组已不存在」的守卫清掉');
+  assert(shelf.indexOf('ungroupedCount') >= 0 && shelf.indexOf("'rd-gchip-on': groupFilter === GROUP_NONE") >= 0,
+    '中栏分组条缺「未分组」这一项（筛了却看不见筛的是什么）');
+  assert(shelf.indexOf('from === GROUP_FAV || from === GROUP_NONE') >= 0
+    && shelf.indexOf('name === GROUP_FAV || name === GROUP_NONE') >= 0,
+    '保留值还能被改名 / 解散（对不存在的分组动手）');
+
+  // ⑥ 主题三角真的收放：折叠状态独立于「选中」，左栏点主题要顺手展开
+  assert(shelf.indexOf('const closedThemes = ref<string[]>([])') >= 0, '主题没有折叠状态');
+  assert(shelf.indexOf("{{ isThemeClosed(g.themeId) ? '▸' : '▾' }}") >= 0, '标题三角没跟折叠状态走');
+  assert(shelf.indexOf(':aria-expanded="!isThemeClosed(g.themeId)"') >= 0, '标题没报出展开状态');
+  assert(shelf.indexOf('<template v-if="!isThemeClosed(g.themeId)">') >= 0, '收起时书单没有被真的藏起来');
+  assert(shelf.indexOf('closedThemes.value.filter((x) => x !== s.themeId)') >= 0, '左栏点主题不会把收起的主题展开');
+});
+
+check('V3.5 书架分组 / 收藏夹：字段、路由、界面三处齐', function () {
+  const board = read('src/reading/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const shelf = read('renderer-v2/src/views/ReadingView.vue');
+  ['MAX_GROUPS', 'group: clean(o.group', 'favorite: o.favorite === true',
+    'function setBookGroup', 'function setBookFavorite', 'function renameGroup', 'function removeGroup',
+    'favoriteCount: favoriteCount'].forEach(function (w) {
+    assert(board.indexOf(w) >= 0, '领域层缺分组/收藏：' + w);
+  });
+  ['reading.setBookGroup', 'reading.setBookFavorite', 'reading.renameGroup', 'reading.removeGroup'].forEach(function (w) {
+    assert(main.indexOf("'" + w + "'") >= 0, '主进程缺路由：' + w);
+    assert(api.indexOf("'" + w + "'") >= 0, '白名单缺：' + w);
+  });
+  ['rd-groups', 'rd-gchip', 'rd-fav', 'rdEditGroup', 'setGroupFilter', 'createGroup', 'toggleFavorite',
+    'renameGroupNow', 'removeGroupNow'].forEach(function (w) {
+    assert(shelf.indexOf(w) >= 0, '书架界面缺分组/收藏：' + w);
+  });
+  assert(shelf.indexOf('groupFilter.value === GROUP_ALL') >= 0, '分组筛选态应禁用拖动');
+});
+
+check('V3.6 学习成长右栏：在读书 / 主题学习状态 + 快捷访问', function () {
+  const ctx = read('renderer-v2/src/components/context/StudyContext.vue');
+  const panel = read('renderer-v2/src/components/ContextPanel.vue');
+  const api = read('src/core/api-layer.js');
+  // 两份数据、一个视图：主题进度来自 md_growth，书架在读书来自 md_reading
+  assert(ctx.indexOf("'growth.board'") >= 0 && ctx.indexOf("'reading.board'") >= 0,
+    '右栏没同时读学习库与图书馆两份派生数据');
+  assert(/Promise\.all\(\[/.test(ctx), '两份数据应并发取，别串成两次等');
+  assert(ctx.indexOf("b.status !== 'reading'") >= 0 && ctx.indexOf('seen[') >= 0,
+    '在读书没做状态过滤与跨源去重');
+  assert(ctx.indexOf("'reading.readerOpen'") >= 0 && api.indexOf("'reading.readerOpen'") >= 0,
+    '继续读没接独立阅读窗通道，或白名单漏登记');
+  assert(ctx.indexOf("emit('navigate', 'reading')") >= 0, '缺「去图书馆」快捷入口');
+  assert(ctx.indexOf('openTheme(t)') >= 0 && ctx.indexOf("emit('select-item', t.id)") >= 0,
+    '主题学习行没有选中联动');
+  ['aria-label="目前在读的图书"', 'aria-label="主题学习状态"', 'gc-bar', 'gc-now-go',
+    'progressText', 'readingCount', 'quoteTotal', 'lastReadAt'].forEach(function (w) {
+    assert(ctx.indexOf(w) >= 0, '右栏缺状态信息或控件：' + w);
+  });
+  const block = panel.slice(panel.indexOf('<StudyContext'), panel.indexOf('<CellContext'));
+  assert(block.indexOf('@navigate=') >= 0, 'ContextPanel 没把 navigate 转发给学习右栏');
+  // 本轮只是只读联动：不新增 growth.* 写调用，已有写仍钉住当前选中项
+  const writes = ctx.match(/callDomain\('growth\.[A-Za-z]+', null, [^)]*/g) || [];
+  writes.forEach(function (w) {
+    assert(/null, (exam|skill|theme)\.value\.id/.test(w), '新增了不钉选中项的学习库写操作');
+  });
+});
+
+check('V3.7 复盘证据面板：Check 派生 / 三问口径 / Act 落点 / 零新增字段路由', function () {
+  const rv = read('renderer-v2/src/components/ReviewView.vue');
+  const api = read('src/core/api-layer.js');
+  const main = read('src/main/main-v2.js');
+  // Check：五格证据全部来自已有只读派生，且并发取，不新增 domain 路由
+  ['gtd.board', 'gtd.focus', 'reading.board', 'dream.board', 'moduleDigest', 'writtenDates'].forEach(function (n) {
+    assert(rv.indexOf("'" + n + "'") >= 0, '证据面板缺只读数据源：' + n);
+  });
+  assert(/Promise\.all\(\[/.test(rv), '证据未并发取');
+  assert(rv.indexOf('本期证据 · 只读') >= 0 && rv.indexOf('不是评分') >= 0,
+    '没写清只读 / 非评分口径');
+  assert(rv.indexOf('不显示估算值') >= 0, '空态没如实说明');
+  assert(rv.indexOf('六条只锚定今天') >= 0 && rv.indexOf('不编一个跨天百分比') >= 0,
+    '没有守住「六条不结转、不编本周完成率」的诚实口径');
+  // 三问固定成证据 → 归因 → 一个改动；答案仍是 3 元素数组，落库结构一字未动
+  const lib = read('renderer-v2/src/composables/promptLibrary.ts');
+  const rail = read('renderer-v2/src/components/context/ReviewContext.vue');
+  ['这期哪些做法真的有效？', '为什么有效，或者为什么没效？', '下期只改哪一条？'].forEach(function (q) {
+    assert(lib.indexOf(q) >= 0, '缺三问口径：' + q);
+  });
+  assert(rv.indexOf('REVIEW_EVIDENCE_QUESTIONS') >= 0 && rail.indexOf('REVIEW_EVIDENCE_QUESTIONS') >= 0,
+    '中栏与右栏没共用同一份三问常量');
+  assert(rv.indexOf('REVIEW_QUESTIONS') >= 0 && rv.indexOf('换个角度') >= 0,
+    '轮换题组没退成提示');
+  assert(rv.indexOf("callDomain('saveReview', null, period.value, reviewKey.value, answers.value)") >= 0,
+    '三问落库结构被改了');
+  // 上期回显：渲染层算上期键 + 已有 loadReview，不给领域层加参数 / 加字段
+  assert(rv.indexOf('function prevReviewKey') >= 0, '上期键没在渲染层算');
+  assert(rv.indexOf("callDomain<string[]>('loadReview'") >= 0, '没读上期那句');
+  assert(rv.indexOf('不替你打勾') >= 0, '上期结论被自动判定做到了');
+  // 存完三问要通知外壳刷新右栏完成度，否则中栏已存满、右栏还写旧数字
+  const panel = read('renderer-v2/src/components/ContextPanel.vue');
+  const app = read('renderer-v2/src/App.vue');
+  assert(rv.indexOf("emit('changed')") >= 0 && app.indexOf('mode="retro" @changed="gtdTick += 1"') >= 0,
+    '存完三问没通知外壳刷新右栏');
+  assert(panel.indexOf('<ReviewContext v-else-if="view === \'review\'" :tick="tick"') >= 0,
+    '右栏复盘没接 tick');
+  assert(rail.indexOf('watch(() => props.tick') >= 0, '右栏复盘没监听 tick 重取');
+  // Act：本页唯一写操作是用户主动点击的 gtd.add，带去重 + 建成复核 + 不占六条
+  assert(rv.indexOf("callDomain('gtd.add', null") >= 0 && api.indexOf("'gtd.add'") >= 0,
+    'Act 没落成 GTD 下一步，或白名单漏登记');
+  assert(rv.indexOf('hasSame') >= 0 && rv.indexOf('created') >= 0, 'Act 缺去重或建成后复核');
+  assert(rv.indexOf('六条本身不结转') >= 0, 'Act 没说清不占今日六条');
+  assert(rv.indexOf("'gtd.focusSet'") < 0 && rv.indexOf("'gtd.focusToggle'") < 0,
+    'Act 直接改了今日六条（跨天不结转）');
+  const fresh = ['reviewEvidence', 'reviewAct', 'reviewPrev'];
+  fresh.forEach(function (n) {
+    assert(api.indexOf("'" + n + "'") < 0 && main.indexOf("'" + n + "'") < 0,
+      '本轮不该新增 domain 路由：' + n);
+  });
 });
 
 
@@ -1914,7 +2352,9 @@ check('九格页头无日期、标题单击进模块、占位语按模块随机�
   assert(tpl.indexOf('随手一句，可写多行') < 0, '九格仍共用同一句占位语');
   assert(/:placeholder="prompts\[key\] \|\| FALLBACK_PROMPTS\[key\]"/.test(tpl), '占位语没按格位绑定');
   assert(/callDomain<string>\('promptFor'/.test(grid), '引导语没接领域层同源题库');
-  assert(/LEISURE_PROMPTS/.test(grid) && /k === 'leisure'/.test(grid), '休闲娱乐格没有专属引导语');
+  assert(/LEISURE_PROMPTS/.test(grid) && /k === 'dream'/.test(grid), '休闲娱乐格没有专属引导语');
+  assert(/GRID_LIBRARY\.standard\.dream/.test(grid) && /FIRST_WEEK_EASY\.dream/.test(grid),
+    '休闲娱乐引导语没从 dream 词库取（键回归后漏改会退回通用词）');
   assert(/dailyOffset/.test(grid) && /firstWeekState/.test(grid), '缺按日随机或头七天判定');
   assert(/shufflePrompts/.test(grid) && /换一批引导语/.test(tpl), '缺「换一批引导语」入口');
 });
@@ -1965,7 +2405,22 @@ check('自由记录：胶囊降顶栏 / 三 tab / 新键六处接线 / 闪念同
     assert(free.indexOf(t) >= 0, '自由记录缺 tab：' + t);
   });
   assert(free.indexOf('free.flashAdd') >= 0 && free.indexOf('free.board') >= 0, '闪念未接新键');
-  assert(free.indexOf('writing.check') >= 0, '写作法体检未接线');
+  // 2026-11-13：一级导航撤掉「自由记录」——它与九格「自由」格是同一个视图。
+  // 视图不删，入口收敛到九格目录（openCell('free') → view 'free'），那一行要自己亮起来。
+  assert(!/key: 'free', label/.test(types), '自由记录仍占着一级导航');
+  assert(read('renderer-v2/src/components/NavSidebar.vue').indexOf("props.active === 'free' && key === 'free'") >= 0,
+    '九格目录里的「自由记录」进页后没有选中态');
+  // 2026-11-13：写作法统计卡从中栏搬到右栏。体检调用点随共享状态移入
+  // composables/useWritingCheck.ts（中栏写、右栏读同一份结果）；断言改为
+  // 「共享层有且只有一份调用点 + 视图接的是这一层 + 右栏真有那张卡」，
+  // 避免两处各调一次 writing.check 导致数字对不上。
+  const wc = read('renderer-v2/src/composables/useWritingCheck.ts');
+  const ctx = read('renderer-v2/src/components/ContextPanel.vue');
+  assert(wc.indexOf('writing.check') >= 0, '写作法体检未接线');
+  assert(free.indexOf('useWritingCheck') >= 0 && free.indexOf('writing.check') < 0,
+    '写作法体检出现第二个调用点（必须只在共享层算一次）');
+  assert(ctx.indexOf('WritingContext') >= 0, '右栏未接入写作法卡');
+  assert(free.indexOf('fw-stats') < 0, '中栏还留着写作法统计卡（应只在右栏一份）');
   // 长文正文绝不落进当日日记格（2000 字上限 + 每次保存整篇 record 全量写）
   assert(!/\.cells\.free\s*=|\.cells\.free\s*\+/.test(free), '长文正文误写进 cells.free');
   assert(!/v-html|fetch\(|XMLHttpRequest/.test(free), '自由记录视图出现越权或直插正文');
@@ -1986,6 +2441,245 @@ check('自由记录：胶囊降顶栏 / 三 tab / 新键六处接线 / 闪念同
     '新键领域层缺 normalize / mergeSection');
   assert(board.indexOf('DOC_BODY_MAX = 20000') >= 0, '长文上限被改小或写死');
   assert(main.indexOf('gtd.addTask(s, {') >= 0, '主进程未做闪念 → 收件箱同步');
+});
+
+check('V3.8 今天页成长主线：三源只读派生 + 证据回流 + 成效侧指标口径', function () {
+  const today = read('renderer-v2/src/components/context/TodayContext.vue');
+  const dream = read('src/dream/board.js');
+  const metrics = read('src/core/metrics.js');
+  const api = read('src/core/api-layer.js');
+  const dc = read('renderer-v2/src/components/DataCenter.vue');
+
+  // ① 右栏只读三源、并发取，零写调用
+  ['dream.board', 'gtd.board', 'reading.board'].forEach(function (n) {
+    assert(today.indexOf("'" + n + "'") >= 0, '成长主线缺只读数据源：' + n);
+  });
+  assert(/Promise\.all\(\[/.test(today), '三源没有并发取');
+  ['dream.update', 'dream.add', 'gtd.complete', 'reading.advanceBook', 'reading.updateBook'].forEach(function (n) {
+    assert(today.indexOf("'" + n + "'") < 0, '右栏越权写：' + n);
+  });
+  assert(today.indexOf('aria-label="成长主线"') >= 0, '缺「成长主线」卡');
+  assert(today.indexOf('g.evidence.text') >= 0, '目标行没显示证据回流');
+  assert(today.indexOf('个在推') >= 0 && today.indexOf('天没动') >= 0, '没把「在推」与「挂着」分开说');
+  // 三块快捷入口：目标去梦想页、完成/可执行去工作格、在读去图书馆
+  assert(today.indexOf("emit('navigate', 'dream')") >= 0, '目标行没跳梦想页');
+  assert(today.indexOf("emit('open-cell', 'work')") >= 0, '本周推进没跳工作格');
+  assert(today.indexOf("emit('navigate', 'reading')") >= 0, '在读没跳图书馆');
+
+  // ② 证据派生：只认有日期的事实，窗口常量单点
+  assert(dream.indexOf('const EVIDENCE_DAYS = 30') >= 0, '证据窗口不是单点常量');
+  assert(dream.indexOf('evidence: evidence') >= 0, 'board 没派生 evidence');
+  assert(dream.indexOf('evidenceCount') >= 0 && dream.indexOf('staleCount') >= 0, 'stats 缺在推/挂着计数');
+  assert(dream.indexOf('evidenceDays: EVIDENCE_DAYS') >= 0, 'board 没把窗口天数交给界面');
+  assert(dream.indexOf('doneAt') >= 0 && dream.indexOf('inWindow(') >= 0, '证据没按完成时间判断');
+  // 证据是派生，不许反写进状态：normalizeDream 里不该出现 evidence 字段
+  const normPart = dream.slice(dream.indexOf('function normalizeDream'), dream.indexOf('function normalize('));
+  assert(normPart.indexOf('evidence') < 0, '证据被写进了领域状态（应只派生）');
+
+  // ③ 成效侧指标：白名单四类 + 汇总 available + 前端区分「没有」与「0」
+  ['outcome_task_done', 'outcome_dream_move', 'outcome_read_move', 'outcome_review'].forEach(function (k) {
+    assert(metrics.indexOf(k) >= 0, '指标白名单缺：' + k);
+  });
+  assert(metrics.indexOf('available: outcomeEvents > 0') >= 0, '汇总没给 available，界面只能靠 0 猜');
+  assert(api.indexOf('function outcomeEvent') >= 0, '成效事件判定没集中在一处');
+  assert(api.indexOf('patch.metric !== undefined') >= 0, '目标推进没按「键是否出现」判断');
+  assert(dc.indexOf('成效侧') >= 0 && dc.indexOf('metrics.outcome.available') >= 0, '数据中心没接成效侧');
+});
+
+check('V3.9 练习反馈：卡点带年龄、错因只增不改、#行动 只读回显', function () {
+  const g = read('src/growth/board.js');
+  const rail = read('renderer-v2/src/components/context/StudyContext.vue');
+  const view = read('renderer-v2/src/views/StudyView.vue');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+
+  // ① 卡点必须有开始日，年龄才能算出来；窗口常量单点
+  assert(g.indexOf('const BLOCKER_STALE_DAYS = 14') >= 0, '卡点阈值不是单点常量');
+  assert(g.indexOf('blockerSince: blocker ? validDate(k.blockerSince)') >= 0, '卡点开始日没进 normalize');
+  // 只有文本真变了才重置开始日——否则每次打开都显示「今天才开始卡」
+  const blk = g.slice(g.indexOf('function setSkillBlocker'), g.indexOf('function clearSkillBlocker'));
+  assert(blk.indexOf('if (next !== k.blocker)') >= 0, '重存同一句会重置卡点年龄');
+  assert(blk.indexOf('clearSkillBlocker(s, id, today)') >= 0, '空文本没走「算过去」，会留个空卡点');
+  // 清走必须留档（带 since），否则「上次怎么过的」查不到
+  const clr = g.slice(g.indexOf('function clearSkillBlocker'), g.indexOf('function setSkillNextUp'));
+  assert(clr.indexOf('k.cleared.push') >= 0 && clr.indexOf('since: k.blockerSince') >= 0, '清掉卡点没留档或没保住开始日');
+  assert(g.indexOf('clearedRecent: k.cleared.slice(-3).reverse()') >= 0, 'board 没派生已解决卡点');
+
+  // ② 错因是固定枚举，不是自由文本；attempts 只增不改
+  assert(g.indexOf('const EXAM_CAUSES = [') >= 0, '错因没有固定枚举');
+  assert(g.indexOf('attempts: normAttempts(e.attempts)') >= 0, 'attempts 没进 normalize');
+  const retake = g.slice(g.indexOf('function retakeExam'), g.indexOf('// ---------- 技能学习'));
+  assert(retake.indexOf('attempts') < 0, '重考把历史成绩一起清了');
+  const setRes = g.slice(g.indexOf('function setExamResult'), g.indexOf('function setExamCauses'));
+  assert(setRes.indexOf('e.attempts.push') >= 0, '记成绩没进历史');
+  assert(setRes.indexOf('last.date === day') >= 0, '同日同分没去重，手滑点两下会变成考两次');
+  // 补记错因单独一条路由：不重填分数、不新增作答
+  assert(g.indexOf('function setExamCauses') >= 0, '缺「只存错因」的领域函数');
+  const setC = g.slice(g.indexOf('function setExamCauses'), g.indexOf('function retakeExam'));
+  assert(setC.indexOf('e.attempts') >= 0 && setC.indexOf('push') < 0, '补记错因不该新增一条作答');
+
+  // ③ 领域接线：新函数都进白名单与主进程路由
+  ['growth.setSkillBlocker', 'growth.clearSkillBlocker', 'growth.setSkillNextUp', 'growth.setExamCauses'].forEach(function (n) {
+    assert(api.indexOf("'" + n + "'") >= 0, '领域白名单漏了：' + n);
+    assert(main.indexOf("'" + n + "'") >= 0, '主进程漏了路由：' + n);
+  });
+
+  // ④ 右栏：卡点/下次/错因都在选中项详情里，写调用钉住 sel.id
+  assert(rail.indexOf('练习卡点') >= 0 && rail.indexOf('下次练，提高一点什么') >= 0, '右栏缺卡点或「下次提高」');
+  assert(rail.indexOf("callDomain('growth.setSkillBlocker', null, skill.value.id") >= 0, '卡点没按选中项写');
+  assert(rail.indexOf("callDomain('growth.clearSkillBlocker', null, skill.value.id") >= 0, '清卡点没按选中项写');
+  assert(rail.indexOf('gc-cause-on') >= 0 && rail.indexOf('只存错因') >= 0, '右栏缺错因勾选或补记入口');
+  assert(rail.indexOf('历次最常错') >= 0, '右栏没把跨次错因摆出来');
+  // #行动 回显：走已有 notes 路由 + 已有标签，只读
+  assert(rail.indexOf("callDomain<NoteBoard | null>('reading.notes', null, { tag: '行动' })") >= 0, '#行动 回显没接已有笔记查询');
+  assert(rail.indexOf('阅读里的行动') >= 0, '缺「阅读里的行动」卡');
+  ['reading.addNote', 'reading.updateNote', 'reading.removeNote'].forEach(function (n) {
+    assert(rail.indexOf("'" + n + "'") < 0, '回显卡越权写笔记：' + n);
+  });
+
+  // ⑤ 中栏行内信号：卡点天数与未过次数可见，但不挤掉等级/本周
+  assert(view.indexOf('s.blockerText') >= 0 && view.indexOf('g-badge-on') >= 0, '中栏技能行没显示卡点天数');
+  assert(view.indexOf('e.failCount') >= 0, '中栏考试行没显示未过次数');
+  assert(view.indexOf('{{ s.levelText }}') >= 0, '为了塞卡点把等级/本周挤掉了');
+});
+
+check('V3.10 跨期对照：只摆事实不判定 / 一条只读路由 / 老 source 兼容', function () {
+  const rv = read('renderer-v2/src/components/ReviewView.vue');
+  const cross = read('src/review/cross.js');
+  const api = read('src/core/api-layer.js');
+  const main = read('src/main/main-v2.js');
+
+  // ① 纯模块：不碰存储、不碰文件、不引第三方——对照是算出来的，不是查出来的
+  ['require(', 'fs.', 'store', 'readFileSync'].forEach(function (w) {
+    assert(cross.indexOf(w) < 0, '跨期对照模块里出现了 IO：' + w);
+  });
+  assert(cross.indexOf('function samePromise') >= 0 && cross.indexOf('MIN_PROMISE') >= 0,
+    '同一句判定没有下限，短句会被误判');
+
+  // ② 三种下落分开表达，缺一种就会把「没痕迹」说成「没做到」
+  ['rv-cross-done', 'rv-cross-open', 'rv-cross-none'].forEach(function (c) {
+    assert(rv.indexOf("'" + c + "'") >= 0 || rv.indexOf(c) >= 0, '缺一种下落样式：' + c);
+  });
+  assert(rv.indexOf('没有痕迹，不等于没做到') >= 0, '「没落成」被写成了「没做到」');
+  assert(rv.indexOf('没勾掉不等于没做到') >= 0, '「还没动」被写成了「没做到」');
+  assert(rv.indexOf('不替你打勾') >= 0, '上一轮守住的口径被删了');
+  // 反例钉住：不许退回模糊相似度（一个字不同就是不同说法，系统不替人联想）
+  assert(cross.indexOf('为什么不做文本相似度') >= 0, '「为什么不做模糊比对」的依据被删了');
+  assert(cross.indexOf('模糊相似度算法') < 0, '别把模糊相似度塞回来');
+
+  // ③ 卡里不许有写调用：对照卡只读，写操作仍只在 pushAct 那一处
+  const cardStart = rv.indexOf('class="card rv-prev rv-cross"');
+  const cardEnd = rv.indexOf('rv-q-title');
+  assert(cardStart > 0 && cardEnd > cardStart, '找不到跨期对照卡的范围');
+  const card = rv.slice(cardStart, cardEnd);
+  ['callDomain', '@click', 'v-model'].forEach(function (w) {
+    assert(card.indexOf(w) < 0, '跨期对照卡里出现了写入口：' + w);
+  });
+  assert((rv.match(/callDomain\('gtd\.add'/g) || []).length === 1, 'gtd.add 不该在别处再出现');
+
+  // ④ 一条新路由，且只读；白名单与主进程同时登记
+  assert(main.indexOf("'review.cross': function") >= 0, '主进程缺 review.cross');
+  assert(api.indexOf("'review.cross'") >= 0, '白名单漏登记 review.cross');
+  assert(rv.indexOf("callDomain<CrossView | null>('review.cross'") >= 0, '渲染层没接跨期对照');
+  // 落成下一步时把周期键写进 source，下期才追得到；老任务靠 note 里的键兼容
+  assert(rv.indexOf("source: 'review:' + period.value + ':' + reviewKey.value") >= 0, 'source 没带周期键');
+  assert(cross.indexOf("src.indexOf('review') === 0 && str(t.note).indexOf(k) >= 0") >= 0,
+    '老 source 的承诺没做兼容');
+
+  // ⑤ 周期键仍由渲染层先算一份用于首屏标签，领域层算的那份为准
+  assert(rv.indexOf('function prevReviewKey') >= 0, '首屏标签没退路了');
+  assert(rv.indexOf('(c && c.prevLabel) ||') >= 0, '没有以领域层算的周期键为准');
+});
+
+check('V3.16 PDF 正文明晰：画布按 devicePixelRatio 出图 / 不被 CSS 拉伸 / 变形后重画', function () {
+  const rd = read('renderer-v2/reader/reader.js');
+  const css = read('renderer-v2/reader/reader.css');
+  const fn = rd.slice(rd.indexOf('async function renderPdfPage'), rd.indexOf('function refreshPdfVisible'));
+
+  // ① 位图按屏幕密度放大：PDF 走 canvas，没有矢量文本可用。
+  //    1x 位图在 125%/150% 缩放的屏上只能被整幅上采样 —— 这就是「字发虚」的根。
+  assert(fn.indexOf('window.devicePixelRatio') >= 0, 'PDF 画布没读 devicePixelRatio（位图还是 1x，缩放屏上必然发虚）');
+  assert(fn.indexOf('Math.round(vp.width * dpr)') >= 0, '画布位图宽没按 dpr 放大');
+  assert(fn.indexOf('Math.round(vp.height * dpr)') >= 0, '画布位图高没按 dpr 放大');
+  assert(fn.indexOf('transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0]') >= 0,
+    '渲染时没给 pdf.js 传缩放矩阵，位图放大了内容却没放大');
+
+  // ② CSS 尺寸显式写死成逻辑像素：交给 width:100% 就是第二次重采样
+  assert(fn.indexOf("cv.style.width = Math.floor(vp.width) + 'px'") >= 0, '画布没写死 CSS 宽（会被样式拉伸）');
+  assert(fn.indexOf("cv.style.height = Math.floor(vp.height) + 'px'") >= 0, '画布没写死 CSS 高');
+  assert(css.indexOf('.rr-pdf-page canvas { display: block; max-width: 100%; height: auto; }') >= 0,
+    'PDF 画布的样式又变回拉伸型（width:100%）');
+
+  // ③ 宽度取容器真实宽。曾经的 320 下限：窗口一窄，画布比容器宽，再被 max-width 压回去 → 又糊
+  assert(fn.indexOf('const w = cw > 0 ? cw : 320') >= 0, '画布宽度没取容器真实宽（下限兜底会把小窗的画布拉宽再压缩）');
+
+  // ④ 窗口变形 / 换屏：画布有固有尺寸，宽度或 dpr 变了必须重画，不能靠 CSS 撑
+  assert(fn.indexOf('box.dataset.cssw') >= 0 && fn.indexOf('box.dataset.dpr') >= 0,
+    '没记下每页是按多大宽度、多少倍密度画的，变形后无从判断是否过期');
+  assert(rd.indexOf('function onPdfLayoutChange') >= 0, '缺窗口变形后的重画处理');
+  assert(rd.indexOf("window.addEventListener('resize', onPdfLayoutChange)") >= 0, '窗口 resize 没接到 PDF 重画上');
+  assert(rd.indexOf('Math.abs(b.clientWidth - cw) > 2') >= 0, '宽度变化小于阈值就没重画（差 2px 以上必须重画）');
+  assert(rd.indexOf('function watchPdfDpr') >= 0, '没监听 dpr 变化（拖到另一块缩放不同的屏就糊）');
+  assert(rd.indexOf("matchMedia('(resolution: ' + cur + 'dppx)')") >= 0, 'dpr 监听没按当前密度建 media query');
+
+  // ⑤ 容器自己变窄，window resize 抓不到：滚动条一冒出来就吃掉 17px，
+  //    已画好的画布被 max-width 压一次就是重采样（GUI 在 dpr=2 的环境里实测到的）
+  assert(rd.indexOf('new ResizeObserver') >= 0, '没盯容器自身尺寸（滚动条出现 / 侧栏折叠都改宽度）');
+  assert(rd.indexOf('pdfStageObserver.observe(pdfStage)') >= 0, 'ResizeObserver 没盯在 PDF 滚动区上');
+  assert(css.indexOf('scrollbar-gutter: stable') >= 0,
+    'PDF 滚动区没常驻滚动条槽位（首屏画完后宽度会跳 17px）');
+});
+
+check('V3.17 PDF 可选中可搜索：透明文本层 / 划选摘录 / 命中标黄 / 点结果跳到命中处', function () {
+  const rd = read('renderer-v2/reader/reader.js');
+  const css = read('renderer-v2/reader/reader.css');
+  const html = read('renderer-v2/reader/index.html');
+
+  // ① 文本层：getTextContent 的变换矩阵换算到页坐标，span 与画布同住一张「纸」
+  assert(rd.indexOf('page.getTextContent()') >= 0, '没取 PDF 的文字内容');
+  assert(rd.indexOf('function buildPdfTextLayer') >= 0, '缺文本层构建函数');
+  assert(rd.indexOf('function pdfMatMul') >= 0, '没把 PDF 变换矩阵换算到页坐标');
+  assert(rd.indexOf("mk('div', 'rr-pdf-text')") >= 0, '文本层类名不见了');
+  assert(rd.indexOf("mk('div', 'rr-pdf-sheet')") >= 0, '画布与文本层没共用定位容器（缩放会错开）');
+  assert(rd.indexOf('sheet.appendChild(layer)') >= 0, '文本层没挂在画布同一张纸上');
+  assert(rd.indexOf('box.__pdfText') >= 0, '没记下页内纯文本（搜索偏移 / 锚点 / 摘录都用同一份）');
+
+  // ② 文本层样式：透明文字才不会与画布重影，但划选要有可见底色
+  assert(css.indexOf('.rr-pdf-text {') >= 0, '缺文本层样式');
+  assert(css.indexOf('user-select: text') >= 0, '文本层不许选中');
+  assert(css.indexOf('color: transparent') >= 0, '文字没透明（会与画布叠出重影）');
+  assert(css.indexOf('.rr-pdf-text ::selection') >= 0, '划选时没有可见底色');
+  assert(css.indexOf('.rr-pdf-text span.rr-pdf-hit') >= 0, '搜索命中没标黄');
+  assert(css.indexOf('.rr-pdf-text span.rr-pdf-mark') >= 0, '划选标注没颜色');
+
+  // ③ 选区链路：PDF 住在本窗口，不能照搬 iframe 的 getSelection / 坐标
+  assert(rd.indexOf('function currentPdfSelection') >= 0, 'PDF 没有自己的选区读取');
+  assert(rd.indexOf('if (isPdf) return currentPdfSelection();') >= 0, 'currentSelection 没分流到 PDF');
+  assert(rd.indexOf('function pdfOffsetAt') >= 0, '没把选区换算成页内字符偏移');
+  assert(rd.indexOf('function clearReaderSelection') >= 0, '清选区还写死在 iframe 上');
+  assert(rd.indexOf("document.addEventListener('mouseup'") >= 0, '主文档没挂 PDF 划选监听');
+  assert(rd.indexOf('if (isPdf) {\n    x = s.rect.left - stageRect.left;') >= 0,
+    '工具条定位没区分「本窗口坐标」与「iframe 坐标」');
+
+  // ④ 复制 / 摘录：划选之后要有两条最短路把原文带出去、带进笔记
+  assert(html.indexOf('data-act="copy"') >= 0, '选区工具条没有「复制」');
+  assert(html.indexOf('data-act="quote"') >= 0, '选区工具条没有「摘录」');
+  assert(rd.indexOf('function copySelectionText') >= 0, '缺复制实现');
+  assert(rd.indexOf('function saveQuoteFromSelection') >= 0, '缺摘录实现');
+  assert(rd.indexOf("anchor: ch + ':' + s.start + '-' + s.end") >= 0, '摘录没带页内锚点');
+
+  // ⑤ 搜索：不再只扫前 200 页；命中区间画到文本层，点结果滚到那一处
+  assert(rd.indexOf('Math.min(pdfPages, 200)') < 0, '搜索还剩「只扫前 200 页」的硬上限');
+  assert(rd.indexOf('p <= pdfPages') >= 0, '搜索没扫全书');
+  assert(rd.indexOf('pdfHitRanges') >= 0, '没记命中区间');
+  assert(rd.indexOf('function paintPdfHits') >= 0, '命中没画到文本层');
+  assert(rd.indexOf('function jumpPdfHit') >= 0, '点结果只跳页、不定位到命中处');
+  assert(rd.indexOf('rr-pdf-hit-on') >= 0, '点结果后没有点亮反馈');
+  assert(rd.indexOf('pdfSearchToken') >= 0, '连续发起两次搜索时旧结果会覆盖新的');
+
+  // ⑥ 顺手的两处：Ctrl+F 落到书内搜索；标注在页重画后还原
+  assert(rd.indexOf("e.key === 'f' || e.key === 'F'") >= 0, 'Ctrl+F 没落到书内搜索');
+  assert(rd.indexOf('if (isPdf) { paintPdfMarks(); return; }') >= 0, 'PDF 标注还原没接上文本层');
 });
 
 console.log('');

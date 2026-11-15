@@ -50,8 +50,8 @@ jsEntries.forEach(function (x) {
 ['renderer-v2/reader/index.html', 'renderer-v2/reader/reader.js', 'renderer-v2/reader/reader.css'].forEach(function (rel) {
   if (entry(rel)) { try { bundle += read(rel).toString('utf8'); } catch (e) { /* 缺文件由下面探针报 NO */ } }
 });
-// 两个 HTML 入口：主窗 index.html 与独立账本窗 finance.html（Vite 双入口构建产物）
-['renderer-v2/dist/index.html', 'renderer-v2/dist/finance.html'].forEach(function (rel) {
+// 三个 HTML 入口：主窗 index.html / 独立账本窗 finance.html / 独立图书馆窗 library.html
+['renderer-v2/dist/index.html', 'renderer-v2/dist/finance.html', 'renderer-v2/dist/library.html'].forEach(function (rel) {
   if (entry(rel)) { try { bundle += read(rel).toString('utf8'); } catch (e) { /* 缺文件由下面探针报 NO */ } }
 });
 
@@ -134,7 +134,73 @@ const probes = [
   // V3.2 自由记录三合一 + 胶囊降级（docs/28）
   '自由记录 · 三合一', '① 胶囊收录', '② 闪念快记', '③ 长文撰写',
   '胶囊 · 给未来的信', '今日到期', '已同步收件箱', '海明威', '不套 ARI',
-  'free.board', 'free.flashAdd', 'free.docAdd', 'writing.check'
+  'free.board', 'free.flashAdd', 'free.docAdd', 'writing.check',
+  // 图书馆 · 书架整理 + 阅读窗本机字体（对标 mybook 1.2.13，2026-11-14）
+  '在书架里找', '手动排序', '最近在读', '编辑书籍信息', '再读一遍', 'rd-modal', 'rd-grip',
+  'reading.reorder', 'reading.reread',
+  // reading.touch 只在主进程用（开窗打点），渲染层不出现，故不进文案探针
+  '本机已装字体', 'reading.systemFonts', 'applyDeviceFont', 'rr-device-font', 'sys:',
+  // V3.5：PDF 原页 / 连续滚动 / 双页并排 / 全屏（2026-11-14）
+  '连续滚动', '双页并排', '全屏阅读', 'rrFlow', 'rrSpread', 'rrFull', 'rrPdf',
+  'vendor/pdf.worker.min.js', 'vendor/pdf.min.js', 'pdfjsLib.getDocument',
+  'rr-pdf-spread', 'rr-flow-ch', 'buildPdfToc', 'setFullMode', 'FLOW_MAX',
+  'reading.readerPdfData', 'jiuge-reader-pref',
+  // V3.12：分页阅读（一页一屏 + 滚轮翻页；双页是连续两页，2026-11-15）
+  '分页阅读', 'rrPaged', 'rr-pg-in', 'rr-pg-clip', 'column-fill:auto', 'pagedFlip',
+  '分页 · 单页', '分页 · 双页', 'rr-pg-btn',
+  // V3.13：主题书不进休闲书架 / 占位印完整书名 / calibre 式表格 / 豆瓣封面（2026-11-15）
+  // 仍只取模板静态串：coverNameStyle / toggleSort 这类 setup 函数名会被 minify 改掉
+  '本主题书', 'rd-table', 'rd-thead', 'rd-trow', 'rd-tname', 'rd-tbar',
+  '格式 · 大小', '最近读过', 'rd-card-initial', 'rd-theme-table',
+  '从豆瓣找封面', 'rd-douban', 'rd-douban-item', 'rd-cover-prev', '挑一张最像这本的',
+  // V3.14：图书馆独立窗口（左文件夹树 / 中书架 / 右详情）+ 搜索并进页签行（2026-11-15）
+  // 同样只取模板静态串：lib-* 是 class，applyScope 这类函数名会被 minify 改掉
+  'lib-app', 'lib-tree', 'lib-kids', 'lib-book', 'lib-count', 'lib-rail-w',
+  '休闲阅读', '主题阅读', '点文件夹筛这一摞书', '关闭窗口', '左栏点文件夹换范围',
+  '两类阅读 · 按文件夹走 · 全部本机',
+  // V3.15：主题下的书也走 calibre 式表格（与休闲书架同一套列），2026-11-15
+  // 旧的 rd-title-tight（主题卡片里限宽书名）随卡片一起下线，改由表格列宽负责
+  'rd-thead-static',
+  // V3.16：PDF 正文按 devicePixelRatio 出位图（2026-11-15）
+  // 注意别用裸的 'devicePixelRatio'：vendor/pdf.min.js 里本来就有这个词，探针会假通过
+  'vp.width * dpr', 'vp.height * dpr', 'onPdfLayoutChange',
+  // V3.5：书架分组 / 收藏夹
+  'rd-groups', 'rd-fav', '收藏夹', '新分组', '解散分组', '所属分组',
+  'reading.setBookGroup', 'reading.setBookFavorite', 'reading.renameGroup', 'reading.removeGroup',
+  // V3.6：学习成长右栏「目前在读 / 主题学习」状态卡 + 快捷访问（2026-11-14）
+  // 只挑模板里的静态文案与 class 字符串：esbuild 会重命名 setup 局部变量，变量名不能当探针
+  '目前在读', '目前在读的图书', '主题学习', '主题学习状态',
+  '本在读书', '去书架关联', '继续读 →', '个主题，在中栏看全部',
+  'gc-now-row', 'gc-topic-row', 'gc-now-go', 'gc-bar',
+  // V3.7 复盘证据面板（2026-11-15）：只取模板静态文案 / class，setup 变量会被 minify 改名
+  '本期证据', '今日六条', '本周完成', '落笔天数', '目标推进', '在读书',
+  '不是评分', '不显示估算值', '六条只锚定今天', '换个角度',
+  '这期哪些做法真的有效', '为什么有效', '下期只改哪一条',
+  '上期（', '不替你打勾', '把第 3 问落成下一步', '不占今日六条',
+  '与中栏同一口径', '这期哪些做法真的有效', '下期只改哪一条',
+  'rv-ev-grid', 'rv-ev-cell', 'rv-prev-text', 'rv-q-title', 'rv-act-btn',
+  // V3.8 今天页成长主线 / 成效侧指标（2026-11-15）：同样只取模板里的静态文案与 class
+  '成长主线', '个在推', '天没动', '书架还没标在读', '本周完成', '可执行',
+  'tc-goal', 'tc-goal-top', 'tc-goal-meta', 'tc-week', 'tc-week-cell', 'tc-week-wide',
+  '成效侧', '还没有成效事件', 'outcome-head',
+  // V3.9 练习反馈 / 考试错因 / 阅读里的行动（2026-11-15）：仍然只取模板静态串与类名
+  '练习卡点', '下次练，提高一点什么', '已过去', '这次错在哪', '只存错因', '历次最常错',
+  '阅读里的行动', '给一条笔记打 #行动 标签',
+  'gc-cause', 'gc-cause-on', 'gc-age', 'gc-age-warn', 'gc-stuck', 'gc-act', 'gc-act-row', 'gc-act-main',
+  // V3.10 跨期对照（2026-11-15）：仍然只取模板静态串与类名；
+  // 「已于 2026-11-15 勾掉」这类是运行时拼的、三种下落样式只写在 scoped CSS 里、
+  // 「口径」那行由主进程按 cross.js 下发——三者都不在 js 产物里，不进探针。
+  '没留下那一句', '那句话后来', '前几期', '同上',
+  '没有痕迹，不等于没做到', '没勾掉不等于没做到',
+  'rv-cross', 'rv-cross-link', 'rv-cross-hist', 'rv-hist-same', 'rv-cross-repeat', 'rv-cross-empty',
+  // V3.17 PDF 可选中可搜索（2026-11-15）：独立阅读窗是静态页，三个文件都原样进包，
+  // 类名 / 函数名 / 按钮 data-act / CSS 选择器都能直接当探针
+  'rr-pdf-text', 'rr-pdf-sheet', 'rr-pdf-hit', 'rr-pdf-mark', 'rr-pdf-hit-on',
+  'buildPdfTextLayer', 'getTextContent', 'pdfMatMul', 'pdfJoinItems',
+  'currentPdfSelection', 'pdfOffsetAt', 'copySelectionText', 'saveQuoteFromSelection',
+  'pdfHitRanges', 'paintPdfHits', 'jumpPdfHit', 'pdfSearchToken',
+  'data-act="copy"', 'data-act="quote"', '已摘录进读书笔记', '（PDF 原文）',
+  'user-select: text', 'color: transparent'
 ];
 
 console.log('  asar: ' + asarPath);
@@ -175,7 +241,19 @@ console.log('  app.asar 字节: ' + fs.statSync(asarPath).size);
 // ---- 门禁判定（R-07）：探针未全命中即失败，不再只打印给人看 ----
 // 必查模块：只列**以源码形式入包**的领域模块。四语言与视图是打进 dist 资产的，
 // 不以源码形式入包，由上面的语料/文案探针覆盖，不要写进这里（否则门禁必挂）。
-const requiredEntries = ['src/free/board.js', 'src/writing/check.js'];
+// V3.5：pdf.js 两个本地解码文件若漏打进包，阅读窗打开 PDF 会白屏且不报错
+const requiredEntries = [
+  'src/free/board.js', 'src/writing/check.js', 'src/reading/fonts.js',
+  // V3.10：主进程 bootCore 顶部 require 它，漏打进包就是启动即崩，不只是少个功能
+  'src/review/cross.js',
+  // V3.13：豆瓣封面客户端同样在 bootCore 顶部 require；漏了「从豆瓣找封面」会直接报错
+  'src/reading/cover-net.js',
+  // V3.14：图书馆独立窗口的第三个入口页，漏打进包就是点「图书馆」开出一片空白
+  'renderer-v2/dist/library.html',
+  'renderer-v2/reader/vendor/pdf.min.js', 'renderer-v2/reader/vendor/pdf.worker.min.js',
+  // Apache-2.0 要求随二进制分发附许可证全文与归属声明；漏了就是合规性缺口，不只是文档问题
+  'renderer-v2/reader/vendor/LICENSE-pdfjs.txt', 'renderer-v2/reader/vendor/NOTICE-pdfjs.txt'
+];
 const missingEntries = requiredEntries.filter(function (r) { return !entry(r); });
 console.log('');
 if (misses.length || missingEntries.length) {

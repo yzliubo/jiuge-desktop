@@ -408,6 +408,21 @@ function onFile(event: Event): void {
           <div class="h-cell"><span class="h-k">检索使用面</span><span class="h-v">{{ ratioText(metrics.metrics.searchUsageRate) }}</span></div>
           <div class="h-cell"><span class="h-k">保存耗时 P50 / P95</span><span class="h-v">{{ msText(metrics.metrics.saveLatencyP50) }} / {{ msText(metrics.metrics.saveLatencyP95) }}</span></div>
         </div>
+        <!-- V3.8 成效侧：把「用得多不多」补上「有没有真的推动」。
+             没有成效事件时明说没有，不拿一排 0 冒充「你什么都没做成」。 -->
+        <div class="outcome-head">
+          <span class="h-k">成效侧</span>
+          <span class="muted">近 7 天 / 近 30 天 · 只记次数，不记任务名与复盘内容</span>
+        </div>
+        <div v-if="!metrics.outcome || !metrics.outcome.available" class="health-empty">
+          还没有成效事件。完成一件任务、推一次目标进度、存一笔梦想金、写一次复盘，这里才开始计数。
+        </div>
+        <div v-else class="metric-grid">
+          <div class="h-cell"><span class="h-k">完成任务</span><span class="h-v">{{ metrics.outcome.window7.taskDone }} / {{ metrics.outcome.window30.taskDone }} 件</span></div>
+          <div class="h-cell"><span class="h-k">目标推进</span><span class="h-v">{{ metrics.outcome.window7.dreamMove }} / {{ metrics.outcome.window30.dreamMove }} 次</span></div>
+          <div class="h-cell"><span class="h-k">阅读推进</span><span class="h-v">{{ metrics.outcome.window7.readMove }} / {{ metrics.outcome.window30.readMove }} 次</span></div>
+          <div class="h-cell"><span class="h-k">复盘落成</span><span class="h-v">{{ metrics.outcome.window7.review }} / {{ metrics.outcome.window30.review }} 次</span></div>
+        </div>
         <div class="row">
           <button class="btn" :disabled="metricsBusy" @click="toggleMetrics">{{ metrics.enabled ? '停用本机指标' : '启用本机指标' }}</button>
           <button class="btn" @click="exportMetrics">另存为文件</button>
@@ -504,63 +519,64 @@ function onFile(event: Event): void {
 
 <style scoped>
 .dc { display: flex; flex-direction: column; gap: var(--space-3); }
-.dc-head h1 { font-size: 15px; font-weight: 500; margin: 0; }
-.dc-head p { font-size: 12px; color: var(--surface-muted); margin: 4px 0 0; }
+.dc-head h1 { font-size: var(--text-h2); font-weight: 500; margin: 0; }
+.dc-head p { font-size: var(--text-sm); color: var(--surface-muted); margin: 4px 0 0; }
 
 /* 数据健康卡 */
 .health { padding: var(--space-3); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
 .health-head { display: flex; align-items: center; gap: var(--space-2); }
-.health-title { font-size: 13px; font-weight: 500; margin: 0; }
-.health-at { font-size: 11px; color: var(--surface-muted); }
+.health-title { font-size: var(--text-body); font-weight: 500; margin: 0; }
+.health-at { font-size: var(--text-xs); color: var(--surface-muted); }
 .health-spacer { flex: 1; }
-.hbtn { padding: 3px 10px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); cursor: pointer; }
+.hbtn { padding: 3px 10px; font-size: var(--text-sm); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); cursor: pointer; }
 .hbtn:hover:not(:disabled) { border-color: var(--palette-border); background: var(--palette-soft); color: var(--palette-primary); }
 .hbtn:disabled { opacity: 0.5; cursor: default; }
 .health-grid, .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
 .h-cell { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); min-width: 0; }
-.h-k { font-size: 11px; color: var(--surface-muted); }
-.h-v { font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-k { font-size: var(--text-xs); color: var(--surface-muted); }
+.h-v { font-size: var(--text-sm); font-variant-numeric: tabular-nums; line-height: 1.5; overflow: visible; white-space: normal; }
 .h-ok { border-color: var(--palette-border); }
 .h-warn { border-color: var(--state-warn); background: var(--state-warn-soft); }
 .h-warn .h-v { color: var(--state-warn); }
-.health-empty { font-size: 12px; color: var(--surface-muted); margin: var(--space-2) 0 0; }
-.health-note { font-size: 11px; color: var(--surface-muted); line-height: 1.65; margin: var(--space-2) 0 0; }
+.health-empty { font-size: var(--text-sm); color: var(--surface-muted); margin: var(--space-2) 0 0; }
+.outcome-head { display: flex; align-items: baseline; gap: 8px; margin-top: var(--space-3); flex-wrap: wrap; }
+.health-note { font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.65; margin: var(--space-2) 0 0; }
 @media (max-width: 1180px) { .health-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
 .action-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
-.action-card span { font-size: 12px; color: var(--surface-muted); }
+.action-card span { font-size: var(--text-sm); color: var(--surface-muted); }
 .action-on { background: var(--palette-soft); border-color: var(--palette-border); color: var(--palette-primary); }
 .panel { padding: var(--space-3); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-panel); }
-.panel h2 { font-size: 13px; font-weight: 500; margin: 0 0 var(--space-2); }
+.panel h2 { font-size: var(--text-body); font-weight: 500; margin: 0 0 var(--space-2); }
 .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: var(--space-2); }
 .seg, .btn { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .seg-on, .primary-on, .btn-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .text { width: 100%; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); outline: none; resize: vertical; }
-.file { font-size: 12px; }
-.clipboard-hint, .muted, .empty { font-size: 12px; color: var(--surface-muted); margin: var(--space-2) 0 0; }
+.file { font-size: var(--text-sm); }
+.clipboard-hint, .muted, .empty { font-size: var(--text-sm); color: var(--surface-muted); margin: var(--space-2) 0 0; }
 
 /* 可回滚版本（R-10） */
 .ver-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
 .ver-item {
   display: flex; align-items: center; gap: var(--space-2);
   padding: 6px 8px; border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .ver-item:last-child { border-bottom: 0; }
 .ver-when { font-variant-numeric: tabular-nums; }
 .ver-meta { color: var(--surface-muted); }
 .ver-spacer { flex: 1; }
-.ver-btn { font-size: 12px; padding: 2px 10px; }
-.ver-ask { background: var(--warn-soft, #f7e6c8); border-color: var(--warn, #c98b2e); font-weight: 600; }
-.receipt { font-size: 12px; padding: var(--space-2); border-radius: var(--radius-md); background: var(--surface-raised); margin-top: var(--space-2); word-break: break-all; }
+.ver-btn { font-size: var(--text-sm); padding: 2px 10px; white-space: nowrap; }
+.ver-ask { background: var(--state-warn-soft); border-color: var(--state-warn); font-weight: 600; }
+.receipt { font-size: var(--text-sm); padding: var(--space-2); border-radius: var(--radius-md); background: var(--surface-raised); margin-top: var(--space-2); word-break: break-all; }
 .receipt-on { border: 0.5px solid var(--palette-border); color: var(--palette-primary); }
 .report, .hist { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: var(--space-2); }
-.stat { padding: 2px 8px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); font-size: 12px; }
-.path { flex: 1; font-size: 12px; word-break: break-all; }
-.steps { font-size: 12px; padding-left: 18px; margin: 0; }
+.stat { padding: 2px 8px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); font-size: var(--text-sm); }
+.path { flex: 1; font-size: var(--text-sm); word-break: break-all; }
+.steps { font-size: var(--text-sm); padding-left: 18px; margin: 0; }
 .steps li { margin-bottom: 4px; }
-.message { font-size: 12px; margin: 0; }
+.message { font-size: var(--text-sm); margin: 0; }
 .message-on { color: var(--palette-primary); }
-.privacy { display: flex; flex-direction: column; gap: 4px; padding: var(--space-2); border-radius: var(--radius-lg); background: var(--surface-panel); font-size: 12px; }
+.privacy { display: flex; flex-direction: column; gap: 4px; padding: var(--space-2); border-radius: var(--radius-lg); background: var(--surface-panel); font-size: var(--text-sm); }
 .privacy span { color: var(--surface-muted); }
 </style>

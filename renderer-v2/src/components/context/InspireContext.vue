@@ -94,9 +94,9 @@ function num(k: string, f: keyof Stats): number {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 1.6;
 }
-.ctx-quote { margin: 0; font-size: 12px; line-height: 1.7; color: var(--surface-text); }
+.ctx-quote { margin: 0; font-size: var(--text-sm); line-height: 1.7; color: var(--surface-text); }
 </style>

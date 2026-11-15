@@ -6,10 +6,10 @@
 //   2. 两类阅读的笔记统一进 md_reading.notes，即「读书笔记」数据库；
 //   3. 笔记写进九格只能追加、必须带出处，且补记态不许冒充当天。
 // 类名一律 rd- 前缀：项目里 .cell / .heat-cell 都因撞名炸过真 GUI 断言。
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { DiaryRecord } from '../types';
 import { callDomain } from '../composables/useDomain';
-import { saveExport, listDiaries, upsertDiary, pickBookFiles, pathForFile, openReader } from '../bridge';
+import { saveExport, listDiaries, upsertDiary, pickBookFiles, pickImageFile, pathForFile, openReader, doubanCovers, doubanApply } from '../bridge';
 
 interface BookRow {
   id: string; title: string; author: string; total: number; done: number;
@@ -17,6 +17,10 @@ interface BookRow {
   statusLabel: string; noteCount: number; note: string; coverColor: string;
   filePath: string; fileExt: string; fileSize: number; format: string;
   coverId: string; source: string; hasFile: boolean; themeId: string;
+  // 书架顺序（越小越靠前）与「最近在读」毫秒时间戳：都由领域层写入，渲染层只读
+  order?: number; lastReadAt?: number;
+  // V3.5 分组只是书上的一个名字，收藏只是一个布尔视图；分组清单由 board() 派生
+  group?: string; favorite?: boolean;
   fileMissing?: boolean; fileSizeText?: string;
 }
 // V2.14：主题书（books 里 themeId 非空的记录）按主题分组展示，带 filePath 可进阅读窗
@@ -35,11 +39,16 @@ interface NoteRow {
 }
 interface ChapterRow { id: string; bookId: string; title: string; parentId: string; order: number }
 interface Stats {
-  books: number; notes: number; highlights: number; ideas: number; pushed: number;
+  books: number; themeBooks?: number; notes: number; highlights: number; ideas: number; pushed: number;
   leisureNotes: number; themeNotes: number; tagCount: number; thisMonth: number;
 }
 interface BoardData {
-  stats: Stats; books: BookRow[]; themeBooks: ThemeBook[]; themeGroups: ThemeGroup[];
+  stats: Stats; books: BookRow[];
+  // V3.13：书架只取 leisureBooks（主题书不混进休闲书架）；books 仍是全部，供别处只读引用
+  leisureBooks?: BookRow[];
+  themeBooks: ThemeBook[]; themeGroups: ThemeGroup[];
+  // 分组清单（派生值，不是独立表）与收藏总数
+  groups: Array<{ name: string; count: number }>; favoriteCount: number;
   recent: NoteRow[]; tagTop: Array<{ tag: string; count: number }>;
 }
 interface NotesResult {
@@ -52,7 +61,19 @@ interface ActiveBook {
   mode: 'leisure' | 'theme'; bookId: string; themeId: string; title: string; total: number; done: number;
 }
 
-const props = defineProps<{ record: DiaryRecord; today: string; backfill?: boolean }>();
+// V3.14：图书馆改成独立窗口后，左栏的文件夹树是「范围」的唯一来源。
+// 树点了哪个节点，这里就切到对应的页签与筛选——两侧看的是同一份范围，不各留一份状态。
+// 不给 scope 时（例如早先的内嵌用法）完全按自己的记忆走，行为不变。
+const props = defineProps<{
+  record: DiaryRecord; today: string; backfill?: boolean;
+  scope?: { kind: 'leisure' | 'theme' | 'notes'; group?: string; themeId?: string } | null;
+  // V3.14：嵌进独立窗口时收起大标题与统计头——左栏品牌区已经有「图书馆」，
+  // 右栏也已经把本数 / 在读 / 笔记摆成四格，中栏再重复一遍只是白占一屏高度。
+  embedded?: boolean;
+  // 外部数据变更的信号（窗口收到主进程广播后自增）：书架不许只信挂载时取的那一份。
+  // 少了这条，主窗写完一本书、图书馆窗口还停在旧数。
+  dataTick?: number;
+}>();
 const emit = defineEmits<{
   (e: 'save', record: DiaryRecord): void;
   (e: 'notify', text: string): void;
@@ -70,10 +91,6 @@ const chapters = ref<ChapterRow[]>([]);
 const active = ref<ActiveBook | null>(null);
 const busy = ref(false);
 
-// 休闲娱乐：加书
-const newTitle = ref('');
-const newAuthor = ref('');
-const newTotal = ref('300');
 // 章节大纲（本地两层树，不是 AI 生成的思维导图）
 const newChapter = ref('');
 // 笔记表单：摘录 + 自己的话 + 页码 + #tag
@@ -96,6 +113,48 @@ const kw = ref('');
 const fMode = ref('');
 const fType = ref('');
 const fTag = ref('');
+// 书架整理（2026-11-14，对标 mybook 1.0.29 的书架更新）：搜索 / 排序 / 编辑信息
+const shelfKw = ref('');
+// V3.13：列表改成 calibre 那样的表，列头可点排序；manual 是「书架自己的顺序」（order 字段）
+type SortKey = 'manual' | 'recent' | 'title' | 'author' | 'size' | 'date' | 'pct' | 'notes';
+const SORT_KEY = 'jiuge.reading.sortMode';
+const sortMode = ref<SortKey>('manual');
+const sortAsc = ref(true);
+// 每个维度第一次点时朝哪个方向：书名/作者从小到大，大小/日期/进度/笔记从大到小
+// （「最厚 / 最近 / 读得最多」比反过来有用，默认别让人多点一次）
+const SORT_ASC: Record<SortKey, boolean> = {
+  manual: true, recent: false, title: true, author: true,
+  size: false, date: false, pct: false, notes: false
+};
+// 拖动只记 id，落库交给 reading.reorder 统一重排；拖到谁身上只影响高亮
+const dragId = ref('');
+const dragOverId = ref('');
+const editing = ref<BookRow | null>(null);
+const editTitleEl = ref<HTMLInputElement | null>(null);
+const editTitle = ref('');
+const editAuthor = ref('');
+const editCoverBusy = ref(false);
+// ---- V3.5 书架分组 / 收藏夹 ----
+// 两个保留值不与用户分组名撞车：用户分组名走 clean() 后不会是这种带双下划线的形态。
+const GROUP_ALL = '__all__';
+const GROUP_FAV = '__fav__';
+// V3.15：「未分组」在库里不是一个名字，而是 group 为空字符串。左栏（LibraryWindow 的 UNGROUPED）
+// 与中栏必须用同一个保留值，否则筛出来一本都没有——字面量两处一致，改一处就要改两处。
+const GROUP_NONE = '\u0000none';
+const GROUP_KEY = 'jiuge.reading.groupFilter';
+const groupFilter = ref<string>(GROUP_ALL);
+const groups = computed<Array<{ name: string; count: number }>>(() => board.value?.groups || []);
+// 与左栏「未分组」同一口径：只数休闲书里 group 为空的那几本（books 已经是 leisure 清单）
+const ungroupedCount = computed(() => books.value.filter((b) => !b.group).length);
+const favoriteCount = computed(() => board.value?.favoriteCount || 0);
+const groupAdding = ref(false);
+const newGroupName = ref('');
+const groupRenaming = ref(false);
+const groupRenameValue = ref('');
+const groupDeleteConfirm = ref(false);
+// 「所属分组」可填一个还不存在的名字：新建分组就发生在保存这本书的那一刻
+const editGroup = ref('');
+const editGroupNew = ref(false);
 
 const NOTE_TYPES: Array<{ key: string; label: string }> = [
   { key: 'highlight', label: '摘录' }, { key: 'note', label: '笔记' },
@@ -110,13 +169,72 @@ const PROMPTS: Array<{ id: string; label: string; hint: string; type: string }> 
 const activePrompt = ref('');
 
 const stats = computed<Stats>(() => board.value?.stats || {
-  books: 0, notes: 0, highlights: 0, ideas: 0, pushed: 0,
+  books: 0, themeBooks: 0, notes: 0, highlights: 0, ideas: 0, pushed: 0,
   leisureNotes: 0, themeNotes: 0, tagCount: 0, thisMonth: 0
 });
-const books = computed<BookRow[]>(() => board.value?.books || []);
+// 书架 = 只含休闲书。主题书按主题归到「主题阅读」，两边各看各的：
+// 一个主题动辄十几份同主题文件，混进书架会把随手翻的书整片顶走。
+const books = computed<BookRow[]>(() => {
+  const bd = board.value;
+  if (!bd) return [];
+  return bd.leisureBooks || (bd.books || []).filter((b) => !b.themeId);
+});
+// 封面要按「全部书」取：主题行的缩略图同样是书里的封面图，
+// 只按书架那一份去取，主题阅读里就全变成色块了。
+const allBooks = computed<BookRow[]>(() => board.value?.books || []);
+// 书架搜索：书名 / 作者 / 格式 / 备注四处都算命中——记不住书名时按作者找也找得到。
+// 只在渲染层过滤，不动库：搜索是「看一眼」，不是一次写操作。
+const shelfBooks = computed<BookRow[]>(() => {
+  const k = shelfKw.value.trim().toLowerCase();
+  let list = books.value;
+  // 分组 / 收藏夹先筛，再走关键词；两者都是「看一眼」，库里一本都不动
+  const g = groupFilter.value;
+  if (g === GROUP_FAV) list = list.filter((b) => !!b.favorite);
+  else if (g === GROUP_NONE) list = list.filter((b) => !b.group);
+  else if (g !== GROUP_ALL) list = list.filter((b) => (b.group || '') === g);
+  if (k) {
+    list = list.filter((b) => (
+      (b.title || '').toLowerCase().indexOf(k) >= 0
+      || (b.author || '').toLowerCase().indexOf(k) >= 0
+      || (b.format || '').toLowerCase().indexOf(k) >= 0
+      || (b.note || '').toLowerCase().indexOf(k) >= 0
+    ));
+  }
+  if (sortMode.value === 'manual') return list;
+  const dir = sortAsc.value ? 1 : -1;
+  const byText = (a: string, b: string) => a.localeCompare(b, 'zh-Hans-CN');
+  if (sortMode.value === 'recent') {
+    // 最近在读：翻过的排前面；没翻过的保持原书架次序接在后面
+    return list.slice().sort((a, b) => ((b.lastReadAt || 0) - (a.lastReadAt || 0)) || ((a.order || 0) - (b.order || 0)));
+  }
+  const cmp = (a: BookRow, b: BookRow): number => {
+    switch (sortMode.value) {
+      case 'title': return byText(a.title || '', b.title || '');
+      case 'author': return byText(a.author || '', b.author || '');
+      case 'size': return (a.fileSize || 0) - (b.fileSize || 0);
+      case 'date': return (a.lastReadAt || 0) - (b.lastReadAt || 0);
+      case 'pct': return (a.pct || 0) - (b.pct || 0);
+      case 'notes': return (a.noteCount || 0) - (b.noteCount || 0);
+      default: return 0;
+    }
+  };
+  return list.slice().sort((a, b) => (dir * cmp(a, b)) || ((a.order || 0) - (b.order || 0)));
+});
+// 搜索态 / 分组筛选态都不许拖：看不见的书会被挤出可见区，等于替用户改了没打算改的顺序
+const canDrag = computed(() => sortMode.value === 'manual' && !shelfKw.value.trim() && groupFilter.value === GROUP_ALL);
 const themeBooks = computed<ThemeBook[]>(() => board.value?.themeBooks || []);
 // V2.14：主题书格局 md_reading.books 派生（每行是 BookRow，有 id 可直接开阅读窗）
 const themeGroups = computed<ThemeGroup[]>(() => board.value?.themeGroups || []);
+// V3.15：主题默认展开，三角只管「这一摞先不看」。折叠状态不写盘——
+// 收起只是当下的动作，下次进来该看见内容还在。也不与 themeSel（左栏选中）混成一个状态：
+// 选中是「现在在看这个主题」，收起是「这一摞先合上」，两件事分开才不会点一下就互相打架。
+const closedThemes = ref<string[]>([]);
+function isThemeClosed(id: string): boolean { return closedThemes.value.indexOf(id) >= 0; }
+function toggleTheme(id: string): void {
+  closedThemes.value = isThemeClosed(id)
+    ? closedThemes.value.filter((x) => x !== id)
+    : closedThemes.value.concat([id]);
+}
 const tagTop = computed(() => board.value?.tagTop || []);
 const activeChapters = computed(() => {
   if (!active.value) return [];
@@ -142,6 +260,13 @@ async function loadNotes(): Promise<void> {
 
 async function load(): Promise<void> {
   board.value = await callDomain<BoardData | null>('reading.board', null);
+  // 上次筛的分组被改名 / 解散后，别让书架停在一个永远空着的筛选上。
+  // 「收藏夹 / 未分组」是保留值，不在 groups 清单里，不能拿这条守卫把它们清掉。
+  const g = groupFilter.value;
+  if (g !== GROUP_ALL && g !== GROUP_FAV && g !== GROUP_NONE
+    && !(board.value?.groups || []).some((x) => x.name === g)) {
+    setGroupFilter(GROUP_ALL);
+  }
   const raw = await callDomain<{ chapters?: ChapterRow[] } | null>('reading.read', null);
   chapters.value = raw?.chapters || [];
   await loadNotes();
@@ -153,33 +278,357 @@ async function reload(): Promise<void> {
   emit('changed');
 }
 
-// ---- 本地电子书：拖放 / 点击选择 / 两种陈列 ----
+// ---- 本地电子书：拖放 / 点击选择 / 三种陈列 ----
 // 只登记绝对路径，不把书的内容搬进库；封面是主进程读 EPUB 后落盘、按需转 dataURL 回传。
 const VIEW_KEY = 'jiuge.reading.viewMode';
-const viewMode = ref<'list' | 'grid'>('list');
+const viewMode = ref<'list' | 'grid' | 'shelf'>('list');
 const dragOver = ref(false);
 const importing = ref(false);
 const coverMap = ref<Record<string, string>>({});
 
-function setViewMode(m: 'list' | 'grid'): void {
+function setViewMode(m: 'list' | 'grid' | 'shelf'): void {
   viewMode.value = m;
   try { localStorage.setItem(VIEW_KEY, m); } catch { /* 隐私模式下只在本轮生效 */ }
-  if (m === 'grid') void loadCovers();
+  if (m !== 'list') void loadCovers();
 }
 
+// 封面一律取书里自带的那张；没有才由渲染层回落到首字 + 渐变。
+// 不拿 coverId 当门槛：老书当年可能没抽到，主进程会按需补抽一次并记下来。
+const coverTried = new Set<string>();
 async function loadCovers(): Promise<void> {
-  const rows = books.value.filter((b) => b.coverId && !coverMap.value[b.id]);
+  const rows = allBooks.value.filter((b) => {
+    if (coverMap.value[b.id] || coverTried.has(b.id)) return false;
+    if (!b.filePath || b.fileMissing || String(b.fileExt || '').toLowerCase() !== 'epub') return false;
+    return true;
+  });
+  rows.forEach((b) => coverTried.add(b.id));
   await Promise.all(rows.map(async (b) => {
     const url = await callDomain<string>('reading.cover', '', b.id);
     if (url) coverMap.value = { ...coverMap.value, [b.id]: url };
   }));
 }
 function coverOf(b: BookRow): string { return coverMap.value[b.id] || ''; }
-function initialOf(b: BookRow): string { return (b.title || '书').slice(0, 1); }
+// V3.13：没有封面时，占位封面上直接印**完整书名**，不再只印一个字。
+// 一个「移」认不出是哪本书，尤其主题阅读下一个主题里躺着十几份同主题文件——
+// 「移动平均线策略在中国的…」和「移动平均线策略回测」在单字占位里长得一模一样。
+// 字号按字数分级靠缩小来放下，不截断：宁可小，也不要让它变成第二个「略」。
+function coverNameStyle(title: string, base: number): Record<string, string> {
+  const n = Array.from(title || '书').length;
+  const step = n <= 4 ? 1 : n <= 8 ? 0.74 : n <= 12 ? 0.58 : n <= 20 ? 0.48 : n <= 30 ? 0.4 : 0.33;
+  return { fontSize: Math.round(base * step) + 'px', lineHeight: '1.32' };
+}
 function coverHue(b: BookRow): string {
   let h = 0;
   for (let i = 0; i < b.title.length; i += 1) h = (h * 31 + b.title.charCodeAt(i)) % 360;
   return 'linear-gradient(150deg, hsl(' + h + ',28%,84%), hsl(' + ((h + 40) % 360) + ',26%,68%))';
+}
+
+// ---- 书架整理：搜索 / 排序 / 拖动 / 编辑 / 读完 / 再读 ----
+function fmtRecent(ts?: number): string {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 0) return '刚读过';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚读过';
+  if (min < 60) return min + ' 分钟前读过';
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + ' 小时前读过';
+  const day = Math.floor(hr / 24);
+  if (day < 30) return day + ' 天前读过';
+  return fmtDate(ts) + ' 读过';
+}
+
+function setSortMode(m: SortKey): void {
+  sortMode.value = m;
+  sortAsc.value = SORT_ASC[m];
+  try { localStorage.setItem(SORT_KEY, m); } catch { /* 隐私模式下只在本轮生效 */ }
+}
+// 同一个列头再点一次就反向；换列头则回到这一列「有用」的那一头
+function toggleSort(m: SortKey): void {
+  if (sortMode.value === m) sortAsc.value = !sortAsc.value;
+  else { sortMode.value = m; sortAsc.value = SORT_ASC[m]; }
+  try { localStorage.setItem(SORT_KEY, sortMode.value); } catch { /* 只在本轮生效 */ }
+}
+function sortArrow(m: SortKey): string {
+  if (sortMode.value !== m) return '';
+  return sortAsc.value ? ' ↑' : ' ↓';
+}
+function ariaSort(m: SortKey): 'ascending' | 'descending' | 'none' {
+  if (sortMode.value !== m) return 'none';
+  return sortAsc.value ? 'ascending' : 'descending';
+}
+
+function onDragStart(ev: DragEvent, b: BookRow): void {
+  if (!canDrag.value) { ev.preventDefault(); return; }
+  dragId.value = b.id;
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move';
+    try { ev.dataTransfer.setData('text/plain', b.id); } catch { /* 个别环境不给写，不影响拖动 */ }
+  }
+}
+function onDragOverBook(ev: DragEvent, b: BookRow): void {
+  if (!dragId.value || dragId.value === b.id) return;
+  ev.preventDefault();
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+  dragOverId.value = b.id;
+}
+async function onDropBook(ev: DragEvent, target: BookRow): Promise<void> {
+  ev.preventDefault();
+  const from = dragId.value;
+  dragId.value = '';
+  dragOverId.value = '';
+  if (!canDrag.value || !from || from === target.id) return;
+  const ids = shelfBooks.value.map((x) => x.id);
+  const a = ids.indexOf(from);
+  const b2 = ids.indexOf(target.id);
+  if (a < 0 || b2 < 0) return;
+  ids.splice(a, 1);
+  ids.splice(b2, 0, from);
+  await callDomain<unknown>('reading.reorder', null, ids);
+  await reload();
+  say('书架顺序已保存');
+}
+function onDragEnd(): void { dragId.value = ''; dragOverId.value = ''; }
+
+// ---- V3.5 分组 / 收藏 ----
+function setGroupFilter(g: string): void {
+  groupFilter.value = g;
+  groupAdding.value = false;
+  groupRenaming.value = false;
+  groupDeleteConfirm.value = false;
+  try { localStorage.setItem(GROUP_KEY, g); } catch { /* 隐私模式下只在本轮生效 */ }
+}
+function groupLabel(): string {
+  return groupFilter.value === GROUP_ALL ? '全部'
+    : groupFilter.value === GROUP_FAV ? '收藏夹'
+      : groupFilter.value === GROUP_NONE ? '未分组' : groupFilter.value;
+}
+// 左栏树 → 中栏：只切页签与分组 / 主题展开，不动数据、不写偏好。
+// 不写 localStorage：左栏的选择是一次「看哪里」，不该盖掉用户上次手动挑的默认视图。
+function applyScope(): void {
+  const s = props.scope;
+  if (!s) return;
+  if (s.kind === 'notes') { tab.value = 'notes'; return; }
+  if (s.kind === 'theme') {
+    tab.value = 'theme';
+    if (s.themeId !== undefined) {
+      themeSel.value = s.themeId;
+      // 左栏点主题 = 现在就看这一摞：若它是收起状态，顺手展开，否则点了像没反应
+      closedThemes.value = closedThemes.value.filter((x) => x !== s.themeId);
+    }
+    return;
+  }
+  tab.value = 'shelf';
+  groupFilter.value = s.group || GROUP_ALL;
+}
+watch(() => props.scope, applyScope, { deep: true });
+// 外部写入（另一个窗口 / 领域层直写）也要落到这一栏：只重取数据，不动当前视图与筛选
+watch(() => props.dataTick, () => { void load(); });
+async function toggleFavorite(b: BookRow): Promise<void> {
+  await callDomain('reading.setBookFavorite', null, b.id, !b.favorite);
+  await reload();
+  say(b.favorite ? '《' + b.title + '》已移出收藏夹' : '《' + b.title + '》已收进收藏夹');
+}
+// 分组是从书派生的，空分组活不下来：新建时先把当前第一本放进去，用户马上看得到结果。
+// 之后想归更多书，在每本的「编辑 → 所属分组」里改，不需要一个批量弹窗。
+async function createGroup(): Promise<void> {
+  const name = newGroupName.value.trim();
+  if (!name) return;
+  const first = shelfBooks.value[0] || books.value[0];
+  if (!first) { say('书架还空着，先放一本书再建分组'); return; }
+  await callDomain('reading.setBookGroup', null, first.id, name);
+  newGroupName.value = '';
+  groupAdding.value = false;
+  setGroupFilter(name);
+  await reload();
+  say('已建「' + name + '」，先把《' + first.title + '》放了进去；在书的「编辑」里可继续归组');
+}
+async function renameGroupNow(): Promise<void> {
+  const from = groupFilter.value;
+  const to = groupRenameValue.value.trim();
+  if (from === GROUP_ALL || from === GROUP_FAV || from === GROUP_NONE) return; // 保留值不是真分组
+  if (!to || to === from) { groupRenaming.value = false; return; }
+  await callDomain('reading.renameGroup', null, from, to);
+  groupRenameValue.value = '';
+  groupRenaming.value = false;
+  setGroupFilter(to);
+  await reload();
+  say('分组已改名为「' + to + '」；若与已有分组同名则合并，书一本不少');
+}
+async function removeGroupNow(): Promise<void> {
+  const name = groupFilter.value;
+  if (name === GROUP_ALL || name === GROUP_FAV || name === GROUP_NONE) return; // 保留值不是真分组
+  await callDomain('reading.removeGroup', null, name);
+  groupDeleteConfirm.value = false;
+  setGroupFilter(GROUP_ALL);
+  await reload();
+  say('已解散「' + name + '」：书都还在，只是去掉了分组标签');
+}
+
+// ---- V3.13 豆瓣封面：只在「编辑」弹窗里出现，点了才联网 ----
+// 只发书名（必要时加作者），不带路径 / 笔记 / 日记字段。找到以后不自动套用——
+// 同名书能有十几个版本，套错比没有封面更糟，所以让人点一张。
+interface DoubanItem { title: string; author: string; year: string; picHost: string; picPath: string; thumb: string }
+const doubanBusy = ref(false);
+const doubanItems = ref<DoubanItem[]>([]);
+const doubanMsg = ref('');
+// 已经套用的那一张（-1 = 还没选）：套完不清空候选，标出来让人能接着换一张
+const doubanPicked = ref(-1);
+
+async function findDoubanCovers(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  doubanBusy.value = true;
+  doubanItems.value = [];
+  doubanPicked.value = -1;
+  doubanMsg.value = '正在用书名去豆瓣搜…只会发书名和作者，不发路径与笔记';
+  try {
+    const r = await doubanCovers(b.id);
+    if (!r || !r.ok) { doubanMsg.value = (r && r.reason) || '豆瓣没搜到'; return; }
+    doubanItems.value = r.items || [];
+    if (!doubanItems.value.length) {
+      doubanMsg.value = '豆瓣没搜到这本书。可以换一下书名里的关键词，或自己选一张图';
+    } else if (r.keyword && r.keyword !== b.title) {
+      // 关键词是被截短过的，如实写出来：不然人会以为豆瓣里这本书就叫这个名
+      doubanMsg.value = '整本书名搜不到，用「' + r.keyword + '」搜到 ' + doubanItems.value.length + ' 个候选，挑一张最像这本的';
+    } else {
+      doubanMsg.value = '挑一张最像这本的：豆瓣同名书很多，选错了可以再换';
+    }
+  } finally { doubanBusy.value = false; }
+}
+
+async function applyDoubanCover(it: DoubanItem, idx: number): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  doubanBusy.value = true;
+  try {
+    const r = await doubanApply(b.id, it.picHost, it.picPath);
+    if (!r || !r.ok) { say((r && r.reason) || '封面没取到'); return; }
+    const next = { ...coverMap.value };
+    delete next[b.id];
+    coverMap.value = next;
+    // 只为这一本书作废掉抽取记忆：coverTried 是「这本 EPUB 抽过、没封面」的去重表，
+    // 不清它的话 reload 后的 loadCovers 会直接跳过，刚换上的豆瓣封面永远加载不出来。
+    coverTried.delete(b.id);
+    doubanPicked.value = idx;
+    doubanMsg.value = '已换上《' + it.title + '》的封面；不满意可以再点一张';
+    await reload();
+    await loadCovers();
+    say('已换上豆瓣《' + it.title + '》的封面');
+  } finally { doubanBusy.value = false; }
+}
+
+function openEdit(b: BookRow): void {
+  editing.value = b;
+  editTitle.value = b.title;
+  editAuthor.value = b.author || '';
+  editGroup.value = b.group || '';
+  editGroupNew.value = false;
+  // 每本书的豆瓣候选只属于这本书，换一本就清空
+  doubanItems.value = [];
+  doubanPicked.value = -1;
+  doubanMsg.value = '';
+  // 打开就能改：焦点进书名并全选，直接打字就是替换（书名多半只是改一两个字）
+  void nextTick(() => {
+    const el = editTitleEl.value;
+    if (el) { el.focus(); el.select(); }
+  });
+}
+async function saveEdit(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  const title = editTitle.value.trim();
+  if (!title) { say('书名不能空着'); return; }
+  // 只改书架上的显示，EPUB 文件本身一个字节都不动（与 mybook 的「编辑书籍信息」同口径）
+  await callDomain<unknown>('reading.updateBook', null, b.id, { title, author: editAuthor.value.trim() });
+  let msg = '书籍信息已保存，原文件没动';
+  const g = editGroup.value.trim();
+  if (g !== (b.group || '')) {
+    const next = await callDomain<{ books?: BookRow[] } | null>('reading.setBookGroup', null, b.id, g);
+    const row = next?.books?.find((x) => x.id === b.id);
+    // 分组数到上限时领域层会拒绝新建（改名 / 清空不受限），这里如实说，别让用户以为存上了
+    if (row && (row.group || '') !== g) msg = '书架分组最多 20 个，这个新分组没建起来（书名已保存）';
+  }
+  editing.value = null;
+  await reload();
+  say(msg);
+}
+async function pickCover(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  const r = await pickImageFile();
+  if (!r || r.canceled || !r.paths || !r.paths.length) return;
+  editCoverBusy.value = true;
+  try {
+    const res = await callDomain<{ ok: boolean; reason?: string } | null>('reading.setCover', null, b.id, r.paths[0]);
+    if (!res || !res.ok) { say((res && res.reason) || '封面没换成功'); return; }
+    // 缓存里那一本要先清掉，否则预览还是旧封面
+    const next = { ...coverMap.value };
+    delete next[b.id];
+    coverMap.value = next;
+    await reload();
+    await loadCovers();
+    say('封面已更换');
+  } finally { editCoverBusy.value = false; }
+}
+async function resetCover(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  await callDomain<unknown>('reading.setCover', null, b.id, '');
+  const next = { ...coverMap.value };
+  delete next[b.id];
+  coverMap.value = next;
+  await reload();
+  await loadCovers();
+  say('已恢复默认封面');
+}
+async function markDone(b: BookRow): Promise<void> {
+  await callDomain<unknown>('reading.setBookStatus', null, b.id, 'done', props.today);
+  await reload();
+  say('《' + b.title + '》已标记读完');
+}
+// 再读一遍：只重置进度，书签与标注一条不动——和「移出书架」是两件事
+async function reread(b: BookRow): Promise<void> {
+  await callDomain<unknown>('reading.reread', null, b.id, Date.now());
+  await reload();
+  say('《' + b.title + '》从头开始，书签与标注都还在');
+}
+// 导出只有一个落盘口：全库汇总与「按书导出」共用这一处 saveExport。
+// 数据中心唯一入口的门禁按调用次数算，两个按钮各写一次就会变成「第二入口」——
+// 合并后既满足口径，也保证两条导出永远走同一条通道（V1.3 / V2.3 先例）。
+async function saveNotesFile(name: string, bookId: string): Promise<void> {
+  const text = await callDomain<string>('reading.exportMd', '', bookId);
+  const receipt = await saveExport(name, text);
+  say(receipt && receipt.path ? '已导出：' + receipt.path : '已取消导出');
+}
+// 按书导出：只导这一本的笔记（全库汇总走「读书笔记」页那枚按钮）
+async function exportBook(b: BookRow): Promise<void> {
+  await saveNotesFile('读书笔记-' + b.title + '.md', b.id);
+}
+// 弹窗里这三枚按钮都作用在 editing 上，模板里 editing 是可空引用，
+// 统一在这一层收口：既满足严格 TS，也顺手在动作后关掉弹窗（骨架已过期）
+async function doneFromEdit(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  editing.value = null;
+  await markDone(b);
+}
+async function rereadFromEdit(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  editing.value = null;
+  await reread(b);
+}
+async function exportFromEdit(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  editing.value = null;
+  await exportBook(b);
+}
+async function revealFromEdit(): Promise<void> {
+  const b = editing.value;
+  if (!b) return;
+  await revealFile(b);
 }
 
 function onDragEnter(ev: DragEvent): void { ev.preventDefault(); dragOver.value = true; }
@@ -222,17 +671,28 @@ async function openInReader(b: BookRow, mode: 'leisure' | 'theme' = 'leisure'): 
   else if (r.reused) say('这本书的阅读窗口已经开着');
 }
 // 主题书：有本机文件 → 独立阅读窗（与休闲阅读功能完全一致）；无文件 → 中栏批注
+function revealReader(mode: 'leisure' | 'theme'): void {
+  // 书单是表、批注器长在表下面：点完顺手把它带进视野，别让人以为「点了没反应」。
+  // 只滚到「刚好露出来」（block:'nearest'），不把整页跳走。
+  void nextTick(function () {
+    const label = mode === 'leisure' ? '休闲阅读器' : '主题阅读器';
+    const el = document.querySelector('.rd-reader[aria-label="' + label + '"]');
+    if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
+  });
+}
 function startThemeBook(b: BookRow): void {
   themeSel.value = b.themeId || themeSel.value;
   if (b.filePath) { void openInReader(b, 'theme'); return; }
   openBook('theme', b);
   say('这本是手工登记，没有本机电子书；已选中，可在右栏记笔记');
+  revealReader('theme');
 }
 function startBook(b: BookRow): void {
   // 有本机文件 → 独立阅读窗口；手工登记的书没有正文可读，仍用中栏批注面板
   if (b.filePath) { void openInReader(b); return; }
   openBook('leisure', b);
   say('这本是手工登记，没有本机电子书；可直接在中栏记笔记');
+  revealReader('leisure');
 }
 async function revealFile(b: BookRow): Promise<void> {
   await callDomain<unknown>('reading.revealBook', null, b.id);
@@ -240,18 +700,7 @@ async function revealFile(b: BookRow): Promise<void> {
 
 function say(text: string): void { emit('notify', text); }
 
-// ---- 休闲娱乐阅读：自建书单 ----
-async function addBook(): Promise<void> {
-  const title = newTitle.value.trim();
-  if (!title) { say('先写书名'); return; }
-  await callDomain<unknown>('reading.addBook', null, {
-    title, author: newAuthor.value.trim(), total: Number(newTotal.value) || 300, unit: '页'
-  });
-  newTitle.value = ''; newAuthor.value = ''; newTotal.value = '300';
-  await reload();
-  say('已放上书架');
-}
-
+// ---- 休闲娱乐阅读：书只从本机电子书来（V3.14 起不再手写书名） ----
 async function advanceLeisure(id: string, delta: number): Promise<void> {
   await callDomain<unknown>('reading.advanceBook', null, id, delta, props.today);
   await reload();
@@ -401,7 +850,7 @@ async function appendLine(cell: string, line: string): Promise<string> {
 }
 
 const CELL_LABEL: Record<string, string> = {
-  free: '自由记录', growth: '学习成长', work: '工作推进', leisure: '休闲娱乐'
+  free: '自由记录', growth: '学习成长', work: '工作推进', dream: '休闲娱乐', leisure: '休闲娱乐'
 };
 // 冻结的 diary-store.js 第 7 格仍是 dream，渲染层 11-08 改成了 leisure；
 // 写进 leisure 会被 save() 静默丢掉（本轮真 GUI 抓到）。不改九格核心契约，
@@ -459,41 +908,83 @@ async function importQuotes(): Promise<void> {
 }
 
 async function exportNotes(): Promise<void> {
-  const text = await callDomain<string>('reading.exportMd', '');
-  const receipt = await saveExport('读书笔记-' + props.today + '.md', text);
-  say(receipt?.path ? '已导出：' + receipt.path : '已取消导出');
+  await saveNotesFile('读书笔记-' + props.today + '.md', '');
 }
 
 async function applyFilter(): Promise<void> { await loadNotes(); }
 function pickTag(t: string): void { fTag.value = fTag.value === t ? '' : t; void loadNotes(); }
 
+// Esc 关弹窗：挂在 window 上而不是弹窗节点上。
+// 弹窗打开时焦点可能还在背后的书架按钮上（没点进输入框），这时 keydown 的
+// 目标是 body，事件不会经过弹窗节点，节点上的 @keydown.esc 收不到。
+function onEscClose(ev: KeyboardEvent): void {
+  if (ev.key !== 'Escape' || !editing.value) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  editing.value = null;
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', onEscClose);
   try {
     const saved = localStorage.getItem(VIEW_KEY);
-    if (saved === 'grid' || saved === 'list') viewMode.value = saved;
-  } catch { /* 读不出偏好就用详细列表 */ }
+    if (saved === 'grid' || saved === 'list' || saved === 'shelf') viewMode.value = saved;
+    const sort = localStorage.getItem(SORT_KEY) as SortKey | null;
+    if (sort && Object.prototype.hasOwnProperty.call(SORT_ASC, sort)) {
+      sortMode.value = sort;
+      sortAsc.value = SORT_ASC[sort];
+    }
+    const grp = localStorage.getItem(GROUP_KEY);
+    if (grp) groupFilter.value = grp;
+  } catch { /* 读不出偏好就用详细列表 + 手动排序 + 全部分组 */ }
+  // 打开时就带着左栏的选择（例如窗口是从「主题 X」开出来的），先落地再取数
+  applyScope();
   void load();
 });
+onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
 </script>
 
 <template>
   <section class="rd-view" aria-label="图书馆">
-    <header class="rd-head">
+    <header v-if="!embedded" class="rd-head">
       <button class="rd-back" @click="emit('back')">← 返回九格</button>
       <h1 class="rd-title">图书馆</h1>
       <p class="rd-sub">两类阅读 · 笔记贴着原文长 · 汇总进「读书笔记」</p>
       <div class="rd-stats" aria-label="读书笔记统计">
         <span class="rd-stat"><b>{{ stats.books }}</b> 本休闲书</span>
+        <span class="rd-stat"><b>{{ stats.themeBooks || 0 }}</b> 本主题书</span>
         <span class="rd-stat"><b>{{ stats.notes }}</b> 条笔记</span>
         <span class="rd-stat"><b>{{ stats.pushed }}</b> 条已入九格</span>
         <span class="rd-stat"><b>{{ stats.thisMonth }}</b> 条本月</span>
       </div>
     </header>
+    <header v-else class="rd-head rd-head-lite">
+      <button class="rd-back" @click="emit('back')">← 关闭窗口</button>
+      <p class="rd-sub">两类阅读 · 笔记贴着原文长 · 汇总进「读书笔记」</p>
+    </header>
 
+    <!-- 页签行（V3.14）：搜索收到这一行的最左边。
+         原先搜索单占一行，既是白扔一屏高度，也让人误以为它只筛休闲书架——
+         它筛的其实就是「书架」这一栏，跟页签并排才看得明白。
+         排序与计数同理，只在休闲书架这一栏出现，切到主题 / 笔记时收起。 -->
     <nav class="rd-tabs" aria-label="图书馆分区">
+      <input
+        v-if="tab === 'shelf'" v-model="shelfKw" class="rd-input rd-search"
+        placeholder="在书架里找：书名 / 作者 / 格式 / 备注" aria-label="书架搜索"
+      />
       <button class="rd-tab" :class="{ 'rd-tab-on': tab === 'shelf' }" :aria-pressed="tab === 'shelf'" @click="tab = 'shelf'">休闲娱乐阅读</button>
       <button class="rd-tab" :class="{ 'rd-tab-on': tab === 'theme' }" :aria-pressed="tab === 'theme'" @click="tab = 'theme'">主题阅读</button>
       <button class="rd-tab" :class="{ 'rd-tab-on': tab === 'notes' }" :aria-pressed="tab === 'notes'" @click="tab = 'notes'">读书笔记 · 数据库</button>
+      <template v-if="tab === 'shelf'">
+        <span class="rd-spacer"></span>
+        <span class="rd-sort" role="group" aria-label="书架排序方式">
+          <button class="rd-mini" :class="{ 'rd-mode-on': sortMode === 'manual' }" :aria-pressed="sortMode === 'manual'" @click="setSortMode('manual')">手动排序</button>
+          <button class="rd-mini" :class="{ 'rd-mode-on': sortMode === 'recent' }" :aria-pressed="sortMode === 'recent'" @click="setSortMode('recent')">最近在读</button>
+        </span>
+        <span class="rd-hint">
+          {{ shelfBooks.length }} / {{ books.length }} 本<template v-if="canDrag && !embedded"> · 拖书行可调整顺序</template><template v-else-if="sortMode === 'recent' && !embedded"> · 按翻开时间倒序</template>
+        </span>
+      </template>
     </nav>
 
     <!-- ============ 休闲娱乐阅读 ============ -->
@@ -517,52 +1008,118 @@ onMounted(() => {
           <span class="rd-viewmode" role="group" aria-label="书目陈列方式">
             <button class="rd-mini" :class="{ 'rd-mode-on': viewMode === 'list' }" :aria-pressed="viewMode === 'list'" @click="setViewMode('list')">详细列表</button>
             <button class="rd-mini" :class="{ 'rd-mode-on': viewMode === 'grid' }" :aria-pressed="viewMode === 'grid'" @click="setViewMode('grid')">封面预览</button>
+            <button class="rd-mini" :class="{ 'rd-mode-on': viewMode === 'shelf' }" :aria-pressed="viewMode === 'shelf'" title="只摆封面，像看自家书架" @click="setViewMode('shelf')">封面墙</button>
           </span>
         </div>
       </div>
 
-      <div class="rd-add">
-        <input v-model="newTitle" class="rd-input rd-name" placeholder="书名" aria-label="书名" @keyup.enter="addBook" />
-        <input v-model="newAuthor" class="rd-input" placeholder="作者（可不填）" aria-label="作者" />
-        <input v-model="newTotal" class="rd-input rd-num" type="number" min="1" placeholder="页数" aria-label="总页数" />
-        <button class="rd-primary" @click="addBook">＋ 放上书架</button>
+      <!-- 手写书名的入口在 V3.14 下线：图书馆只认「本电脑里的电子书」这一条来路。
+           手写一条只有书名、没有文件、没有格式的书，只会变成书架上认不出来的占位行；
+           真要记一本没电子书的读书笔记，走「主题阅读」——那里手写书名是合理的（资料本来就是散的）。 -->
+
+      <!-- V3.5 分组 / 收藏夹：只是筛选视图，不是另一份书单；分组名就写在书自己身上 -->
+      <div class="rd-groups" aria-label="书架分组">
+        <button class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_ALL }" :aria-pressed="groupFilter === GROUP_ALL" @click="setGroupFilter(GROUP_ALL)">全部 {{ books.length }}</button>
+        <button class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_FAV }" :aria-pressed="groupFilter === GROUP_FAV" @click="setGroupFilter(GROUP_FAV)">★ 收藏夹 {{ favoriteCount }}</button>
+        <button v-if="ungroupedCount" class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_NONE }" :aria-pressed="groupFilter === GROUP_NONE" title="没有归到任何分组的书（左栏同一项）" @click="setGroupFilter(GROUP_NONE)">未分组 {{ ungroupedCount }}</button>
+        <button v-for="g in groups" :key="g.name" class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === g.name }" :aria-pressed="groupFilter === g.name" @click="setGroupFilter(g.name)">
+          {{ g.name }}<span class="rd-gcount">{{ g.count }}</span>
+        </button>
+        <template v-if="groupAdding">
+          <input v-model="newGroupName" class="rd-input rd-gnew" placeholder="新分组名" aria-label="新分组名" @keyup.enter="createGroup" />
+          <button class="rd-mini" @click="createGroup">建分组</button>
+          <button class="rd-mini rd-mini-quiet" @click="groupAdding = false; newGroupName = ''">取消</button>
+        </template>
+        <button v-else class="rd-mini rd-mini-quiet" title="新分组会先放入当前第一本书，之后在书的「编辑」里继续归组" @click="groupAdding = true">＋ 新分组</button>
+        <span class="rd-spacer"></span>
+        <template v-if="groupFilter !== GROUP_ALL && groupFilter !== GROUP_FAV && groupFilter !== GROUP_NONE">
+          <template v-if="groupRenaming">
+            <input v-model="groupRenameValue" class="rd-input rd-gnew" aria-label="分组改名" @keyup.enter="renameGroupNow" />
+            <button class="rd-mini" @click="renameGroupNow">改名</button>
+            <button class="rd-mini rd-mini-quiet" @click="groupRenaming = false">取消</button>
+          </template>
+          <template v-else-if="!groupDeleteConfirm">
+            <button class="rd-mini rd-mini-quiet" @click="groupRenameValue = groupFilter; groupRenaming = true">重命名「{{ groupLabel() }}」</button>
+            <button class="rd-mini rd-mini-quiet" @click="groupDeleteConfirm = true">解散分组</button>
+          </template>
+          <template v-else>
+            <span class="rd-hint">书都保留，只去掉标签</span>
+            <button class="rd-mini" @click="removeGroupNow">确认解散</button>
+            <button class="rd-mini rd-mini-quiet" @click="groupDeleteConfirm = false">取消</button>
+          </template>
+        </template>
       </div>
 
-      <div v-if="!books.length" class="rd-empty">书架还空着。可以拖一本本电脑里的电子书进来，也可以手写书名建一条。</div>
-      <div v-if="viewMode === 'list'" class="rd-shelf" aria-label="详细列表">
-        <article v-for="b in books" :key="b.id" class="rd-book" :class="{ 'rd-book-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing }"
-          :title="'双击直接翻开《' + b.title + '》'" @dblclick="startBook(b)">
-          <span class="rd-cover" :style="{ background: b.coverColor || coverHue(b) }" aria-hidden="true">
-            <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-cover-img" />
+      <div v-if="!books.length" class="rd-empty">书架还空着。把本电脑的电子书拖进来，或点上面的「＋ 选择电子书」；书是从文件来的，不再手写书名。</div>
+      <div v-else-if="!shelfBooks.length" class="rd-empty">没有符合条件的书。换个词、换个分组，或清空筛选。</div>
+      <!-- 详细列表（V3.13 起对标 calibre）：一列一项、列头可点排序、行高紧凑。
+           理由：书架里几十本书时，卡片式的每行一条进度条会把「哪本多厚、哪天翻过」淹掉；
+           calibre 那种表格式排布让人一眼横向比较，也不需要逐行读句子。 -->
+      <div v-if="viewMode === 'list'" class="rd-table rd-shelf" aria-label="详细列表">
+        <div class="rd-thead" role="row">
+          <span class="rd-th rd-th-grip" aria-hidden="true"></span>
+          <span class="rd-th rd-th-title" role="columnheader" :aria-sort="ariaSort('title')" @click="toggleSort('title')">书名{{ sortArrow('title') }}</span>
+          <span class="rd-th rd-th-author" role="columnheader" :aria-sort="ariaSort('author')" @click="toggleSort('author')">作者{{ sortArrow('author') }}</span>
+          <span class="rd-th rd-th-size" role="columnheader" :aria-sort="ariaSort('size')" @click="toggleSort('size')">格式 · 大小{{ sortArrow('size') }}</span>
+          <span class="rd-th rd-th-date" role="columnheader" :aria-sort="ariaSort('date')" @click="toggleSort('date')">最近读过{{ sortArrow('date') }}</span>
+          <span class="rd-th rd-th-pct" role="columnheader" :aria-sort="ariaSort('pct')" @click="toggleSort('pct')">进度{{ sortArrow('pct') }}</span>
+          <span class="rd-th rd-th-act">操作</span>
+        </div>
+        <article
+          v-for="b in shelfBooks" :key="b.id" class="rd-trow rd-book"
+          :class="{ 'rd-trow-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing, 'rd-book-drag': dragId === b.id, 'rd-book-over': dragOverId === b.id }"
+          :draggable="canDrag"
+          :title="'双击直接翻开《' + b.title + '》' + (b.filePath ? '\n' + b.filePath : '')" @dblclick="startBook(b)"
+          @dragstart="onDragStart($event, b)" @dragover="onDragOverBook($event, b)"
+          @drop="onDropBook($event, b)" @dragend="onDragEnd"
+        >
+          <span v-if="canDrag" class="rd-grip" aria-hidden="true" title="按住拖动，调整书架顺序">⋮⋮</span>
+          <span v-else class="rd-th-grip" aria-hidden="true"></span>
+          <span class="rd-td rd-td-title">
+            <span class="rd-tcover" :style="{ background: b.coverColor || coverHue(b) }" aria-hidden="true">
+              <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-cover-img" />
+            </span>
+            <span class="rd-tname-wrap">
+              <span class="rd-tname" :title="b.title">{{ b.title }}</span>
+              <!-- 路径保留在行里：这是「只登记路径、不复制内容」这条承诺的唯一可见证据 -->
+              <span v-if="b.filePath" class="rd-tpath" :title="b.filePath">{{ b.filePath }}</span>
+            </span>
+            <span v-if="b.group" class="rd-chip rd-chip-file">{{ b.group }}</span>
+            <span v-if="b.favorite" class="rd-tfav" title="在收藏夹里">★</span>
+            <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原件不在</span>
           </span>
-          <div class="rd-book-main">
-            <div class="rd-book-line">
-              <strong class="rd-book-title">《{{ b.title }}》</strong><span class="rd-author">{{ b.author }}</span>
-              <span v-if="b.format" class="rd-chip rd-chip-file">{{ b.format }}</span>
-              <span class="rd-chip">{{ b.statusLabel }}</span>
-              <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原文件已不在原处</span>
-            </div>
-            <div class="rd-thick" role="progressbar" :aria-valuenow="b.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="b.title + ' 已读进度'">
-              <span class="rd-thick-in" :style="{ width: b.pct + '%' }"></span>
-            </div>
-            <p class="rd-meta">已读 {{ b.progressText }} · 还剩 {{ Math.max(0, b.total - b.done) }} {{ b.unit }} · {{ b.noteCount }} 条笔记<span v-if="b.filePath"> · {{ b.fileSizeText }}</span><span v-if="b.filePath" class="rd-dbl-tip"> · 双击即读</span></p>
-            <p v-if="b.filePath" class="rd-meta rd-path" :title="b.filePath">{{ b.filePath }}</p>
-          </div>
-          <div class="rd-book-actions" @dblclick.stop>
-            <button class="rd-mini" @click="advanceLeisure(b.id, 10)">+10 {{ b.unit }}</button>
+          <span class="rd-td rd-td-author" :title="b.author || ''">{{ b.author || '未记作者' }}</span>
+          <span class="rd-td rd-td-size" :title="[b.format, b.fileSizeText, b.noteCount + ' 条笔记'].filter(Boolean).join(' · ')">{{ [b.format, b.fileSizeText].filter(Boolean).join(' ') || '—' }}</span>
+          <span class="rd-td rd-td-date" :title="b.lastReadAt ? fmtRecent(b.lastReadAt) : '还没翻开过'">{{ b.lastReadAt ? fmtDate(b.lastReadAt) : '—' }}</span>
+          <span class="rd-td rd-td-pct" :title="'已读 ' + b.progressText + ' · 还剩 ' + Math.max(0, b.total - b.done) + ' ' + b.unit + ' · ' + b.noteCount + ' 条笔记'">
+            <span class="rd-tbar" role="progressbar" :aria-valuenow="b.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="b.title + ' 已读进度'">
+              <span class="rd-tbar-in" :style="{ width: b.pct + '%' }"></span>
+            </span>
+            <span class="rd-tpct">{{ b.pct }}%</span>
+          </span>
+          <span class="rd-td rd-td-act" @dblclick.stop>
+            <button class="rd-mini rd-fav" :class="{ 'rd-fav-on': b.favorite }" :aria-pressed="!!b.favorite" :title="b.favorite ? '移出收藏夹' : '收进收藏夹'" @click="toggleFavorite(b)">{{ b.favorite ? '★' : '☆' }}</button>
+            <button class="rd-mini" title="记 10 个单位的进度" @click="advanceLeisure(b.id, 10)">＋</button>
             <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在中栏记笔记'" @click="startBook(b)">翻开读</button>
-            <button v-if="b.filePath" class="rd-mini rd-mini-quiet" @click="revealFile(b)">定位</button>
-            <button class="rd-mini rd-mini-quiet" @click="removeBook(b.id)">移出</button>
-          </div>
+            <button class="rd-mini" title="改书名 / 作者 / 封面，或标记读完、再读一遍" @click="openEdit(b)">编辑</button>
+            <button class="rd-mini rd-mini-quiet" title="移出书架（笔记保留）" @click="removeBook(b.id)">✕</button>
+          </span>
         </article>
       </div>
-      <div v-else class="rd-grid" aria-label="封面预览">
-        <article v-for="b in books" :key="b.id" class="rd-card" :class="{ 'rd-card-missing': b.fileMissing }"
-          :title="'双击直接翻开《' + b.title + '》'" @dblclick="startBook(b)">
+      <div v-else-if="viewMode === 'grid'" class="rd-grid" aria-label="封面预览">
+        <article
+          v-for="b in shelfBooks" :key="b.id" class="rd-card"
+          :class="{ 'rd-card-missing': b.fileMissing, 'rd-book-drag': dragId === b.id, 'rd-book-over': dragOverId === b.id }"
+          :draggable="canDrag"
+          :title="'双击直接翻开《' + b.title + '》'" @dblclick="startBook(b)"
+          @dragstart="onDragStart($event, b)" @dragover="onDragOverBook($event, b)"
+          @drop="onDropBook($event, b)" @dragend="onDragEnd"
+        >
           <div class="rd-card-cover" :style="{ background: coverHue(b) }">
             <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-card-img" />
-            <span v-else class="rd-card-initial" aria-hidden="true">{{ initialOf(b) }}</span>
+            <span v-else class="rd-card-initial" :style="coverNameStyle(b.title, 34)" aria-hidden="true">{{ b.title }}</span>
             <span v-if="b.format" class="rd-card-format">{{ b.format }}</span>
+            <button class="rd-card-fav" :class="{ 'rd-fav-on': b.favorite }" :aria-pressed="!!b.favorite" :title="b.favorite ? '移出收藏夹' : '收进收藏夹'" @click.stop="toggleFavorite(b)">{{ b.favorite ? '★' : '☆' }}</button>
           </div>
           <div class="rd-card-body">
             <strong class="rd-card-title" :title="b.title">{{ b.title }}</strong>
@@ -571,9 +1128,32 @@ onMounted(() => {
             <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原文件已不在原处</span>
             <div class="rd-card-actions" @dblclick.stop>
               <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在中栏记笔记'" @click="startBook(b)">翻开读</button>
+              <button class="rd-mini" title="改书名 / 作者 / 封面，或标记读完、再读一遍" @click="openEdit(b)">编辑</button>
               <button class="rd-mini rd-mini-quiet" @click="removeBook(b.id)">移出</button>
             </div>
           </div>
+        </article>
+      </div>
+      <div v-else class="rd-wall" aria-label="封面墙">
+        <article
+          v-for="b in shelfBooks" :key="b.id" class="rd-spine"
+          :class="{ 'rd-spine-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing, 'rd-book-drag': dragId === b.id, 'rd-book-over': dragOverId === b.id }"
+          :draggable="canDrag"
+          :title="'《' + b.title + '》' + (b.author ? ' · ' + b.author : '') + ' · 双击翻开读'"
+          @dblclick="startBook(b)"
+          @dragstart="onDragStart($event, b)" @dragover="onDragOverBook($event, b)"
+          @drop="onDropBook($event, b)" @dragend="onDragEnd"
+        >
+          <span class="rd-spine-box" :style="{ background: b.coverColor || coverHue(b) }">
+            <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-spine-img" />
+            <span v-else class="rd-spine-initial" :style="coverNameStyle(b.title, 24)" aria-hidden="true">{{ b.title }}</span>
+            <span v-if="b.fileMissing" class="rd-spine-badge">原件不在</span>
+          </span>
+          <span class="rd-spine-tip" aria-hidden="true">
+            <strong class="rd-spine-name">《{{ b.title }}》</strong>
+            <span class="rd-spine-sub">{{ b.author || '未记作者' }}</span>
+            <span class="rd-spine-sub">{{ b.progressText }} · {{ b.statusLabel }}</span>
+          </span>
         </article>
       </div>
 
@@ -636,6 +1216,70 @@ onMounted(() => {
           <p v-if="!activeNotes.length" class="rd-hint">还没有笔记。读到一句想留的话，就写在上面。</p>
         </div>
       </div>
+      <!-- 编辑书籍信息（对标 mybook 的「编辑书籍信息」）：只改书架上的显示，不动文件 -->
+      <div v-if="editing" class="rd-modal" role="dialog" aria-modal="true" aria-label="编辑书籍信息">
+        <div class="rd-modal-box">
+          <header class="rd-modal-head">
+            <h2 class="rd-modal-title">编辑《{{ editing.title }}》</h2>
+            <button class="rd-x" aria-label="关闭" @click="editing = null">×</button>
+          </header>
+          <div class="rd-modal-row">
+            <label class="rd-modal-label" for="rdEditTitle">书名</label>
+            <input id="rdEditTitle" ref="editTitleEl" v-model="editTitle" class="rd-input" aria-label="书名" @keyup.enter="saveEdit" />
+          </div>
+          <div class="rd-modal-row">
+            <label class="rd-modal-label" for="rdEditAuthor">作者</label>
+            <input id="rdEditAuthor" v-model="editAuthor" class="rd-input" placeholder="可不填" aria-label="作者" @keyup.enter="saveEdit" />
+          </div>
+          <div class="rd-modal-row">
+            <label class="rd-modal-label" for="rdEditGroup">分组</label>
+            <select v-if="!editGroupNew" id="rdEditGroup" v-model="editGroup" class="rd-input rd-gsel" aria-label="所属分组">
+              <option value="">未分组</option>
+              <option v-for="g in groups" :key="g.name" :value="g.name">{{ g.name }}</option>
+            </select>
+            <input v-else v-model="editGroup" class="rd-input rd-gsel" placeholder="输入一个新分组名" aria-label="新分组名" />
+            <button class="rd-mini rd-mini-quiet" :title="editGroupNew ? '回到已有分组列表' : '直接输入一个新分组名'" @click="editGroupNew = !editGroupNew">{{ editGroupNew ? '选已有' : '＋ 新建' }}</button>
+          </div>
+          <div class="rd-modal-row">
+            <span class="rd-modal-label">封面</span>
+            <span class="rd-modal-btns">
+              <img v-if="editing && coverOf(editing)" :src="coverOf(editing)" alt="当前封面" class="rd-cover-prev" />
+              <button class="rd-mini" :disabled="editCoverBusy" @click="pickCover">{{ editCoverBusy ? '正在换…' : '选一张图当封面' }}</button>
+              <button class="rd-mini" :disabled="editCoverBusy || doubanBusy" title="用书名去豆瓣搜同名书的封面，挑一张用上" @click="findDoubanCovers">{{ doubanBusy ? '正在搜…' : '从豆瓣找封面' }}</button>
+              <button class="rd-mini rd-mini-quiet" :disabled="editCoverBusy" @click="resetCover">恢复默认</button>
+            </span>
+          </div>
+          <!-- 豆瓣候选：先给人看，再由人点；不点就不会有任何一张被套上去 -->
+          <div v-if="doubanMsg || doubanItems.length" class="rd-douban">
+            <p class="rd-hint">{{ doubanMsg }}</p>
+            <div v-if="doubanItems.length" class="rd-douban-grid">
+              <button
+                v-for="(it, i) in doubanItems" :key="i" class="rd-douban-item" :disabled="doubanBusy"
+                :class="{ 'rd-douban-item-on': doubanPicked === i }"
+                :title="'用这张：' + it.title + (it.author ? ' · ' + it.author : '')" @click="applyDoubanCover(it, i)"
+              >
+                <img v-if="it.thumb" :src="it.thumb" :alt="it.title + ' 封面候选'" class="rd-douban-img" />
+                <span v-else class="rd-douban-img rd-douban-nocover">无图</span>
+                <span class="rd-douban-name">{{ it.title }}</span>
+                <span class="rd-douban-sub">{{ [it.author, it.year].filter(Boolean).join(' · ') || '—' }}</span>
+              </button>
+            </div>
+          </div>
+          <p class="rd-hint">只改书架上显示的书名与作者，电子书文件本身一个字节都不动。封面会复制一份小图进本机数据目录，原图删了也不影响。</p>
+          <div class="rd-modal-acts">
+            <div class="rd-acts-sub">
+              <button v-if="editing.status !== 'done'" class="rd-mini" @click="doneFromEdit">标记读完</button>
+              <button class="rd-mini" @click="rereadFromEdit">再读一遍</button>
+              <button class="rd-mini rd-mini-quiet" @click="exportFromEdit">导出这本的笔记</button>
+              <button v-if="editing.filePath" class="rd-mini rd-mini-quiet" @click="revealFromEdit">在文件夹里定位</button>
+            </div>
+            <div class="rd-acts-main">
+              <button class="rd-mini rd-mini-quiet" @click="editing = null">取消</button>
+              <button class="rd-primary" @click="saveEdit">保存</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ============ 主题阅读（V2.14：自建书单 · 与休闲阅读功能一致） ============ -->
@@ -656,12 +1300,15 @@ onMounted(() => {
 
       <section v-for="g in themeGroups" :key="g.themeId" class="rd-group" :class="{ 'rd-group-on': themeSel === g.themeId }">
         <h2 class="rd-h2">
-          <button class="rd-group-title" @click="themeSel = themeSel === g.themeId ? '' : g.themeId">{{ themeSel === g.themeId ? '▾' : '▸' }} {{ g.themeTitle }}</button>
-          <span class="rd-hint">{{ g.rows.length }} 本</span>
+          <button class="rd-group-title" :aria-expanded="!isThemeClosed(g.themeId)"
+            :title="isThemeClosed(g.themeId) ? '展开这个主题的书单' : '收起这个主题的书单'"
+            @click="toggleTheme(g.themeId)">{{ isThemeClosed(g.themeId) ? '▸' : '▾' }} {{ g.themeTitle }}</button>
+          <span class="rd-hint">{{ g.rows.length }} 本<span v-if="isThemeClosed(g.themeId)"> · 已收起</span></span>
           <button class="rd-mini rd-mini-quiet rd-group-del" :aria-label="'删除主题 ' + g.themeTitle" @click="removeTheme(g.themeId, g.themeTitle)">删主题</button>
         </h2>
-        <p v-if="g.note" class="rd-meta">{{ g.note }}</p>
+        <p v-if="g.note && !isThemeClosed(g.themeId)" class="rd-meta">{{ g.note }}</p>
 
+        <template v-if="!isThemeClosed(g.themeId)">
         <!-- 主题下导入多格式多文件（与休闲阅读同样的拖放/选择入口，归到本主题） -->
         <div class="rd-files">
           <div class="rd-drop" :class="{ 'rd-drop-on': importingTheme === g.themeId }" aria-label="拖放电子书到本主题"
@@ -681,88 +1328,116 @@ onMounted(() => {
         </div>
 
         <div v-if="!g.rows.length" class="rd-hint rd-group-empty">这个主题还没放书。拖一本进来，或手写书名。</div>
-        <article v-for="b in g.rows" :key="b.id" class="rd-book" :class="{ 'rd-book-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing }"
-          :title="'双击翻开《' + b.title + '》'" @dblclick="startThemeBook(b)">
-          <span class="rd-cover" :style="{ background: b.coverColor || coverHue(b) }" aria-hidden="true">
-            <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-cover-img" />
-          </span>
-          <div class="rd-book-main">
-            <div class="rd-book-line">
-              <strong class="rd-book-title">《{{ b.title }}》</strong><span class="rd-author">{{ b.author }}</span>
-              <span v-if="b.format" class="rd-chip rd-chip-file">{{ b.format }}</span>
-              <span class="rd-chip">{{ b.statusLabel }}</span>
-              <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原文件已不在原处</span>
-            </div>
-            <div class="rd-thick" role="progressbar" :aria-valuenow="b.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="b.title + ' 已读进度'">
-              <span class="rd-thick-in" :style="{ width: b.pct + '%' }"></span>
-            </div>
-            <p class="rd-meta">{{ b.progressText }} · {{ b.noteCount }} 条笔记<span v-if="b.filePath"> · 双击读正文</span><span v-else> · 手工登记，仅记笔记</span></p>
-            <p v-if="b.filePath" class="rd-meta rd-path" :title="b.filePath">{{ b.filePath }}</p>
+        <!-- V3.15：主题下的书也走 calibre 式表格（与休闲书架同一套列与行外观）。
+             原来每本一张大卡片：一个主题放十来份资料就要翻好几屏，而且没法横向比
+             「哪本厚、哪天翻过、读到几成」——那正是表格擅长的事。 -->
+        <div v-else class="rd-table rd-theme-table" :aria-label="g.themeTitle + ' 书单（表格）'">
+          <div class="rd-thead rd-thead-static" role="row">
+            <span class="rd-th rd-th-grip" aria-hidden="true"></span>
+            <span class="rd-th rd-th-title" role="columnheader">书名</span>
+            <span class="rd-th rd-th-author" role="columnheader">作者</span>
+            <span class="rd-th rd-th-size" role="columnheader">格式 · 大小</span>
+            <span class="rd-th rd-th-date" role="columnheader">最近读过</span>
+            <span class="rd-th rd-th-pct" role="columnheader">进度</span>
+            <span class="rd-th rd-th-act">操作</span>
           </div>
-          <div class="rd-book-actions" @dblclick.stop>
-            <button class="rd-mini" @click="advanceTheme(g.themeId, b.id, 10)">+10 {{ b.unit }}</button>
-            <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在右栏记笔记'" @click="startThemeBook(b)">翻开读</button>
-            <button class="rd-mini rd-mini-quiet" @click="removeBook(b.id)">移出</button>
-          </div>
-        </article>
-      </section>
+          <article
+            v-for="b in g.rows" :key="b.id" class="rd-trow rd-book"
+            :class="{ 'rd-trow-on': active?.bookId === b.id, 'rd-book-missing': b.fileMissing }"
+            :title="'双击翻开《' + b.title + '》' + (b.filePath ? '\n' + b.filePath : '')" @dblclick="startThemeBook(b)"
+          >
+            <span class="rd-th-grip" aria-hidden="true"></span>
+            <span class="rd-td rd-td-title">
+              <span class="rd-tcover" :style="{ background: b.coverColor || coverHue(b) }" aria-hidden="true">
+                <img v-if="coverOf(b)" :src="coverOf(b)" :alt="b.title + ' 封面'" class="rd-cover-img" />
+              </span>
+              <span class="rd-tname-wrap">
+                <span class="rd-tname" :title="b.title">{{ b.title }}</span>
+                <!-- 路径是「只登记路径、不复制内容」这条承诺的唯一可见证据，手写的书就写清没有文件 -->
+                <span v-if="b.filePath" class="rd-tpath" :title="b.filePath">{{ b.filePath }}</span>
+                <span v-else class="rd-tpath">手工登记，仅记笔记</span>
+              </span>
+              <span v-if="b.statusLabel" class="rd-chip">{{ b.statusLabel }}</span>
+              <span v-if="b.fileMissing" class="rd-chip rd-chip-warn">原件不在</span>
+            </span>
+            <span class="rd-td rd-td-author" :title="b.author || ''">{{ b.author || '未记作者' }}</span>
+            <span class="rd-td rd-td-size" :title="[b.format, b.fileSizeText, b.noteCount + ' 条笔记'].filter(Boolean).join(' · ')">{{ [b.format, b.fileSizeText].filter(Boolean).join(' ') || '—' }}</span>
+            <span class="rd-td rd-td-date" :title="b.lastReadAt ? fmtRecent(b.lastReadAt) : '还没翻开过'">{{ b.lastReadAt ? fmtDate(b.lastReadAt) : '—' }}</span>
+            <span class="rd-td rd-td-pct" :title="'已读 ' + b.progressText + ' · ' + b.noteCount + ' 条笔记'">
+              <span class="rd-tbar" role="progressbar" :aria-valuenow="b.pct" aria-valuemin="0" aria-valuemax="100" :aria-label="b.title + ' 已读进度'">
+                <span class="rd-tbar-in" :style="{ width: b.pct + '%' }"></span>
+              </span>
+              <span class="rd-tpct">{{ b.pct }}%</span>
+            </span>
+            <span class="rd-td rd-td-act" @dblclick.stop>
+              <button class="rd-mini" :title="'记 10 个' + b.unit + '的进度'" @click="advanceTheme(g.themeId, b.id, 10)">＋</button>
+              <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在右栏记笔记'" @click="startThemeBook(b)">翻开读</button>
+              <button class="rd-mini" title="改书名 / 作者 / 封面，或标记读完、再读一遍（与休闲阅读同一套）" @click="openEdit(b)">编辑</button>
+              <button class="rd-mini rd-mini-quiet" title="移出书库（笔记保留）" @click="removeBook(b.id)">✕</button>
+            </span>
+          </article>
+        </div>
 
-      <!-- 主题批注器：与休闲阅读同款（章节大纲 / 伴读三问 / 摘录批注 / 闪念 / 已有笔记） -->
-      <div v-if="active && active.mode === 'theme'" class="rd-reader" aria-label="主题阅读器">
-        <h2 class="rd-h2">正在读《{{ active.title }}》<span class="rd-hint"> · 主题阅读 · 笔记记在本主题下</span></h2>
-        <div class="rd-reader-grid">
-          <div class="rd-col">
-            <h3 class="rd-h3">章节大纲 <span class="rd-hint">自己填，不是自动生成的思维导图</span></h3>
-            <div class="rd-chapters">
-              <p v-for="c in activeChapters" :key="c.id" class="rd-chapter" :class="{ 'rd-chapter-sub': !!c.parentId }">
-                {{ c.parentId ? '↳ ' : '· ' }}{{ c.title }}
-                <button class="rd-x" :aria-label="'删除章节 ' + c.title" @click="removeChapter(c.id)">×</button>
-              </p>
-              <p v-if="!activeChapters.length" class="rd-hint">还没分章。读到哪儿顺手记一个章节名即可。</p>
+        <!-- 主题批注器（与休闲阅读同款：章节大纲 / 伴读三问 / 摘录批注 / 闪念 / 已有笔记）。
+             V3.15 起挪进「这本书所属的主题」里：表格化后一个主题能放十几本，
+             若还挂在所有主题之后，点了第一本就得滚过别的主题才看得见批注器。 -->
+        <div v-if="active && active.mode === 'theme' && active.themeId === g.themeId" class="rd-reader" aria-label="主题阅读器">
+          <h2 class="rd-h2">正在读《{{ active.title }}》<span class="rd-hint"> · 主题阅读 · 笔记记在本主题下</span></h2>
+          <div class="rd-reader-grid">
+            <div class="rd-col">
+              <h3 class="rd-h3">章节大纲 <span class="rd-hint">自己填，不是自动生成的思维导图</span></h3>
+              <div class="rd-chapters">
+                <p v-for="c in activeChapters" :key="c.id" class="rd-chapter" :class="{ 'rd-chapter-sub': !!c.parentId }">
+                  {{ c.parentId ? '↳ ' : '· ' }}{{ c.title }}
+                  <button class="rd-x" :aria-label="'删除章节 ' + c.title" @click="removeChapter(c.id)">×</button>
+                </p>
+                <p v-if="!activeChapters.length" class="rd-hint">还没分章。读到哪儿顺手记一个章节名即可。</p>
+              </div>
+              <div class="rd-inline-add">
+                <input v-model="newChapter" class="rd-input" placeholder="加一个章节" aria-label="新章节名" @keyup.enter="addChapter" />
+                <button class="rd-mini" @click="addChapter">＋</button>
+              </div>
             </div>
-            <div class="rd-inline-add">
-              <input v-model="newChapter" class="rd-input" placeholder="加一个章节" aria-label="新章节名" @keyup.enter="addChapter" />
-              <button class="rd-mini" @click="addChapter">＋</button>
+            <div class="rd-col">
+              <h3 class="rd-h3">批注贴着原文长</h3>
+              <div class="rd-prompts" aria-label="伴读三问">
+                <button v-for="p in PROMPTS" :key="p.id" class="rd-prompt" :class="{ 'rd-prompt-on': activePrompt === p.id }" :title="p.hint" @click="pickPrompt(p)">{{ p.label }}</button>
+              </div>
+              <p v-if="activePrompt" class="rd-hint">{{ PROMPTS.find(p => p.id === activePrompt)?.hint }}</p>
+              <textarea v-model="noteQuote" class="rd-area" rows="3" placeholder="摘录：书里那句原话" aria-label="摘录原文"></textarea>
+              <textarea v-model="noteText" class="rd-area" rows="3" placeholder="我的批注 / 想法（自己的话）" aria-label="我的批注"></textarea>
+              <div class="rd-form-row">
+                <select v-model="noteType" class="rd-input rd-sel" aria-label="笔记类型">
+                  <option v-for="t in NOTE_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+                </select>
+                <input v-model="notePage" class="rd-input rd-num" type="number" min="0" placeholder="页码" aria-label="页码" />
+                <input v-model="noteTags" class="rd-input" placeholder="#标签 空格分隔" aria-label="标签" />
+                <button class="rd-primary" @click="saveNote">存进读书笔记</button>
+              </div>
+              <div class="rd-flash">
+                <input v-model="flash" class="rd-input" placeholder="即时想法：一句话，回车即存进九格" aria-label="即时想法" @keyup.enter="saveFlash" />
+                <select v-model="flashCell" class="rd-input rd-sel" aria-label="闪念写入的格子">
+                  <option value="growth">学习成长</option>
+                  <option value="free">自由记录</option>
+                  <option value="leisure">休闲娱乐</option>
+                </select>
+                <button class="rd-mini" @click="saveFlash">闪念入格</button>
+              </div>
+              <p v-if="props.backfill" class="rd-warn">正在补记过去：写进九格的动作只作用于真实今天 {{ props.today }}。</p>
             </div>
           </div>
-          <div class="rd-col">
-            <h3 class="rd-h3">批注贴着原文长</h3>
-            <div class="rd-prompts" aria-label="伴读三问">
-              <button v-for="p in PROMPTS" :key="p.id" class="rd-prompt" :class="{ 'rd-prompt-on': activePrompt === p.id }" :title="p.hint" @click="pickPrompt(p)">{{ p.label }}</button>
-            </div>
-            <p v-if="activePrompt" class="rd-hint">{{ PROMPTS.find(p => p.id === activePrompt)?.hint }}</p>
-            <textarea v-model="noteQuote" class="rd-area" rows="3" placeholder="摘录：书里那句原话" aria-label="摘录原文"></textarea>
-            <textarea v-model="noteText" class="rd-area" rows="3" placeholder="我的批注 / 想法（自己的话）" aria-label="我的批注"></textarea>
-            <div class="rd-form-row">
-              <select v-model="noteType" class="rd-input rd-sel" aria-label="笔记类型">
-                <option v-for="t in NOTE_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
-              </select>
-              <input v-model="notePage" class="rd-input rd-num" type="number" min="0" placeholder="页码" aria-label="页码" />
-              <input v-model="noteTags" class="rd-input" placeholder="#标签 空格分隔" aria-label="标签" />
-              <button class="rd-primary" @click="saveNote">存进读书笔记</button>
-            </div>
-            <div class="rd-flash">
-              <input v-model="flash" class="rd-input" placeholder="即时想法：一句话，回车即存进九格" aria-label="即时想法" @keyup.enter="saveFlash" />
-              <select v-model="flashCell" class="rd-input rd-sel" aria-label="闪念写入的格子">
-                <option value="growth">学习成长</option>
-                <option value="free">自由记录</option>
-                <option value="leisure">休闲娱乐</option>
-              </select>
-              <button class="rd-mini" @click="saveFlash">闪念入格</button>
-            </div>
-            <p v-if="props.backfill" class="rd-warn">正在补记过去：写进九格的动作只作用于真实今天 {{ props.today }}。</p>
+          <div class="rd-notes-inline">
+            <h3 class="rd-h3">这本书已有的笔记（{{ activeNotes.length }}）</h3>
+            <p v-for="n in activeNotes.slice(0, 5)" :key="n.id" class="rd-note-line">
+              <span class="rd-chip">{{ n.typeLabel || n.type }}</span>
+              {{ n.quote ? '「' + n.quote + '」→ ' : '' }}{{ n.text }}
+              <span class="rd-hint">p.{{ n.page }} {{ n.tags.map(t => '#' + t).join(' ') }}</span>
+            </p>
+            <p v-if="!activeNotes.length" class="rd-hint">还没有笔记。读到一句想留的话，就写在上面。</p>
           </div>
         </div>
-        <div class="rd-notes-inline">
-          <h3 class="rd-h3">这本书已有的笔记（{{ activeNotes.length }}）</h3>
-          <p v-for="n in activeNotes.slice(0, 5)" :key="n.id" class="rd-note-line">
-            <span class="rd-chip">{{ n.typeLabel || n.type }}</span>
-            {{ n.quote ? '「' + n.quote + '」→ ' : '' }}{{ n.text }}
-            <span class="rd-hint">p.{{ n.page }} {{ n.tags.map(t => '#' + t).join(' ') }}</span>
-          </p>
-          <p v-if="!activeNotes.length" class="rd-hint">还没有笔记。读到一句想留的话，就写在上面。</p>
-        </div>
-      </div>
+        </template>
+      </section>
     </div>
 
     <!-- ============ 读书笔记 · 数据库 ============ -->
@@ -812,81 +1487,134 @@ onMounted(() => {
 <style scoped>
 .rd-view { display: flex; flex-direction: column; gap: var(--space-3); }
 .rd-head { position: relative; }
-.rd-back { border: 0; background: transparent; color: var(--palette-primary); font-size: 12px; padding: 0; cursor: pointer; }
-.rd-title { font-size: 20px; margin: 6px 0 2px; color: var(--surface-text); }
-.rd-sub { font-size: 12px; color: var(--surface-muted); margin: 0; }
+/* 窗口内的窄头：只留「关闭」与一句说明，标题在左栏品牌区 */
+.rd-head-lite { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.rd-head-lite .rd-sub { margin: 0; }
+.rd-back { border: 0; background: transparent; color: var(--palette-primary); font-size: var(--text-sm); padding: 0; cursor: pointer; }
+.rd-title { font-size: var(--text-h1); margin: 6px 0 2px; color: var(--surface-text); }
+.rd-sub { font-size: var(--text-sm); color: var(--surface-muted); margin: 0; }
 .rd-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: var(--space-2); }
-.rd-stat { font-size: 11px; color: var(--surface-muted); padding: 3px 10px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); }
-.rd-stat b { font-size: 13px; color: var(--surface-text); margin-right: 2px; }
-.rd-tabs { display: flex; gap: 6px; border-bottom: 0.5px solid var(--surface-border); padding-bottom: 8px; }
-.rd-tab { padding: 6px 14px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); cursor: pointer; }
+.rd-stat { font-size: var(--text-xs); color: var(--surface-muted); padding: 3px 10px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); }
+.rd-stat b { font-size: var(--text-body); color: var(--surface-text); margin-right: 2px; }
+/* V3.14：搜索 / 页签 / 排序挤在同一行——搜索在最左，排序与计数靠右。
+   行内换行是允许的（窗口窄到 1024 时），但不许把搜索挤成一条竖线。 */
+.rd-tabs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  border-bottom: 0.5px solid var(--surface-border); padding-bottom: 8px;
+}
+.rd-search { flex: 0 1 230px; min-width: 180px; }
+.rd-tab { padding: 6px 12px; font-size: var(--text-sm); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); cursor: pointer; white-space: nowrap; }
 .rd-tab-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .rd-pane { display: flex; flex-direction: column; gap: var(--space-2); }
 .rd-add, .rd-filter, .rd-form-row, .rd-flash, .rd-inline-add { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.rd-input { padding: 6px 9px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); min-width: 0; }
+.rd-input { padding: 6px 9px; font-size: var(--text-sm); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); min-width: 0; }
 .rd-name { flex: 1 1 180px; }
 .rd-num { width: 74px; }
 .rd-sel { width: auto; }
-.rd-area { width: 100%; padding: 8px 10px; font-size: 12px; line-height: 1.6; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); resize: vertical; font-family: inherit; }
-.rd-primary { padding: 6px 14px; font-size: 12px; border: 0.5px solid var(--palette-primary); border-radius: var(--radius-md); background: var(--palette-primary); color: var(--palette-on); cursor: pointer; }
-.rd-mini { padding: 4px 9px; font-size: 11px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); color: var(--surface-text); cursor: pointer; white-space: nowrap; }
+.rd-area { width: 100%; padding: 8px 10px; font-size: var(--text-sm); line-height: 1.6; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--surface-text); resize: vertical; font-family: inherit; }
+.rd-primary { padding: 6px 14px; font-size: var(--text-sm); border: 0.5px solid var(--palette-primary); border-radius: var(--radius-md); background: var(--palette-primary); color: var(--palette-on); cursor: pointer; }
+.rd-mini { padding: 4px 9px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); color: var(--surface-text); cursor: pointer; white-space: nowrap; }
 .rd-mini:hover { border-color: var(--palette-border); }
 .rd-mini-quiet { color: var(--surface-muted); }
-.rd-empty, .rd-notice { font-size: 12px; color: var(--surface-muted); padding: 12px; border: 0.5px dashed var(--surface-border); border-radius: var(--radius-md); line-height: 1.7; }
+.rd-empty, .rd-notice { font-size: var(--text-sm); color: var(--surface-muted); padding: 12px; border: 0.5px dashed var(--surface-border); border-radius: var(--radius-md); line-height: 1.7; }
 .rd-notice { display: flex; align-items: center; gap: 10px; justify-content: space-between; border-style: solid; background: var(--palette-soft); }
 .rd-shelf { display: flex; flex-direction: column; gap: 8px; }
+/* ---- 详细列表：calibre 式表格（V3.13） ----
+   一列一项、列头可点排序、行高紧凑。窄窗口时整表横向滚动而不是把列挤成省略号：
+   一列只剩一个「…」时，表格相对卡片就没有优势了。 */
+.rd-table { border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); overflow-x: auto; background: var(--surface-raised); }
+/* 表体沿用 rd-shelf 这个老钩子（门禁与用例按「书架容器」找行）：它是 flex 列容器，
+   套在表格上会把「行」变成 flex item，所以这里显式还原成普通块 */
+.rd-shelf.rd-table { display: block; gap: 0; }
+/* 选择器必须带 .rd-table 前缀（V3.13 实测踩坑）：行同时挂着老类名 rd-book，而
+   .rd-book{display:flex} 在样式表里更靠后，同权重会把它赢走，格子退化成 flex item
+   ——作者列被压到 44px、格式列只剩 12px，整列变省略号。加一层祖先把权重抬到 0,2,0。 */
+.rd-table > .rd-thead, .rd-table > .rd-trow {
+  display: grid; min-width: 600px; gap: 6px; align-items: center;
+  grid-template-columns: 16px minmax(0, 1fr) 74px 86px 52px 84px 172px;
+}
+.rd-thead { padding: 6px 10px; background: var(--surface-panel); border-bottom: 0.5px solid var(--surface-border); font-size: var(--text-xs); color: var(--surface-muted); }
+.rd-th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-th-title, .rd-th-author, .rd-th-size, .rd-th-date, .rd-th-pct, .rd-th-note { cursor: pointer; }
+.rd-th-title:hover, .rd-th-author:hover, .rd-th-size:hover, .rd-th-date:hover, .rd-th-pct:hover, .rd-th-note:hover { color: var(--palette-primary); }
+/* 主题下的表头只做列名，不排序（一个主题三五本到十几本，点了没反应才是问题）：
+   去掉手型与悬停变色，免得看着像能点 */
+.rd-thead-static .rd-th-title, .rd-thead-static .rd-th-author,
+.rd-thead-static .rd-th-size, .rd-thead-static .rd-th-date,
+.rd-thead-static .rd-th-pct { cursor: default; }
+.rd-thead-static .rd-th-title:hover, .rd-thead-static .rd-th-author:hover,
+.rd-thead-static .rd-th-size:hover, .rd-thead-static .rd-th-date:hover,
+.rd-thead-static .rd-th-pct:hover { color: inherit; }
+/* 主题表与书架表同一套列宽与行外观，只多一条与上方「拖放 / 选择电子书」的间距 */
+.rd-theme-table { margin-top: 6px; }
+/* 行外观同理：padding / 圆角 / 背景也要压过 .rd-book，否则每行又是一个大圆角卡片 */
+.rd-table > .rd-trow { padding: 5px 10px; border: 0; border-top: 0.5px solid var(--surface-border); border-radius: 0; background: transparent; font-size: var(--text-sm); }
+.rd-table > .rd-trow:nth-of-type(even) { background: var(--surface-panel); }
+.rd-table > .rd-trow:hover { background: var(--palette-soft); }
+.rd-table > .rd-trow.rd-trow-on { background: var(--palette-soft); box-shadow: inset 2px 0 0 var(--palette-primary); }
+.rd-td { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-td-title { display: flex; align-items: center; gap: 6px; }
+.rd-tcover { position: relative; width: 20px; height: 30px; flex: 0 0 20px; border-radius: 2px; overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, .14); }
+.rd-tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--surface-text); }
+/* 书名两行：上面书名、下面路径。挤在一个 span 里会让 hasText 找不到书名，也读不出路径 */
+.rd-tname-wrap { display: flex; flex-direction: column; min-width: 0; }
+.rd-tpath { font-size: 10px; line-height: 1.25; color: var(--surface-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
+.rd-tfav { color: var(--palette-accent); font-size: var(--text-xs); }
+.rd-td-author, .rd-td-size, .rd-td-date, .rd-td-note { color: var(--surface-muted); font-size: var(--text-xs); }
+.rd-td-pct { display: flex; align-items: center; gap: 6px; }
+.rd-tbar { display: inline-block; width: 44px; height: 5px; flex: 0 0 44px; border-radius: 999px; background: var(--surface-border); overflow: hidden; }
+.rd-tbar-in { display: block; height: 100%; border-radius: 999px; background: var(--palette-accent); }
+.rd-tpct { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
+.rd-td-act { display: flex; gap: 3px; justify-content: flex-end; }
+.rd-td-act .rd-mini { padding: 2px 6px; }
+.rd-grip { cursor: grab; color: var(--surface-muted); font-size: var(--text-xs); }
+.rd-grip:active { cursor: grabbing; }
 .rd-book { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
-.rd-book-on { border-color: var(--palette-primary); background: var(--palette-soft); }
-.rd-cover { width: 10px; align-self: stretch; border-radius: 3px; flex: 0 0 auto; }
-.rd-book-main { flex: 1; min-width: 0; }
-.rd-book-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.rd-book-title { font-size: 13px; color: var(--surface-text); }
-.rd-author, .rd-meta, .rd-hint { font-size: 11px; color: var(--surface-muted); margin: 0; }
-.rd-chip { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); }
+/* V3.15 起主题下的书也走表格，原来那套卡片结构（.rd-book-main / .rd-book-line /
+   .rd-title-tight / .rd-thick / .rd-book-actions / .rd-cover 竖条）已无人引用，整组删掉。
+   留着的只有 .rd-book 这个类名本身：表格行仍挂着它，GUI 用例按 .rd-group .rd-book 找行。 */
+.rd-meta, .rd-hint { font-size: var(--text-xs); color: var(--surface-muted); margin: 0; }
+.rd-chip { font-size: var(--text-xs); padding: 1px 7px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); }
 .rd-chip-soft { background: var(--surface-panel); color: var(--surface-muted); }
 .rd-chip-warn { background: var(--state-warn-soft); color: var(--state-warn); }
-.rd-thick { height: 6px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; margin: 6px 0 3px; }
-.rd-thick-in { display: block; height: 100%; border-radius: 999px; background: var(--palette-accent); transition: width .2s; }
-.rd-book-actions { display: flex; gap: 4px; flex: 0 0 auto; }
 .rd-reader { margin-top: var(--space-2); padding: var(--space-3); border: 0.5px solid var(--palette-border); border-radius: var(--radius-lg); background: var(--surface-panel); }
-.rd-h2 { font-size: 14px; margin: 0 0 var(--space-2); color: var(--surface-text); }
-.rd-h3 { font-size: 12px; margin: 0 0 6px; color: var(--surface-muted); }
+.rd-h2 { font-size: var(--text-h2); margin: 0 0 var(--space-2); color: var(--surface-text); }
+.rd-h3 { font-size: var(--text-sm); margin: 0 0 6px; color: var(--surface-muted); }
 .rd-reader-grid { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: var(--space-3); }
 .rd-col { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .rd-chapters { min-height: 60px; max-height: 170px; overflow: auto; }
-.rd-chapter { font-size: 12px; margin: 0 0 4px; color: var(--surface-text); }
+.rd-chapter { font-size: var(--text-sm); margin: 0 0 4px; color: var(--surface-text); }
 .rd-chapter-sub { padding-left: 12px; color: var(--surface-muted); }
 .rd-x { border: 0; background: transparent; color: var(--surface-muted); cursor: pointer; }
 .rd-prompts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
-.rd-prompt { padding: 4px 9px; font-size: 11px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); color: var(--surface-text); cursor: pointer; }
+.rd-prompt { padding: 4px 9px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); color: var(--surface-text); cursor: pointer; }
 .rd-prompt-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .rd-flash { margin-top: 4px; padding-top: 8px; border-top: 0.5px dashed var(--surface-border); }
-.rd-warn { font-size: 11px; color: var(--state-warn); margin: 0; }
+.rd-warn { font-size: var(--text-xs); color: var(--state-warn); margin: 0; }
 .rd-notes-inline { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 0.5px solid var(--surface-border); }
-.rd-note-line { font-size: 12px; margin: 0 0 6px; color: var(--surface-text); line-height: 1.6; }
+.rd-note-line { font-size: var(--text-sm); margin: 0 0 6px; color: var(--surface-text); line-height: 1.6; }
 .rd-group { margin-bottom: var(--space-2); padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
 .rd-group-on { border-color: var(--palette-border); }
 .rd-group .rd-h2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.rd-group-title { font-size: 15px; font-weight: 600; color: var(--surface-text); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.rd-group-title { font-size: var(--text-h2); font-weight: 600; color: var(--surface-text); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 .rd-group-del { margin-left: auto; }
 .rd-group-empty { padding: 8px 0; display: block; }
 .rd-filter { padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .rd-tags { display: flex; gap: 6px; flex-wrap: wrap; }
-.rd-tag { padding: 3px 9px; font-size: 11px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-panel); color: var(--surface-text); cursor: pointer; }
+.rd-tag { padding: 3px 9px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-panel); color: var(--surface-text); cursor: pointer; }
 .rd-tag-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .rd-tag span { color: var(--surface-muted); }
 .rd-note { padding: 10px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); }
 .rd-note-pushed { border-color: var(--palette-border); }
 .rd-note-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.rd-note-book { font-size: 12px; color: var(--surface-text); }
-.rd-note-quote { font-size: 12px; color: var(--surface-muted); margin: 8px 0 2px; line-height: 1.7; border-left: 2px solid var(--palette-border); padding-left: 8px; }
-.rd-note-text { font-size: 12px; color: var(--surface-text); margin: 4px 0 0; line-height: 1.7; }
+.rd-note-book { font-size: var(--text-sm); color: var(--surface-text); }
+.rd-note-quote { font-size: var(--text-sm); color: var(--surface-muted); margin: 8px 0 2px; line-height: 1.7; border-left: 2px solid var(--palette-border); padding-left: 8px; }
+.rd-note-text { font-size: var(--text-sm); color: var(--surface-text); margin: 4px 0 0; line-height: 1.7; }
 .rd-note-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .rd-spacer { flex: 1; }
-.rd-pushed { font-size: 11px; color: var(--palette-primary); }
+.rd-pushed { font-size: var(--text-xs); color: var(--palette-primary); }
 @media (max-width: 1180px) {
   .rd-reader-grid { grid-template-columns: 1fr; }
-  .rd-book-actions { flex-wrap: wrap; }
 }
 
 /* ---- 本地电子书：拖放区 / 视图切换 / 封面预览 ---- */
@@ -895,7 +1623,7 @@ onMounted(() => {
   flex: 1 1 320px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 10px 14px; border: 1px dashed var(--palette-border);
   border-radius: var(--radius-lg); background: var(--surface-raised);
-  font-size: 12px; color: var(--surface-text); transition: background .15s, border-color .15s;
+  font-size: var(--text-sm); color: var(--surface-text); transition: background .15s, border-color .15s;
 }
 .rd-drop-on { border-color: var(--palette-primary); background: var(--palette-soft); }
 .rd-drop-icon { font-size: 18px; color: var(--palette-primary); }
@@ -912,19 +1640,103 @@ onMounted(() => {
 /* 双击即读：书行与卡片整块可双击，动作区里的按钮除外（已 stop） */
 .rd-book, .rd-card { cursor: default; }
 .rd-dbl-tip { color: var(--surface-muted); }
-.rd-cover { position: relative; overflow: hidden; width: 30px; flex: 0 0 30px; }
+/* 封面按书封 2:3 固定比例，别再跟着行高拉伸成窄条 */
+.rd-cover { position: relative; overflow: hidden; width: 52px; flex: 0 0 52px; align-self: center; aspect-ratio: 2 / 3; border-radius: 4px; box-shadow: 0 1px 3px rgba(0, 0, 0, .14); }
 .rd-cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.rd-path { opacity: .7; word-break: break-all; }
 .rd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-3); }
 .rd-card { display: flex; flex-direction: column; border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-raised); overflow: hidden; }
-.rd-card-cover { position: relative; aspect-ratio: 3 / 4; display: grid; place-items: center; overflow: hidden; }
+/* 卡片封面同样是书封 2:3：3:4 会左右各裁掉约一成，同一本书在两个视图里形状不一 */
+.rd-card-cover { position: relative; aspect-ratio: 2 / 3; display: grid; place-items: center; overflow: hidden; }
 .rd-card-img { width: 100%; height: 100%; object-fit: cover; }
-.rd-card-initial { font-size: 46px; font-weight: 300; color: rgba(255,255,255,.85); text-shadow: 0 1px 6px rgba(0,0,0,.18); }
-.rd-card-format { position: absolute; top: 6px; right: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10px; background: rgba(255,255,255,.88); color: #3a3a3a; }
+/* 无封面占位：印完整书名（V3.13），按字数分级字号由行内 style 给，这里只管排版 */
+.rd-card-initial { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 16px 12px; text-align: center; font-weight: 400; letter-spacing: .5px; color: rgba(255,255,255,.92); text-shadow: 0 1px 6px rgba(0,0,0,.22); word-break: break-word; overflow: hidden; }
+.rd-card-format { position: absolute; top: 6px; right: 6px; padding: 1px 7px; border-radius: 999px; font-size: var(--text-xs); background: rgba(255,255,255,.88); color: #3a3a3a; }
 .rd-card-body { display: flex; flex-direction: column; gap: 4px; padding: 10px; }
-.rd-card-title { font-size: 13px; color: var(--surface-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-card-title { font-size: var(--text-body); color: var(--surface-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rd-card-actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+/* 封面墙：只摆封面，书名 / 作者 / 进度悬停浮出（2026-11-15） */
+.rd-wall { display: grid; grid-template-columns: repeat(auto-fill, 120px); gap: 20px 18px; padding: 12px 4px 6px; justify-content: start; }
+.rd-spine { position: relative; cursor: grab; }
+.rd-spine:active { cursor: grabbing; }
+.rd-spine-box {
+  position: relative; display: block; width: 100%; aspect-ratio: 2 / 3; overflow: hidden;
+  border-radius: 4px; box-shadow: 0 2px 6px rgba(0, 0, 0, .16), 0 1px 2px rgba(0, 0, 0, .12);
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.rd-spine:hover .rd-spine-box { transform: translateY(-3px); box-shadow: 0 8px 18px rgba(0, 0, 0, .22), 0 2px 4px rgba(0, 0, 0, .14); }
+.rd-spine-on .rd-spine-box { outline: 2px solid var(--palette-primary); outline-offset: 2px; }
+.rd-spine.rd-book-over .rd-spine-box { outline: 2px solid var(--palette-accent); outline-offset: 2px; }
+.rd-spine-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.rd-spine-initial { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px 8px; text-align: center; font-weight: 400; letter-spacing: .4px; color: rgba(255, 255, 255, .94); text-shadow: 0 1px 5px rgba(0, 0, 0, .24); word-break: break-word; overflow: hidden; }
+.rd-spine-badge { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: 999px; font-size: 10px; background: var(--state-warn); color: #fff; }
+.rd-spine-tip {
+  position: absolute; left: 50%; top: calc(100% + 6px); z-index: 3;
+  transform: translateX(-50%) translateY(-2px);
+  display: flex; flex-direction: column; gap: 1px; max-width: 210px;
+  padding: 6px 9px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
+  background: var(--surface-raised); box-shadow: 0 6px 16px rgba(0, 0, 0, .16);
+  opacity: 0; pointer-events: none; transition: opacity .14s ease, transform .14s ease;
+}
+.rd-spine:hover .rd-spine-tip { opacity: 1; transform: translateX(-50%) translateY(0); }
+.rd-spine-name { font-size: var(--text-xs); color: var(--surface-text); max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-spine-sub { font-size: 10px; color: var(--surface-muted); max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1180px) {
+  .rd-wall { grid-template-columns: repeat(auto-fill, 88px); gap: 14px 12px; }
+}
 @media (max-width: 1180px) {
   .rd-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+
+/* ---- 书架整理：搜索 / 排序 / 拖动 / 编辑弹窗（2026-11-14；V3.14 搜索与排序并进页签行） ---- */
+.rd-sort { display: inline-flex; gap: 4px; }
+/* V3.5 分组标签条 / 收藏星标：标签条独立成行，别把上面的搜索与排序挤换行 */
+.rd-groups { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 0 10px; margin-bottom: 10px; border-bottom: 0.5px solid var(--surface-border); }
+.rd-gchip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); color: var(--surface-muted); font-size: var(--text-xs); cursor: pointer; white-space: nowrap; }
+.rd-gchip:hover { border-color: var(--palette-primary); }
+.rd-gchip-on { background: var(--palette-primary); border-color: var(--palette-primary); color: #fff; }
+.rd-gcount { font-size: var(--text-xs); opacity: .72; }
+.rd-gchip-on .rd-gcount { color: #fff; opacity: .85; }
+.rd-gnew { flex: 0 1 150px; min-width: 96px; }
+.rd-gsel { min-width: 0; }
+.rd-fav { min-width: 26px; color: var(--surface-muted); }
+.rd-fav-on { color: #d99a17; font-weight: 700; }
+.rd-card-fav { position: absolute; top: 6px; right: 6px; z-index: 1; width: 26px; height: 26px; border: 0.5px solid var(--surface-border); border-radius: 50%; background: rgba(255,255,255,.88); color: var(--surface-muted); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
+.rd-card-fav.rd-fav-on { color: #d99a17; }
+/* 拖动手柄：只在「手动排序 + 没在搜索」时出现——两种状态下顺序都不该被改动 */
+.rd-grip { flex: 0 0 auto; color: var(--surface-muted); font-size: var(--text-xs); letter-spacing: -1px; cursor: grab; user-select: none; opacity: .55; }
+.rd-book { cursor: grab; }
+.rd-book:active { cursor: grabbing; }
+.rd-card { cursor: grab; }
+.rd-book-drag { opacity: .45; }
+.rd-book-over { border-color: var(--palette-accent); box-shadow: 0 0 0 1px var(--palette-accent) inset; }
+.rd-since { color: var(--palette-primary); }
+/* 编辑弹窗：铺在本视图内的居中卡片，不新开窗口、不遮整窗 */
+.rd-modal { position: fixed; inset: 0; z-index: var(--z-overlay); display: grid; place-items: center; background: rgba(0, 0, 0, .28); padding: var(--space-4); }
+.rd-modal-box { width: min(460px, 100%); padding: var(--space-3); border: 0.5px solid var(--palette-border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: 0 12px 32px rgba(0, 0, 0, .18); }
+.rd-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: var(--space-2); }
+.rd-modal-title { font-size: var(--text-h2); margin: 0; color: var(--surface-text); }
+.rd-modal-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rd-modal-label { flex: 0 0 46px; font-size: var(--text-sm); color: var(--surface-muted); }
+.rd-modal-row .rd-input { flex: 1; }
+.rd-modal-btns { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* 换完立刻能看见：不然点完一张候选，界面上什么反馈都没有（弹窗还盖着书架） */
+.rd-cover-prev { width: 30px; height: 45px; object-fit: cover; border-radius: 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+/* 豆瓣候选：三列小封面，一屏放得下 6 张；点哪张用哪张，选中前不改库里任何东西 */
+.rd-douban { margin: 2px 0 10px; padding: 8px 10px; border: 0.5px dashed var(--palette-border); border-radius: var(--radius-md); background: var(--surface-panel); }
+.rd-douban .rd-hint { margin: 0 0 6px; }
+.rd-douban-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rd-douban-item { display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; text-align: left; }
+.rd-douban-item:hover { border-color: var(--palette-primary); background: var(--palette-soft); }
+/* 已套用那张：勾边 + 左上角对勾，套完不消失，方便接着换 */
+.rd-douban-item-on { border-color: var(--palette-primary); box-shadow: inset 0 0 0 1px var(--palette-primary); position: relative; }
+.rd-douban-item-on::after { content: '✓'; position: absolute; top: 4px; right: 6px; font-size: 12px; line-height: 1; padding: 1px 4px; border-radius: 999px; color: #fff; background: var(--palette-primary); }
+.rd-douban-img { display: grid; place-items: center; width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 3px; background: var(--surface-panel); }
+.rd-douban-nocover { font-size: var(--text-xs); color: var(--surface-muted); }
+.rd-douban-name { font-size: var(--text-xs); color: var(--surface-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-douban-sub { font-size: 10px; color: var(--surface-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 弹窗底部：次要操作自成一行，取消/保存固定右下——七个按钮硬塞一行时「保存」会被挤到
+   下一行最左边，看着像另一个区块的按钮 */
+.rd-modal-acts { display: flex; flex-direction: column; gap: 8px; margin-top: var(--space-2); padding-top: var(--space-2); border-top: 0.5px solid var(--surface-border); }
+.rd-acts-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rd-acts-main { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 </style>

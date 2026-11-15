@@ -21,12 +21,15 @@ const emit = defineEmits<{
 }>();
 
 interface Subject { id: string; title: string; unit: string; total: number; done: number; pct: number; progressText: string }
+interface Attempt { id: string; date: string; score: number; passLine: number; passed: boolean; causesLabel: string[]; gap: number }
+interface CauseRow { key: string; label: string; count: number }
 interface ExamRow {
   id: string; title: string; org: string; examDate: string; enrollDate: string;
   status: string; score: number; passLine: number; note: string;
   subjects: Subject[]; pct: number; subjectCount: number; subjectDone: number;
   daysLeft: number; stage: string; stageLabel: string; countdown: string; resultText: string;
   enrollMissed: boolean; soon: boolean;
+  attempts: Attempt[]; attemptCount: number; failCount: number; lastFail: Attempt | null; causeTop: CauseRow[];
 }
 interface Milestone { id: string; title: string; done: boolean; doneAt: number; doneText: string }
 interface Practice { id: string; date: string; minutes: number; note?: string }
@@ -37,6 +40,8 @@ interface SkillRow {
   milestoneDone: number; milestoneTotal: number; milestonePct: number;
   minutes: number; hoursText: string; weekMinutes: number; weekText: string;
   lastPractice: string; nextTitle: string; ready: boolean;
+  blocker: string; blockerSince: string; blockerDays: number; blockerText: string;
+  stuck: boolean; nextUp: string; clearedCount: number;
 }
 interface Quote { id: string; text: string; page: number }
 interface BookRow {
@@ -54,11 +59,13 @@ interface Stats {
   examEnrollMissed: number; skillTotal: number; skillMinutes: number; skillHours: number;
   skillWeek: number; skillReady: number; themeTotal: number; bookTotal: number;
   bookDone: number; quoteTotal: number; total: number;
+  skillBlocked: number; skillStuck: number; examAttempts: number; examFails: number;
 }
 interface Alert { kind: string; id: string; title: string; level: string; text: string }
 interface Board {
   today: string; exams: ExamRow[]; skills: SkillRow[]; themes: ThemeRow[];
   stats: Stats; alerts: Alert[]; insight: string; note: string;
+  causeTop: CauseRow[]; blockerStaleDays: number;
 }
 
 type TabKey = 'exam' | 'skill' | 'theme';
@@ -89,7 +96,8 @@ function say(t: string): void {
 const stats = computed<Stats>(() => board.value ? board.value.stats : {
   examTotal: 0, examOpen: 0, examSoon: 0, examPast: 0, examPassed: 0, examEnrollMissed: 0,
   skillTotal: 0, skillMinutes: 0, skillHours: 0, skillWeek: 0, skillReady: 0,
-  themeTotal: 0, bookTotal: 0, bookDone: 0, quoteTotal: 0, total: 0
+  themeTotal: 0, bookTotal: 0, bookDone: 0, quoteTotal: 0, total: 0,
+  skillBlocked: 0, skillStuck: 0, examAttempts: 0, examFails: 0
 });
 const exams = computed(() => (board.value ? board.value.exams : []));
 const skills = computed(() => (board.value ? board.value.skills : []));
@@ -106,21 +114,28 @@ const currentHint = computed(() => {
 });
 
 // 统计胶囊：三个 tab 各给三个数，不共用一套——「条目数」对三种活动的含义不同
-const chips = computed(() => {
+interface Chip { label: string; value: string; warn?: boolean }
+const chips = computed<Chip[]>(() => {
   const s = stats.value;
   if (active.value === 'exam') {
-    return [
+    const out: Chip[] = [
       { label: '在考', value: String(s.examOpen) },
       { label: '7 天内', value: String(s.examSoon), warn: s.examSoon > 0 },
       { label: '已通过', value: String(s.examPassed) }
     ];
+    // 考过几次、没过几次：只有真考过才出现，空的时候不占位
+    if (s.examAttempts) out.push({ label: '考过', value: s.examAttempts + ' 次', warn: s.examFails > 0 });
+    return out;
   }
   if (active.value === 'skill') {
-    return [
+    const out: Chip[] = [
       { label: '在练', value: String(s.skillTotal) },
       { label: '本周', value: s.skillWeek >= 60 ? (s.skillWeek / 60).toFixed(1) + ' 小时' : s.skillWeek + ' 分钟' },
       { label: '可升级', value: String(s.skillReady), warn: s.skillReady > 0 }
     ];
+    // V3.9：卡点比「可升级」更该被看见——卡着的时候升级只是摆设
+    if (s.skillBlocked) out.push({ label: '卡点', value: String(s.skillBlocked), warn: s.skillStuck > 0 });
+    return out;
   }
   return [
     { label: '主题', value: String(s.themeTotal) },
@@ -311,7 +326,13 @@ onMounted(load);
           @click="pick(e.id)"
         >
           <span class="g-dot" :class="'g-dot-' + e.stage" aria-hidden="true"></span>
-          <span class="g-title">{{ e.title }}<span v-if="e.org" class="g-sub">{{ e.org }}</span></span>
+          <span
+            class="g-title"
+            :title="e.lastFail && e.lastFail.causesLabel.length ? '上次错在：' + e.lastFail.causesLabel.join('、') : ''"
+          >
+            {{ e.title }}<span v-if="e.org" class="g-sub">{{ e.org }}</span>
+            <span v-if="e.failCount" class="g-badge g-badge-warn">未过 {{ e.failCount }}</span>
+          </span>
           <span class="g-mid">{{ e.subjectDone }} / {{ e.subjectCount }} 科</span>
           <span class="g-bar"><i :style="{ width: e.pct + '%' }"></i></span>
           <span class="g-num">{{ e.pct }}%</span>
@@ -335,7 +356,10 @@ onMounted(load);
           @click="pick(s.id)"
         >
           <span class="g-dot g-dot-skill" aria-hidden="true"></span>
-          <span class="g-title">{{ s.title }}<span v-if="s.ready" class="g-badge">可升级</span></span>
+          <span class="g-title" :title="s.nextUp ? '下次练：' + s.nextUp : ''">
+            {{ s.title }}<span v-if="s.ready" class="g-badge">可升级</span>
+            <span v-if="s.blocker" class="g-badge g-badge-warn" :class="{ 'g-badge-on': s.stuck }">{{ s.blockerText }}</span>
+          </span>
           <span class="g-mid">{{ s.milestoneDone }} / {{ s.milestoneTotal }} 里程碑</span>
           <span class="g-bar"><i :style="{ width: s.milestonePct + '%' }"></i></span>
           <span class="g-num">{{ s.minutes }}′</span>
@@ -402,23 +426,23 @@ onMounted(load);
 <style scoped>
 .growth-view { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.head h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.head h2 { margin: 0; font-size: var(--text-h2); font-weight: 500; }
 .head-actions { display: flex; gap: 6px; flex: 0 0 auto; }
-.muted { font-size: 12px; color: var(--surface-muted); }
-.insight { margin: 0; padding: 8px 10px; border-left: 2px solid var(--palette-border); background: var(--surface-panel); font-size: 12px; line-height: 1.6; }
+.muted { font-size: var(--text-sm); color: var(--surface-muted); }
+.insight { margin: 0; padding: 8px 10px; border-left: 2px solid var(--palette-border); background: var(--surface-panel); font-size: var(--text-sm); line-height: 1.6; }
 .growth-insight-on { border-left-color: var(--palette-primary); }
 
 .tabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .g-tab {
   padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: 999px;
-  background: var(--surface-raised); font-size: 12px;
+  background: var(--surface-raised); font-size: var(--text-sm);
 }
 .g-tab-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .num { margin-left: 6px; font-variant-numeric: tabular-nums; opacity: 0.75; }
-.tab-hint { font-size: 11px; color: var(--surface-muted); }
+.tab-hint { font-size: var(--text-xs); color: var(--surface-muted); }
 
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip { padding: 3px 10px; border-radius: 999px; background: var(--surface-raised); font-size: 12px; }
+.chip { padding: 3px 10px; border-radius: 999px; background: var(--surface-raised); font-size: var(--text-sm); }
 .chip b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .chip-warn { background: var(--state-warn-soft); color: var(--state-warn); }
 
@@ -433,7 +457,7 @@ input:focus, textarea:focus { border-color: var(--palette-accent); }
 }
 .primary.add-on, .primary.note-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 
-.colhead { display: flex; gap: 8px; padding: 0 10px; font-size: 10px; color: var(--surface-muted); letter-spacing: 0.04em; }
+.colhead { display: flex; gap: 8px; padding: 0 10px; font-size: var(--text-xs); color: var(--surface-muted); letter-spacing: 0.04em; }
 .ch-dot { flex: 0 0 6px; }
 .ch-title { flex: 1; min-width: 0; }
 .ch-bar { flex: 0 0 60px; }
@@ -447,7 +471,7 @@ input:focus, textarea:focus { border-color: var(--palette-accent); }
   position: relative;
   display: flex; align-items: center; gap: 8px; padding: 6px 100px 6px 10px;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
-  background: var(--surface-raised); font-size: 12px; cursor: pointer;
+  background: var(--surface-raised); font-size: var(--text-sm); cursor: pointer;
 }
 .g-row:hover { border-color: var(--palette-border); }
 .g-sel { border-color: var(--palette-primary); box-shadow: inset 2px 0 0 var(--palette-primary); background: var(--palette-soft); }
@@ -462,34 +486,37 @@ input:focus, textarea:focus { border-color: var(--palette-accent); }
 .g-dot-skill { background: var(--palette-primary); }
 .g-dot-theme { background: var(--palette-accent); }
 .g-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.g-sub { margin-left: 6px; font-size: 11px; color: var(--surface-muted); }
-.g-badge { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--palette-primary); color: var(--palette-on); font-size: 10px; }
+.g-sub { margin-left: 6px; font-size: var(--text-xs); color: var(--surface-muted); }
+.g-badge { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--palette-primary); color: var(--palette-on); font-size: var(--text-xs); }
+/* V3.9：卡点 / 未通过次数用警告色；挂超两周的卡点实心，一眼能看出「这个该动了」 */
+.g-badge-warn { background: var(--state-warn-soft); color: var(--state-warn); }
+.g-badge-on { background: var(--state-warn); color: var(--palette-on); }
 .g-mid { flex: 0 0 96px; color: var(--surface-muted); font-variant-numeric: tabular-nums; }
 .g-bar { flex: 0 0 60px; height: 5px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; }
 .g-bar i { display: block; height: 100%; background: var(--palette-primary); }
 .g-num { flex: 0 0 62px; font-variant-numeric: tabular-nums; color: var(--surface-muted); }
-.g-side { flex: 0 0 168px; font-size: 11px; color: var(--surface-muted); }
+.g-side { flex: 0 0 168px; font-size: var(--text-xs); color: var(--surface-muted); }
 .g-warn { color: var(--state-warn); }
 .g-gap { opacity: 0.8; }
 .g-acts { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 2px; }
-.g-quick { flex: 0 0 auto; font-size: 11px; padding: 2px 8px; }
+.g-quick { flex: 0 0 auto; font-size: var(--text-xs); padding: 2px 8px; }
 .g-del { border: 0; background: transparent; color: var(--surface-muted); flex: 0 0 auto; }
-.g-empty { padding: 12px; font-size: 12px; color: var(--surface-muted); border: 0.5px dashed var(--surface-border); border-radius: var(--radius-sm); line-height: 1.7; }
+.g-empty { padding: 12px; font-size: var(--text-sm); color: var(--surface-muted); border: 0.5px dashed var(--surface-border); border-radius: var(--radius-sm); line-height: 1.7; }
 
 .alerts { display: flex; flex-direction: column; gap: 4px; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); }
-.alerts h3 { margin: 0 0 2px; font-size: 12px; font-weight: 500; }
-.alert { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
-.alert-kind { flex: 0 0 16px; text-align: center; border-radius: 3px; background: var(--surface-raised); color: var(--palette-primary); font-size: 10px; }
+.alerts h3 { margin: 0 0 2px; font-size: var(--text-sm); font-weight: 500; }
+.alert { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); }
+.alert-kind { flex: 0 0 16px; text-align: center; border-radius: 3px; background: var(--surface-raised); color: var(--palette-primary); font-size: var(--text-xs); }
 .alert-title { flex: 0 0 auto; }
 .alert-text { color: var(--surface-muted); }
 .alert-warn .alert-text { color: var(--state-warn); }
 .alert-done .alert-text { color: var(--palette-primary); }
 
 .day-note { display: flex; flex-direction: column; gap: 6px; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); }
-.day-note h3 { margin: 0; font-size: 12px; font-weight: 500; display: flex; gap: 8px; align-items: baseline; }
+.day-note h3 { margin: 0; font-size: var(--text-sm); font-weight: 500; display: flex; gap: 8px; align-items: baseline; }
 .area { width: 100%; resize: vertical; }
-.note { margin: 0; font-size: 11px; color: var(--surface-muted); line-height: 1.6; }
-.msg { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--surface-panel); font-size: 12px; }
+.note { margin: 0; font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.6; }
+.msg { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--surface-panel); font-size: var(--text-sm); }
 .message-on { background: var(--palette-soft); color: var(--palette-primary); }
 
 @media (max-width: 1180px) {

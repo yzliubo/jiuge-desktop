@@ -117,11 +117,11 @@ onMounted(() => { void load(); });
 <style scoped>
 .bin-view { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 .bin-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.bin-title { font-size: 15px; font-weight: 500; margin: 0; }
-.bin-sub { font-size: 12px; color: var(--surface-muted); margin: 4px 0 0; line-height: 1.6; max-width: 52ch; }
-.bin-count { padding: 2px 10px; border-radius: 999px; background: var(--surface-panel); color: var(--surface-muted); font-size: 12px; flex: none; }
+.bin-title { font-size: var(--text-h2); font-weight: 500; margin: 0; }
+.bin-sub { font-size: var(--text-sm); color: var(--surface-muted); margin: 4px 0 0; line-height: 1.6; max-width: 52ch; }
+.bin-count { padding: 2px 10px; border-radius: 999px; background: var(--surface-panel); color: var(--surface-muted); font-size: var(--text-sm); flex: none; }
 .bin-count-on { background: var(--palette-soft); color: var(--palette-primary); }
-.bin-msg { margin: 0; padding: 6px 12px; font-size: 12px; border-radius: var(--radius-md); background: var(--palette-soft); color: var(--palette-primary); }
+.bin-msg { margin: 0; padding: 6px 12px; font-size: var(--text-sm); border-radius: var(--radius-md); background: var(--palette-soft); color: var(--palette-primary); }
 .bin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .bin-item {
   display: flex;
@@ -133,21 +133,21 @@ onMounted(() => { void load(); });
   background: var(--surface-raised);
 }
 .bin-body { flex: 1; min-width: 0; }
-.bin-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--surface-muted); }
-.bin-date { font-size: 12px; color: var(--palette-primary); font-variant-numeric: tabular-nums; }
+.bin-row { display: flex; align-items: baseline; gap: 6px; font-size: var(--text-xs); color: var(--surface-muted); }
+.bin-date { font-size: var(--text-sm); color: var(--palette-primary); font-variant-numeric: tabular-nums; }
 .bin-gap { opacity: 0.6; }
 .bin-sealed { font-variant-numeric: tabular-nums; }
-.bin-excerpt { margin: 3px 0 0; font-size: 12px; line-height: 1.55; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.bin-leave { margin: 3px 0 0; font-size: 11px; color: var(--state-warn); font-variant-numeric: tabular-nums; }
+.bin-excerpt { margin: 3px 0 0; font-size: var(--text-sm); line-height: 1.55; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.bin-leave { margin: 3px 0 0; font-size: var(--text-xs); color: var(--state-warn); font-variant-numeric: tabular-nums; }
 .bin-actions { display: flex; gap: 6px; flex: none; }
-.bin-btn { padding: 4px 12px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); cursor: pointer; }
+.bin-btn { padding: 4px 12px; font-size: var(--text-sm); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); cursor: pointer; }
 .bin-btn:hover { border-color: var(--palette-border); background: var(--palette-soft); color: var(--palette-primary); }
 .bin-restore { border-color: var(--palette-border); }
 .bin-purge:hover { color: var(--state-warn); border-color: var(--state-warn); background: var(--state-warn-soft); }
-.bin-empty { padding: var(--space-4); text-align: center; font-size: 12px; color: var(--surface-muted); border: 0.5px dashed var(--surface-border); border-radius: var(--radius-lg); }
+.bin-empty { padding: var(--space-4); text-align: center; font-size: var(--text-sm); color: var(--surface-muted); border: 0.5px dashed var(--surface-border); border-radius: var(--radius-lg); }
 .bin-foot { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-2); border-top: 0.5px solid var(--surface-border); }
-.bin-empty-btn { padding: 5px 12px; font-size: 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: transparent; color: var(--surface-muted); cursor: pointer; }
+.bin-empty-btn { padding: 5px 12px; font-size: var(--text-sm); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: transparent; color: var(--surface-muted); cursor: pointer; }
 .bin-empty-btn:hover { color: var(--state-warn); border-color: var(--state-warn); }
-.bin-hint { font-size: 11px; color: var(--surface-muted); }
-.bin-warn { font-size: 12px; color: var(--state-warn); }
+.bin-hint { font-size: var(--text-xs); color: var(--surface-muted); }
+.bin-warn { font-size: var(--text-sm); color: var(--state-warn); }
 </style>

@@ -2,10 +2,16 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' data:; connect-src 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; frame-src 'self' data:; connect-src 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>九格手记 · 阅读</title>
 <link rel="stylesheet" href="./reader.css">
+<!-- PDF 解码器：Mozilla pdf.js 3.11.174 的本地副本，随包分发，不联网、不用 CDN。
+     worker 必须先于 pdf.min.js：全局挂上 pdfjsWorker.WorkerMessageHandler 后，
+     pdf.js 会直接用主线程 fake worker，既不 new Worker（file:// 下会被 CORS 挡），
+     也不需要放宽 CSP 的任何一条。三个 defer 脚本按此顺序执行。 -->
+<script src="./vendor/pdf.worker.min.js" defer></script>
+<script src="./vendor/pdf.min.js" defer></script>
 <script src="./reader.js" defer></script>
 </head>
 <body>
@@ -82,16 +88,35 @@
         <option value="loose">段距 宽松</option>
       </select>
       <button class="rr-typeset" id="rrPunct" type="button" title="标点挤压与中西文间距（实验性）">标点挤压</button>
-      <select class="rr-typeface" id="rrTypeface" title="正文与标题的字体方案" aria-label="字体方案">
-        <option value="mixed">混排 · 宋体正文 / 黑体标题</option>
-        <option value="serif">全宋体</option>
-        <option value="sans">全黑体</option>
-        <option value="kai">全楷体</option>
+      <!-- 字体：四个固定方案 + 本机已装字体（分组懒加载）。放同一个下拉里，
+           不额外占工具栏宽度——多一个控件就会把「缩放 / 行距」挤到第二行去。 -->
+      <select class="rr-typeface" id="rrTypeface" title="正文与标题用哪种字体" aria-label="字体">
+        <optgroup label="字体方案">
+          <option value="mixed">混排 · 宋体正文 / 黑体标题</option>
+          <option value="serif">全宋体</option>
+          <option value="sans">全黑体</option>
+          <option value="kai">全楷体</option>
+        </optgroup>
+        <optgroup label="本机已装字体" id="rrSystemFonts"></optgroup>
       </select>
       <button class="rr-zoom-out" id="rrZoomOut" type="button" title="缩小版面">−</button>
       <span class="rr-zoom-text" id="rrZoomText">100%</span>
       <button class="rr-zoom-in" id="rrZoomIn" type="button" title="放大版面">＋</button>
       <button class="rr-line" id="rrLine" type="button">行距 1.8</button>
+    </div>
+
+    <!-- 阅读方式单独一行：塞进上面那条工具栏会把「缩放 / 行距」挤到第二行（实测过）。
+         选项条整体居中（2026-11-15），页码仍贴右，别让「40 章」跟着飘到中间。 -->
+    <div class="rr-modes" id="rrModes">
+      <span class="rr-modes-group">
+        <span class="rr-modes-label">阅读方式</span>
+        <button class="rr-mode-btn" id="rrFlow" type="button" aria-pressed="false" title="把后面的章节接在下面，一路滚下去；关掉就是按章翻">连续滚动</button>
+        <button class="rr-mode-btn" id="rrPaged" type="button" aria-pressed="false" title="一页一屏，滚轮 / ↓ 翻下一页（像翻纸书）">分页阅读</button>
+        <button class="rr-mode-btn" id="rrSpread" type="button" aria-pressed="false" title="分页之上的左右两页并排；PDF 是真正的左右两页">双页并排</button>
+        <button class="rr-mode-btn" id="rrFull" type="button" aria-pressed="false" title="F11 进入全屏，Esc 退出">全屏阅读</button>
+        <span class="rr-modes-tip" id="rrModesTip">分章 · 单栏</span>
+      </span>
+      <span class="rr-modes-pages" id="rrModePages"></span>
     </div>
 
     <div class="rr-search">
@@ -103,6 +128,8 @@
 
     <div class="rr-stage" id="rrStage">
       <iframe class="rr-page" id="rrPage" sandbox="allow-same-origin" title="正文"></iframe>
+      <!-- PDF 原页：canvas 由本地 pdf.js 逐页画出，进入视口才渲染，长文档也不会一次性吃满内存 -->
+      <div class="rr-pdf" id="rrPdf" hidden aria-label="PDF 原页"></div>
       <div class="rr-unsupported" id="rrUnsupported" style="display:none"></div>
       <div class="rr-selbar" id="rrSelBar" style="display:none">
         <span class="rr-selbar-tip">已选</span>
@@ -112,6 +139,9 @@
         <button class="rr-selbar-btn" data-color="pink" type="button" title="粉色高亮">粉</button>
         <button class="rr-selbar-btn" data-style="underline" type="button">下划线</button>
         <button class="rr-selbar-btn" data-style="strike" type="button">删除线</button>
+        <span class="rr-selbar-sep" aria-hidden="true"></span>
+        <button class="rr-selbar-btn rr-selbar-copy" data-act="copy" type="button" title="复制划选的原文（PDF 也能复制）">复制</button>
+        <button class="rr-selbar-btn rr-selbar-quote" data-act="quote" type="button" title="把这句原文存进读书笔记，带页码与页内锚点">摘录</button>
         <span class="rr-selbar-sep" aria-hidden="true"></span>
         <button class="rr-selbar-btn rr-selbar-ask" data-ask="0" type="button" title="Q4 这句话在说什么">重述</button>
         <button class="rr-selbar-btn rr-selbar-ask" data-ask="1" type="button" title="Q5 接得上我的什么">连接</button>
@@ -164,6 +194,9 @@
     <span class="rr-time" id="rrTime">本次 0 分 · 累计 0 分</span>
     <span class="rr-status-msg" id="rrStatusMsg">就绪</span>
   </footer>
+
+  <!-- 全屏时三栏与工具栏都收起，只留这一枚退出入口；Esc / F11 同样能退 -->
+  <button class="rr-full-exit" id="rrFullExit" type="button" hidden title="退出全屏（Esc / F11）">退出全屏 · Esc</button>
 </div>
 
   <!-- 章末轻卡：正文之外顶部浮层（不进正文流、不挡视线，字号小、浅灰、半透明） -->

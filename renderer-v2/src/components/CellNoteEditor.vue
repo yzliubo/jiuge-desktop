@@ -57,8 +57,8 @@ function save(): void {
 }
 .ne-dirty { border-color: var(--palette-border); }
 .ne-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.ne-title { font-size: 12px; }
-.ne-hint { font-size: 11px; color: var(--surface-muted); }
+.ne-title { font-size: var(--text-sm); }
+.ne-hint { font-size: var(--text-xs); color: var(--surface-muted); }
 .ne-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ne-save {
   padding: 6px 12px; border: 0.5px solid var(--surface-border);

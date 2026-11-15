@@ -93,6 +93,54 @@ const DREAM_IMG_FIXTURE = (function () {
   return p;
 })();
 
+// V3.5 E2E 夹具：最小合法双页 PDF（只用 Helvetica / ASCII，不依赖本机中文字体）。
+// 手写对象与 xref，偏移按 latin1 字节算准 —— 这条用例验的是「本地 pdf.js 能不能在
+// 真窗口 + 同套 CSP 下把页画出来」，不是验 PDF 语法容错，所以夹具本身不能靠容错过。
+const PDF_FIXTURE = (function () {
+  const p = path.join(require('os').tmpdir(), 'jiuge-e2e-v35-' + Date.now() + '.pdf');
+  const objs = [];
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = '<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>';
+  objs[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 595] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>';
+  objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  objs[6] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 595] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>';
+  function content(label) {
+    const s = 'BT /F1 20 Tf 40 540 Td (' + label + ') Tj ET\n';
+    return '<< /Length ' + Buffer.byteLength(s, 'latin1') + ' >>\nstream\n' + s + 'endstream';
+  }
+  objs[4] = content('Jiuge V35 Page One');
+  objs[7] = content('Jiuge V35 Page Two');
+  let body = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 1; i <= 7; i += 1) {
+    offsets[i] = Buffer.byteLength(body, 'latin1');
+    body += i + ' 0 obj\n' + objs[i] + '\nendobj\n';
+  }
+  const startxref = Buffer.byteLength(body, 'latin1');
+  body += 'xref\n0 8\n0000000000 65535 f \n';
+  for (let i = 1; i <= 7; i += 1) {
+    body += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  }
+  body += 'trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n' + startxref + '\n%%EOF\n';
+  fs.writeFileSync(p, Buffer.from(body, 'latin1'));
+  return p;
+})();
+
+// V3.5 E2E 夹具：4 章长 TXT，用来验「流式正文」的连续滚动 / 双栏 / 全屏，
+// 与 PDF 那条分开——两条渲染路径不同，混在一条用例里出问题分不清是哪条。
+const TXT_FIXTURE = (function () {
+  const p = path.join(require('os').tmpdir(), 'jiuge-e2e-v35-' + Date.now() + '.txt');
+  const cn = ['一', '二', '三', '四'];
+  let body = '';
+  for (let i = 0; i < cn.length; i += 1) {
+    body += '第' + cn[i] + '章 连续滚动样本\n' +
+      ('这是第 ' + (i + 1) + ' 章的正文，用来验连续滚动能不能把后面的章节接上来，也用来看双栏排版是否正常。').repeat(30) +
+      '\n\n';
+  }
+  fs.writeFileSync(p, body, 'utf8');
+  return p;
+})();
+
 let passed = 0;
 let failed = 0;
 let skipped = 0;
@@ -153,6 +201,30 @@ async function waitStep(page, n) {
     await page.waitForSelector('.workbench', { timeout: 30000 });
     await page.waitForTimeout(400);
 
+    // V3.14：图书馆搬到独立窗口（左侧文件夹树放不进主窗中栏）。
+    // 所有 rd-* 断言都改在这个窗口里跑：全局只取一次句柄，已有就复用，
+    // 这样连续几条用例看到的是同一个书架状态，和以前「停在图书馆页」的语义一致。
+    let libWin = null;
+    async function libPage() {
+      if (libWin && !libWin.isClosed()) return libWin;
+      const open = app.windows().filter(function (w) { return w.url().indexOf('library.html') >= 0; })[0];
+      if (open) { libWin = open; return libWin; }
+      const [w] = await Promise.all([
+        app.waitForEvent('window'),
+        page.locator('.reading-btn').click()
+      ]);
+      w.on('pageerror', function (err) { jsErrors.push('library: ' + String(err && err.message || err)); });
+      w.on('console', function (msg) {
+        if (msg.type() !== 'error') return;
+        const t = msg.text();
+        if (/Content Security Policy|unsafe-eval|NODE_OPTIONS|DevTools/i.test(t)) return;
+        jsErrors.push('library console: ' + t);
+      });
+      await w.waitForSelector('.lib-app', { timeout: 20000 });
+      libWin = w;
+      return w;
+    }
+
     // --- 布局与初始状态 ---
     await check('01 工作台根节点存在', async () => {
       assert.strictEqual(await page.locator('.workbench').count(), 1);
@@ -179,19 +251,25 @@ async function waitStep(page, n) {
       assert.strictEqual(await page.locator('.statusbar').count(), 1);
     });
     await check('09 一级导航 7 项 + 设置共 8 项（原 5 页桌面化重组 + 娱乐）', async () => {
-      assert.strictEqual(await page.locator('.nav-item').count(), 8);
+      assert.strictEqual(await page.locator('.nav-item').count(), 7);
     });
     await check('10 首项「今天」选中态 class + aria-current', async () => {
       const first = page.locator('.nav-item').first();
       assert((await first.getAttribute('class')).includes('nav-on'));
       assert.strictEqual(await first.getAttribute('aria-current'), 'page');
     });
-    await check('11 九格仍是 9 个：梦想那格换成「娱乐」', async () => {
+    // 口径更正（2026-11-15）：这条曾要求「第 7 格 key 改成 leisure」——那次改名已被撤销。
+    // 冻结领域层的 GRID_KEYS 第 7 键是 dream，渲染层写成 leisure 会被 save() 静默丢字
+    // （tests/phase2/view-contract.js 已把「渲染层不得出现 leisure 键」钉死）。
+    // 现在的实现是「只换显示名、数据键不动」，所以这里断言显示名与数据键两件事。
+    await check('11 九格仍是 9 个：第 7 格显示名换成「休闲娱乐」，数据键仍 dream', async () => {
       const n = await page.locator('.cell').count();
       assert.strictEqual(n, 9, '九格数量是 ' + n + '，不是 9');
-      assert.strictEqual(await page.locator('.cell[data-cell="dream"]').count(), 0, '梦想还占着九格');
-      assert.strictEqual(await page.locator('.cell[data-cell="leisure"]').count(), 1, '九格里没有娱乐格');
-      assert((await page.locator('.cell[data-cell="leisure"] .cell-label').innerText()).includes('娱乐'));
+      assert.strictEqual(await page.locator('.cell[data-cell="leisure"]').count(), 0,
+        '九格冒出 leisure 键：冻结领域层没这个键，写正文会被静默丢掉');
+      const label = await page.locator('.cell[data-cell="dream"] .cell-label').innerText();
+      assert(label.includes('休闲娱乐'), '第 7 格显示名不是「休闲娱乐」：' + label);
+      assert(!label.includes('梦想'), '第 7 格还挂着「梦想」旧名：' + label);
     });
     await check('12 每格都有可编辑的富文本区（contenteditable）', async () => {
       assert.strictEqual(await page.locator('.cell .rt-body').count(), 9);
@@ -666,7 +744,7 @@ async function waitStep(page, n) {
 
     // --- 坚持 ---
     await check('53 坚持视图展示默认 4 个里程碑与三大考验期', async () => {
-      await page.locator('.nav-item').nth(4).click();
+      await page.locator('.nav-item').nth(3).click();
       await page.waitForTimeout(300);
       assert.strictEqual(await page.locator('.habit').count(), 1);
       assert.strictEqual(await page.locator('.habit .item').count(), 4);
@@ -1250,7 +1328,7 @@ async function waitStep(page, n) {
       await page.waitForTimeout(300);
       assert.strictEqual(await page.locator('.grid').count(), 1);
       assert.strictEqual(await page.locator('.gtd-view').count(), 0);
-      assert.strictEqual(await page.locator('.nav-item').count(), 8, '一级导航仍应为 7 项 + 设置');
+      assert.strictEqual(await page.locator('.nav-item').count(), 7, '一级导航仍应为 6 项 + 设置');
     });
     await check('76a 今日六条：已并入九格「未来」格，今日页不留横条；进格挑一件并「→ 格」', async () => {
       // 今日页顶部只留问候与九格：六条那条横条必须已经不在了
@@ -1622,30 +1700,30 @@ async function waitStep(page, n) {
       assert(t.includes('本周三问'), t.slice(0, 120));
     });
     await check('94 自由记录页：三 tab 在位，右栏仍是胶囊上下文（三组计数不泄露正文）', async () => {
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(450);
-      assert.strictEqual(await page.locator('.free-view').count(), 1, '第 4 项导航没进自由记录');
+      assert.strictEqual(await page.locator('.free-view').count(), 1, '九格目录没进自由记录');
       assert.strictEqual(await page.locator('.free-view .fw-tab').count(), 3, '三种功能不齐');
       const t = await page.locator('.context').innerText();
       assert(t.includes('胶囊状态') && t.includes('待开启') && t.includes('封存中'), t.slice(0, 90));
       assert.strictEqual(await page.locator('.context .ctx-kv').count(), 3);
     });
     await check('95 坚持右栏：天数四格 + 下一个奖励', async () => {
-      await page.locator('.nav-item').nth(4).click();
+      await page.locator('.nav-item').nth(3).click();
       await page.waitForTimeout(450);
       const t = await page.locator('.context').innerText();
       assert(t.includes('下一个奖励'), t.slice(0, 90));
       assert(t.includes('当前连续') && t.includes('最长连续'), t.slice(0, 120));
     });
     await check('96 数据中心右栏：本机数据规模四格', async () => {
-      await page.locator('.nav-item').nth(6).click();
+      await page.locator('.nav-item').nth(5).click();
       await page.waitForTimeout(500);
       const t = await page.locator('.context').innerText();
       assert(t.includes('本机数据规模') && t.includes('日记篇数'), t.slice(0, 90));
       assert.strictEqual(await page.locator('.context .ctx-kv').count(), 4);
     });
     await check('97 设置右栏：当前配置四项 + 合规口径', async () => {
-      await page.locator('.nav-item').nth(7).click();
+      await page.locator('.nav-item').nth(6).click();
       await page.waitForTimeout(450);
       const t = await page.locator('.context').innerText();
       assert(t.includes('当前配置') && t.includes('九格模板'), t.slice(0, 90));
@@ -1653,11 +1731,18 @@ async function waitStep(page, n) {
     });
     await check('98 九个入口的右栏内容互不相同（无复用残留）', async () => {
       const texts = [];
-      for (let i = 0; i < 8; i += 1) {
+      for (let i = 0; i < 7; i += 1) {
         await page.locator('.nav-item').nth(i).click();
         await page.waitForTimeout(260);
         texts.push((await page.locator('.context').innerText()).replace(/\s+/g, ''));
       }
+      // 2026-11-13：自由记录撤掉一级导航（与九格「自由」格同功能），改成九格目录入口；
+      // 它的右栏仍要独立成一份，不能因为不在导航里就复用别人的
+      await page.locator('.nav-item').first().click();
+      await page.waitForTimeout(260);
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
+      await page.waitForTimeout(320);
+      texts.push((await page.locator('.context').innerText()).replace(/\s+/g, ''));
       await page.locator('.nav-item').first().click();
       await page.waitForTimeout(260);
       await page.locator('.nav-mod').first().click();
@@ -2199,7 +2284,7 @@ async function waitStep(page, n) {
       await page.locator('.nav-connect').click();
       await page.waitForSelector('.con-root', { timeout: 5000 });
       // 新功能只走二级入口，不占一级名额
-      assert.strictEqual(await page.locator('.nav-item').count(), 8, '一级导航被新视图占用了名额');
+      assert.strictEqual(await page.locator('.nav-item').count(), 7, '一级导航被新视图占用了名额');
     });
 
     await check('123 三个新视图都有回今天的入口', async () => {
@@ -2240,52 +2325,80 @@ async function waitStep(page, n) {
       }
     });
 
-    await check('125 图书馆顶栏入口、三分区与右栏联动', async () => {
+    await check('125 图书馆顶栏入口：点一下开独立三栏窗口（文件夹树 / 书架 / 详情）', async () => {
+      assert.strictEqual(app.windows().filter(function (w) { return w.url().indexOf('library.html') >= 0; }).length, 0,
+        '开场不该已经有图书馆窗口');
+      const lib = await libPage();
+      assert.strictEqual(await lib.title(), '九格手记 · 图书馆', '窗口标题不对');
+      // 独立窗口：主窗一个像素都不切
+      assert.ok(await page.locator('.workbench').count(), '主窗没了');
+      assert.ok((await page.locator('.nav').innerText()).indexOf('今天') >= 0, '主窗被切到别的页了');
+      // 三栏俱在：左文件夹树 / 中书架 / 右详情
+      assert.strictEqual(await lib.locator('.lib-left').count(), 1, '缺左栏（文件夹树）');
+      assert.strictEqual(await lib.locator('.lib-main .rd-view').count(), 1, '缺中栏（书架）');
+      assert.strictEqual(await lib.locator('.lib-right').count(), 1, '缺右栏（详情）');
+      assert.ok((await lib.locator('.lib-brand h1').innerText()).indexOf('图书馆') >= 0, '左栏品牌区没有标题');
+      // 左栏两个栏目 + 读书笔记：栏目名一个都不能少
+      const tree = await lib.locator('.lib-tree').innerText();
+      ['休闲阅读', '主题阅读', '读书笔记'].forEach(function (t) {
+        assert.ok(tree.indexOf(t) >= 0, '左栏缺栏目：' + t);
+      });
+      assert.strictEqual(await lib.locator('.rd-tab').count(), 3, '图书馆应有休闲 / 主题 / 读书笔记三个分区');
+      // 再点一次顶栏：只聚焦，不叠窗
       await page.locator('.reading-btn').click();
-      await page.waitForSelector('.rd-view', { timeout: 5000 });
-      assert.strictEqual(await page.locator('.rd-tab').count(), 3, '图书馆应有休闲 / 主题 / 读书笔记三个分区');
-      assert.ok((await page.locator('.rd-title').innerText()).indexOf('图书馆') >= 0);
-      const ctx = await page.locator('[data-context="reading"]').innerText();
-      assert.ok(ctx.indexOf('读书笔记') >= 0 && ctx.indexOf('标签聚类') >= 0, '右栏没换成图书馆联动信息');
+      await page.waitForTimeout(700);
+      assert.strictEqual(app.windows().filter(function (w) { return w.url().indexOf('library.html') >= 0; }).length, 1,
+        '重复点「图书馆」叠出了第二个窗口');
     });
 
-    await check('126 休闲阅读：加书 → 翻开 → 伴读三问 → 行内批注进读书笔记库', async () => {
-      await page.locator('.rd-tab').nth(0).click();
-      await page.locator('.rd-name').fill('九格试读本');
-      await page.locator('.rd-add .rd-primary').click();
-      await page.waitForSelector('.rd-book', { timeout: 5000 });
-      assert.ok((await page.locator('.rd-book').first().innerText()).indexOf('九格试读本') >= 0, '书没上书架');
-      await page.locator('.rd-book').first().locator('button', { hasText: '翻开读' }).click();
-      await page.waitForSelector('.rd-reader', { timeout: 5000 });
-      assert.strictEqual(await page.locator('.rd-prompt').count(), 3, '伴读三问应恰好三问');
-      await page.locator('.rd-prompt').first().click();
-      assert.ok((await page.locator('.rd-reader').innerText()).indexOf('别等') >= 0, '点问题后没给提示');
-      await page.locator('.rd-reader textarea').nth(0).fill('书里的一句原文');
-      await page.locator('.rd-reader textarea').nth(1).fill('我读到时想到的一句话');
-      await page.locator('.rd-reader input[aria-label="页码"]').fill('32');
-      await page.locator('.rd-reader input[aria-label="标签"]').fill('#给排水 #试读');
-      await page.locator('.rd-reader .rd-primary').click();
-      await page.locator('.rd-tab').nth(2).click();
-      await page.waitForSelector('.rd-note', { timeout: 5000 });
-      const row = await page.locator('.rd-note').first().innerText();
+    await check('126 休闲阅读：书只从文件来 → 翻开 → 伴读三问 → 行内批注进读书笔记库', async () => {
+      const lib = await libPage();
+      // 手写书名那一行已在 V3.14 下线（截图里那排「书名 / 作者 / 页数 / 放上书架」）。
+      // 这里用领域层补一本**没有文件**的老书来验中栏批注器：真实库里的历史数据就是这样，
+      // 而「翻开读」对没有文件的书本来就落回中栏，不新开阅读窗。
+      assert.strictEqual(await lib.locator('.rd-add').count(), 0, '休闲书架还残留着手写加书那一行');
+      assert.strictEqual(await lib.locator('.rd-name').count(), 0, '手写书名的输入框还在');
+      await page.evaluate(async () => {
+        await window.jiugeBridge.invoke('v1/domain:call', {
+          name: 'reading.addBook', args: [{ title: '九格试读本', total: 300, unit: '页' }]
+        });
+      });
+      await lib.locator('.rd-tab').nth(0).click();
+      const rowSel = lib.locator('.rd-book').filter({ hasText: '九格试读本' }).first();
+      await rowSel.waitFor({ timeout: 8000 });
+      assert.ok((await rowSel.innerText()).indexOf('九格试读本') >= 0, '书没上书架');
+      await rowSel.locator('button', { hasText: '翻开读' }).click();
+      await lib.waitForSelector('.rd-reader', { timeout: 5000 });
+      assert.strictEqual(await lib.locator('.rd-prompt').count(), 3, '伴读三问应恰好三问');
+      await lib.locator('.rd-prompt').first().click();
+      assert.ok((await lib.locator('.rd-reader').innerText()).indexOf('别等') >= 0, '点问题后没给提示');
+      await lib.locator('.rd-reader textarea').nth(0).fill('书里的一句原文');
+      await lib.locator('.rd-reader textarea').nth(1).fill('我读到时想到的一句话');
+      await lib.locator('.rd-reader input[aria-label="页码"]').fill('32');
+      await lib.locator('.rd-reader input[aria-label="标签"]').fill('#给排水 #试读');
+      await lib.locator('.rd-reader .rd-primary').click();
+      await lib.locator('.rd-tab').nth(2).click();
+      await lib.waitForSelector('.rd-note', { timeout: 5000 });
+      const row = await lib.locator('.rd-note').first().innerText();
       assert.ok(row.indexOf('书里的一句原文') >= 0 && row.indexOf('#给排水') >= 0, '笔记没进「读书笔记」数据库');
     });
 
     await check('127 笔记写进九格：带出处、只一行、防重复', async () => {
-      await page.locator('.rd-note').first().locator('button', { hasText: '→ 九格' }).click();
-      await page.waitForSelector('.rd-pushed', { timeout: 5000 });
+      const lib = await libPage();
+      await lib.locator('.rd-note').first().locator('button', { hasText: '→ 九格' }).click();
+      await lib.waitForSelector('.rd-pushed', { timeout: 5000 });
       // 别用返回 Promise 的 waitForFunction：Promise 对象本身是 truthy，会立刻「通过」。
       // 也别只取 items[0]：补记用例会留下别的日期。改成 Node 侧轮询真实数据。
       let snap = [];
       for (let i = 0; i < 25; i++) {
-        snap = await page.evaluate(async () => {
+        snap = await lib.evaluate(async () => {
           const r = await window.jiugeBridge.invoke('v1/diaries:list', { pageSize: 20 });
           return ((r.data && r.data.items) || []).map(function (x) {
             return { date: x.date, free: (x.cells && x.cells.free) || '' };
           });
         });
         if (snap.some(function (x) { return x.free.indexOf('【读书·') >= 0; })) break;
-        await page.waitForTimeout(200);
+        await lib.waitForTimeout(200);
       }
       const hit = snap.filter(function (x) { return x.free.indexOf('【读书·') >= 0; });
       assert.strictEqual(hit.length, 1, '应恰好一天收到回写，现场：' + JSON.stringify(snap));
@@ -2296,37 +2409,38 @@ async function waitStep(page, n) {
     });
 
     await check('128 主题阅读 V2.14 自建书单；闪念一键同时进库与九格', async () => {
-      await page.locator('.rd-tab').nth(1).click();
-      await page.waitForSelector('.rd-notice', { timeout: 5000 });
-      assert.ok((await page.locator('.rd-notice').innerText()).indexOf('主题书单') >= 0, '主题页未提示可自建书单');
+      const lib = await libPage();
+      await lib.locator('.rd-tab').nth(1).click();
+      await lib.waitForSelector('.rd-notice', { timeout: 5000 });
+      assert.ok((await lib.locator('.rd-notice').innerText()).indexOf('主题书单') >= 0, '主题页未提示可自建书单');
       // 建一个主题 → 手写加一本书 → 双击翻开（中栏批注器与休闲同款）
-      await page.locator('.rd-add input[aria-label="新主题名"]').fill('GUI测试主题');
-      await page.locator('.rd-add button', { hasText: '建主题' }).first().click();
-      await page.waitForSelector('.rd-group-title', { timeout: 5000 });
-      assert.ok((await page.locator('.rd-group-title').first().innerText()).indexOf('GUI测试主题') >= 0, '主题没建出来');
-      await page.locator('.rd-group input[aria-label="主题新书名"]').fill('GUI主题书');
-      await page.locator('.rd-group button', { hasText: '加书名' }).first().click();
-      await page.waitForFunction(() => document.querySelectorAll('.rd-group .rd-book').length > 0, null, { timeout: 5000 });
-      await page.locator('.rd-group .rd-book').first().locator('button', { hasText: '翻开读' }).click();
-      await page.waitForSelector('.rd-reader[aria-label="主题阅读器"] .rd-prompts', { timeout: 5000 });
-      assert.ok((await page.locator('.rd-reader[aria-label="主题阅读器"] .rd-chapters').count()) >= 1, '主题批注器缺章节大纲');
-      await page.locator('.rd-tab').nth(0).click();
-      await page.locator('.rd-book').first().locator('button', { hasText: '翻开读' }).click();
-      await page.waitForSelector('.rd-flash input[aria-label="即时想法"]', { timeout: 5000 });
-      await page.locator('.rd-flash input[aria-label="即时想法"]').fill('突然冒出来的一个念头');
-      await page.locator('.rd-flash input[aria-label="即时想法"]').press('Enter');
+      await lib.locator('.rd-add input[aria-label="新主题名"]').fill('GUI测试主题');
+      await lib.locator('.rd-add button', { hasText: '建主题' }).first().click();
+      await lib.waitForSelector('.rd-group-title', { timeout: 5000 });
+      assert.ok((await lib.locator('.rd-group-title').first().innerText()).indexOf('GUI测试主题') >= 0, '主题没建出来');
+      await lib.locator('.rd-group input[aria-label="主题新书名"]').fill('GUI主题书');
+      await lib.locator('.rd-group button', { hasText: '加书名' }).first().click();
+      await lib.waitForFunction(() => document.querySelectorAll('.rd-group .rd-book').length > 0, null, { timeout: 5000 });
+      await lib.locator('.rd-group .rd-book').first().locator('button', { hasText: '翻开读' }).click();
+      await lib.waitForSelector('.rd-reader[aria-label="主题阅读器"] .rd-prompts', { timeout: 5000 });
+      assert.ok((await lib.locator('.rd-reader[aria-label="主题阅读器"] .rd-chapters').count()) >= 1, '主题批注器缺章节大纲');
+      await lib.locator('.rd-tab').nth(0).click();
+      await lib.locator('.rd-book').first().locator('button', { hasText: '翻开读' }).click();
+      await lib.waitForSelector('.rd-flash input[aria-label="即时想法"]', { timeout: 5000 });
+      await lib.locator('.rd-flash input[aria-label="即时想法"]').fill('突然冒出来的一个念头');
+      await lib.locator('.rd-flash input[aria-label="即时想法"]').press('Enter');
       let flashOk = false;
       for (let i = 0; i < 25; i++) {
-        const cells = await page.evaluate(async () => {
+        const cells = await lib.evaluate(async () => {
           const r = await window.jiugeBridge.invoke('v1/diaries:list', { pageSize: 20 });
           const rec = ((r.data && r.data.items) || [])[0];
           return rec ? (rec.cells || {}) : {};
         });
         if ((cells.free || '').indexOf('突然冒出来的一个念头') >= 0) { flashOk = true; break; }
-        await page.waitForTimeout(200);
+        await lib.waitForTimeout(200);
       }
       assert.ok(flashOk, '闪念没写进自由记录格');
-      const md = await page.evaluate(async () => {
+      const md = await lib.evaluate(async () => {
         const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.notes', args: [{ keyword: '突然冒出来' }] });
         return r.data || {};
       });
@@ -2334,42 +2448,43 @@ async function waitStep(page, n) {
     });
 
     await check('129 本地电子书：点击选择 → 登记 → 详细列表 / 封面预览切换', async () => {
-      await page.locator('.reading-btn').click();
-      await page.waitForSelector('.rd-view', { timeout: 5000 });
-      await page.locator('.rd-tab').nth(0).click();
-      await page.waitForSelector('.rd-drop', { timeout: 5000 });
-      assert.strictEqual(await page.locator('.rd-view input[type="file"]').count(), 0,
+      const lib = await libPage();
+      await lib.locator('.rd-tab').nth(0).click();
+      await lib.waitForSelector('.rd-drop', { timeout: 5000 });
+      assert.strictEqual(await lib.locator('.rd-view input[type="file"]').count(), 0,
         '渲染层不得出现文件选择框（选文件必须走主进程对话框）');
-      await page.locator('.rd-file-actions .rd-primary').click();
-      await page.waitForSelector('.rd-book', { timeout: 10000 });
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      await lib.locator('.rd-file-actions .rd-primary').click();
+      await lib.waitForSelector('.rd-book', { timeout: 10000 });
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const rowText = await row.innerText();
       assert.ok(rowText.indexOf('城门与水管') >= 0, '没从 EPUB 读出书名：' + rowText);
       assert.ok(rowText.indexOf('老刘') >= 0, '没从 EPUB 读出作者');
       assert.ok(rowText.indexOf('EPUB') >= 0, '缺格式徽标');
       assert.ok(rowText.indexOf(EPUB_FIXTURE) >= 0, '详细列表没显示本机路径');
-      await page.locator('.rd-viewmode button', { hasText: '封面预览' }).click();
-      await page.waitForSelector('.rd-grid .rd-card', { timeout: 5000 });
-      const card = page.locator('.rd-card').filter({ hasText: '城门与水管' }).first();
+      await lib.locator('.rd-viewmode button', { hasText: '封面预览' }).click();
+      await lib.waitForSelector('.rd-grid .rd-card', { timeout: 5000 });
+      const card = lib.locator('.rd-card').filter({ hasText: '城门与水管' }).first();
       assert.ok((await card.innerText()).indexOf('城门与水管') >= 0, '封面卡片没渲染这本书');
-      assert.strictEqual(await page.locator('.rd-card-img').count(), 1, 'EPUB 封面没被读出来');
-      await page.locator('.rd-viewmode button', { hasText: '详细列表' }).click();
-      await page.waitForSelector('.rd-shelf', { timeout: 5000 });
+      assert.strictEqual(await lib.locator('.rd-card-img').count(), 1, 'EPUB 封面没被读出来');
+      await lib.locator('.rd-viewmode button', { hasText: '详细列表' }).click();
+      await lib.waitForSelector('.rd-shelf', { timeout: 5000 });
     });
 
     await check('130 拖放区与去重：拖入态可见，同一本再选一次不重复', async () => {
-      await page.locator('.rd-drop').dispatchEvent('dragenter');
-      assert.ok((await page.locator('.rd-drop').getAttribute('class') || '').indexOf('rd-drop-on') >= 0,
+      const lib = await libPage();
+      await lib.locator('.rd-drop').dispatchEvent('dragenter');
+      assert.ok((await lib.locator('.rd-drop').getAttribute('class') || '').indexOf('rd-drop-on') >= 0,
         '拖入时没有高亮');
-      await page.locator('.rd-drop').dispatchEvent('dragleave');
-      const before = await page.locator('.rd-book').count();
-      await page.locator('.rd-file-actions .rd-primary').click();
-      await page.waitForTimeout(700);
-      assert.strictEqual(await page.locator('.rd-book').count(), before, '同一路径被登记了两次');
+      await lib.locator('.rd-drop').dispatchEvent('dragleave');
+      const before = await lib.locator('.rd-book').count();
+      await lib.locator('.rd-file-actions .rd-primary').click();
+      await lib.waitForTimeout(700);
+      assert.strictEqual(await lib.locator('.rd-book').count(), before, '同一路径被登记了两次');
     });
 
     await check('131 翻开读：独立三栏阅读窗口（目录 / 正文 / 笔记 / 回写）', async () => {
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      const lib = await libPage();
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       assert.strictEqual(await row.locator('button', { hasText: '本机打开' }).count(), 0,
         '「本机打开」应已下线');
       const [reader] = await Promise.all([
@@ -2411,7 +2526,7 @@ async function waitStep(page, n) {
       // 一键回写九格：只追加、带出处
       await reader.locator('.rr-note').first().locator('.rr-push').click();
       await reader.waitForSelector('.rr-pushed', { timeout: 10000 });
-      const line = await page.evaluate(async () => {
+      const line = await lib.evaluate(async () => {
         const r = await window.jiugeBridge.invoke('v1/diaries:list', { pageSize: 5 });
         const items = (r.data && r.data.items) || [];
         const hit = items.filter(function (x) {
@@ -2430,22 +2545,25 @@ async function waitStep(page, n) {
       await reader.waitForTimeout(700);
       const prog = await reader.locator('.rr-progress-text').innerText();
       assert.ok(/已读\s*\d+\s*\/\s*\d+\s*章/.test(prog), '进度没同步：' + prog);
-      const pct = await page.evaluate(async () => {
+      const pct = await lib.evaluate(async () => {
         const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
         const b = ((r.data && r.data.books) || []).filter(function (x) { return x.title === '城门与水管'; })[0];
         return b ? b.done : -1;
       });
       assert.ok(pct > 0, '主板书架没收到阅读进度：' + pct);
 
-      // 重复点「翻开读」不应叠第二个窗口
+      // 重复点「翻开读」不应叠第二个窗口。
+      // 注意数「阅读窗口」而不是数总窗口数：V3.14 起图书馆本身也是一扇窗口（主窗 + 图书馆 + 阅读）。
       await row.locator('button', { hasText: '翻开读' }).click();
-      await page.waitForTimeout(800);
-      assert.strictEqual(app.windows().length, 2, '同一本书应复用窗口，不该叠窗');
+      await lib.waitForTimeout(800);
+      const readerWins = app.windows().filter(function (w) { return w.url().indexOf('reader/index.html') >= 0; }).length;
+      assert.strictEqual(readerWins, 1, '同一本书应复用窗口，不该叠窗（现有 ' + readerWins + ' 个阅读窗口）');
       await reader.close();
     });
 
     await check('132 阅读器详细功能：多字体 / 书签 / 书内搜索 / 划选标注 / 重开复原', async () => {
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      const lib = await libPage();
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const [rd] = await Promise.all([
         app.waitForEvent('window'),
         row.locator('button', { hasText: '翻开读' }).click()
@@ -2547,8 +2665,8 @@ async function waitStep(page, n) {
 
       // 关窗重开：标注与书签都要还在（锚点与书签都落了库）
       await rd.close();
-      await page.waitForTimeout(900);
-      const row2 = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      await lib.waitForTimeout(900);
+      const row2 = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const [rd2] = await Promise.all([
         app.waitForEvent('window'),
         row2.locator('button', { hasText: '翻开读' }).click()
@@ -2566,7 +2684,8 @@ async function waitStep(page, n) {
     });
 
     await check('133 排印增强：两端对齐 / 缩进 / 版心 / 段距 / 标点挤压 / 不横向溢出', async () => {
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      const lib = await libPage();
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const [rd] = await Promise.all([
         app.waitForEvent('window'),
         row.locator('button', { hasText: '翻开读' }).click()
@@ -2646,10 +2765,10 @@ async function waitStep(page, n) {
 
       // 偏好要记住：重开窗口不该退回默认
       await rd.close();
-      await page.waitForTimeout(600);
+      await lib.waitForTimeout(600);
       const [rd2] = await Promise.all([
         app.waitForEvent('window'),
-        page.locator('.rd-book').filter({ hasText: '城门与水管' }).first()
+        lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first()
           .locator('button', { hasText: '翻开读' }).click()
       ]);
       await rd2.waitForSelector('.rr-app', { timeout: 20000 });
@@ -2664,7 +2783,8 @@ async function waitStep(page, n) {
     });
 
     await check('134 完读率轻互动：章末卡 → 继续下一章 → 摘录计数 → 续读条', async () => {
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      const lib = await libPage();
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const [rd] = await Promise.all([
         app.waitForEvent('window'),
         row.locator('button', { hasText: '翻开读' }).click()
@@ -2769,10 +2889,10 @@ async function waitStep(page, n) {
 
       // T1：关窗重开出现续读条（位置已存），5 秒内可见
       await rd.close();
-      await page.waitForTimeout(700);
+      await lib.waitForTimeout(700);
       const [rd2] = await Promise.all([
         app.waitForEvent('window'),
-        page.locator('.rd-book').filter({ hasText: '城门与水管' }).first()
+        lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first()
           .locator('button', { hasText: '翻开读' }).click()
       ]);
       await rd2.waitForSelector('.rr-app', { timeout: 20000 });
@@ -2800,8 +2920,9 @@ async function waitStep(page, n) {
     });
 
     await check('135 双击书架直接读 + 三阶九问浮窗可拖可折可唤回', async () => {
+      const lib = await libPage();
       // 双击书行整块（不是「翻开读」按钮）就该打开阅读窗
-      const row = page.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
+      const row = lib.locator('.rd-book').filter({ hasText: '城门与水管' }).first();
       const [rd] = await Promise.all([
         app.waitForEvent('window'),
         row.dblclick()
@@ -3180,7 +3301,7 @@ async function waitStep(page, n) {
     });
 
     await check('137 闪念快记：原文留自由记录，收件箱恰好多一条且重进不重复', async () => {
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(350);
       await page.locator('.free-view .fw-tab').nth(1).click();
       await page.waitForTimeout(200);
@@ -3206,7 +3327,7 @@ async function waitStep(page, n) {
       const hit = page.locator('.gtd-item').filter({ hasText: stamp });
       assert.strictEqual(await hit.count(), 1, '收件箱没同步到这一条（或多同步了一条）');
       // 再回一次自由记录：onMounted 会补跑 pending 同步，按 source 去重不应产生第二条
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(400);
       await page.locator('.nav-item').first().click();
       await page.waitForTimeout(200);
@@ -3219,7 +3340,7 @@ async function waitStep(page, n) {
     });
 
     await check('138 长文撰写：海明威体检只标色、不改写、写作/编辑双模式', async () => {
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(300);
       await page.locator('.free-view .fw-tab').nth(2).click();
       await page.waitForTimeout(250);
@@ -3241,7 +3362,7 @@ async function waitStep(page, n) {
     });
 
     await check('139 删闪念：原文与对应未完成的收件箱任务一并删除（Q3 A）', async () => {
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(350);
       await page.locator('.free-view .fw-tab').nth(1).click();
       await page.waitForTimeout(200);
@@ -3258,7 +3379,7 @@ async function waitStep(page, n) {
       await page.waitForTimeout(250);
       assert.strictEqual(await page.locator('.gtd-item').filter({ hasText: stamp }).count(), 1);
       // 回自由记录删掉原文
-      await page.locator('.nav-item').nth(3).click();
+      await page.locator('.nav-mod', { hasText: '自由记录' }).click();
       await page.waitForTimeout(350);
       await page.locator('.free-view .fw-tab').nth(1).click();
       await page.waitForTimeout(200);
@@ -3311,7 +3432,7 @@ async function waitStep(page, n) {
     });
 
     await check('142 可回滚版本：备份后列出，两步确认后真的执行（R-10）', async () => {
-      await page.locator('.nav-item').nth(6).click();
+      await page.locator('.nav-item').nth(5).click();
       await page.waitForTimeout(300);
       await page.getByRole('button', { name: '立即备份' }).click();
       await page.waitForTimeout(800);
@@ -3349,7 +3470,7 @@ async function waitStep(page, n) {
     });
 
     await check('144 四语言：切到 English 界面文案跟随，切回中文可还原（R-12）', async () => {
-      await page.locator('.nav-item').nth(7).click();
+      await page.locator('.nav-item').nth(6).click();
       await page.waitForTimeout(300);
       const before = await page.locator('.nav').innerText();
       await page.locator('.seg').filter({ hasText: 'English' }).first().click();
@@ -3361,6 +3482,1202 @@ async function waitStep(page, n) {
       await page.waitForTimeout(600);
       const back = await page.locator('.nav').innerText();
       assert.strictEqual(back, before, '切回简体中文后没有完整还原');
+    });
+
+    await check('145 书架整理：搜索只筛渲染 / 排序记忆 / 编辑信息不动原文件 / 再读 / 拖动排序落库', async () => {
+      const lib = await libPage();
+      await lib.waitForTimeout(400);
+      // 入口先归位：前序用例可能停在封面预览 / 别的分组 / 留着搜索词
+      await lib.locator('.rd-gchip', { hasText: '全部' }).first().click();
+      await lib.locator('.rd-viewmode button', { hasText: '详细列表' }).click();
+      await lib.locator('.rd-search').fill('');
+      await lib.waitForTimeout(280);
+      // 自带两本书：跑到这里时前面用例的书多已移出，靠遗留状态会「0 本无法验」
+      const SAMPLES = ['整理样本甲', '整理样本乙'];
+      // V3.14：手写书名那一行已下线，样本改走领域层写库——
+      // 图书馆窗口监听主进程广播，写完自己重取一遍，不用退出再进。
+      await page.evaluate(async (names) => {
+        for (const t of names) {
+          await window.jiugeBridge.invoke('v1/domain:call', {
+            name: 'reading.addBook', args: [{ title: t, total: 200, unit: '页' }]
+          });
+        }
+      }, SAMPLES);
+      await lib.waitForTimeout(800);
+      const rows0 = await lib.locator('.rd-shelf .rd-book').count();
+      assert.ok(rows0 >= 2, '书架不足两本，没法验整理功能：' + rows0);
+
+      // 搜索：只在渲染层过滤，库里一本都不少
+      await lib.locator('.rd-search').fill('不存在的书名xyz');
+      await lib.waitForTimeout(280);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').count(), 0, '搜索没生效');
+      // V3.5 空态文案改成「没有符合条件的书。换个词、换个分组，或清空筛选。」——
+      // 分组筛选上线后，搜不到不一定是词的问题，也可能是当前分组里本来就没有。
+      // 断言跟着改，不放宽：仍要求给出可操作的空态，且必须提到清空筛选这条路。
+      const emptyText = await lib.locator('.rd-empty').first().innerText();
+      assert.ok(emptyText.indexOf('没有符合条件的书') >= 0, '搜不到时没给空态：' + emptyText);
+      assert.ok(emptyText.indexOf('清空筛选') >= 0, '空态没给出「清空筛选」这条退路：' + emptyText);
+      await lib.locator('.rd-search').fill('');
+      await lib.waitForTimeout(280);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').count(), rows0, '清空搜索后书架没复原');
+
+      // 搜索态禁拖：看不见的书不该被挤动
+      await lib.locator('.rd-search').fill('样本甲');
+      await lib.waitForTimeout(220);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').count(), 1, '按书名搜索没筛出一本');
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').first().getAttribute('draggable'), 'false',
+        '搜索态仍可拖，会把筛掉的书挤出可见区');
+      await lib.locator('.rd-search').fill('');
+      await lib.waitForTimeout(220);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').first().getAttribute('draggable'), 'true',
+        '手动排序态拖不动');
+
+      // 排序切「最近在读」并记忆；该态同样禁拖
+      await lib.locator('.rd-sort .rd-mini', { hasText: '最近在读' }).click();
+      await lib.waitForTimeout(260);
+      assert.strictEqual(await lib.evaluate(() => localStorage.getItem('jiuge.reading.sortMode')), 'recent',
+        '排序偏好没记住');
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').first().getAttribute('draggable'), 'false',
+        '最近在读态仍可拖');
+      await lib.locator('.rd-sort .rd-mini', { hasText: '手动排序' }).click();
+      await lib.waitForTimeout(260);
+
+      const before = await page.evaluate(async () => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const b = (r.data.books || [])[0] || {};
+        return { id: b.id, title: b.title, path: b.filePath, order: b.order };
+      });
+
+      // 编辑书籍信息：只改书架显示，文件路径一个字节不动
+      await lib.locator('.rd-shelf .rd-book').first().locator('.rd-mini', { hasText: '编辑' }).click();
+      await lib.waitForTimeout(320);
+      assert.strictEqual(await lib.locator('.rd-modal').count(), 1, '编辑弹窗没打开');
+      assert.strictEqual(await lib.evaluate(() => document.activeElement && document.activeElement.id),
+        'rdEditTitle', '弹窗打开没把焦点放进书名');
+      await lib.locator('#rdEditTitle').fill(before.title + '·改');
+      await lib.locator('#rdEditAuthor').fill('临时作者');
+      await lib.locator('.rd-modal .rd-primary').click();
+      await lib.waitForTimeout(700);
+      assert.strictEqual(await lib.locator('.rd-modal').count(), 0, '保存后弹窗没关');
+      const edited = await page.evaluate(async (id) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const b = (r.data.books || []).find((x) => x.id === id) || {};
+        return { title: b.title, author: b.author, path: b.filePath, order: b.order };
+      }, before.id);
+      assert.strictEqual(edited.title, before.title + '·改', '书名没改到');
+      assert.strictEqual(edited.author, '临时作者', '作者没改到');
+      assert.strictEqual(edited.path, before.path, '改书名动了原文件路径');
+      assert.strictEqual(edited.order, before.order, '改书名把书架顺序也改了');
+
+      // Esc 关弹窗
+      await lib.locator('.rd-shelf .rd-book').first().locator('.rd-mini', { hasText: '编辑' }).click();
+      await lib.waitForTimeout(260);
+      await lib.keyboard.press('Escape');
+      await lib.waitForTimeout(320);
+      assert.strictEqual(await lib.locator('.rd-modal').count(), 0, 'Esc 关不掉编辑弹窗');
+
+      // 再读一遍：进度归零、状态回到在读
+      await lib.locator('.rd-shelf .rd-book').first().locator('.rd-mini', { hasText: '编辑' }).click();
+      await lib.waitForTimeout(260);
+      await lib.locator('.rd-modal .rd-mini', { hasText: '再读一遍' }).click();
+      await lib.waitForTimeout(800);
+      const rr = await page.evaluate(async (id) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const b = (r.data.books || []).find((x) => x.id === id) || {};
+        return { done: b.done, pct: b.pct, status: b.status };
+      }, before.id);
+      assert.strictEqual(rr.done, 0, '再读一遍没把进度归零：' + JSON.stringify(rr));
+      assert.strictEqual(rr.pct, 0, '再读一遍进度条没归零');
+
+      // 拖动排序：渲染层只报 id 顺序，重排由领域层做——倒序写入后 board 必须跟着改
+      const re = await page.evaluate(async () => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const ids = (r.data.books || []).map((b) => b.id);
+        if (ids.length < 2) return { skip: true };
+        const want = ids.slice().reverse();
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.reorder', args: [want] });
+        const r2 = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        return { want: want, got: (r2.data.books || []).map((b) => b.id) };
+      });
+      if (!re.skip) assert.deepStrictEqual(re.got, re.want, '拖动排序没落库：' + JSON.stringify(re));
+
+      // 收尾：书名改回去、清掉临时作者（后面的断言还按原名找书）
+      // 注：图书馆窗口不关——V3.14 起它是独立窗口，中栏那个「← 关闭窗口」点下去
+      // 会把整扇窗关掉，后面所有用例就没地方跑了。
+      await page.evaluate(async (p) => {
+        await window.jiugeBridge.invoke('v1/domain:call',
+          { name: 'reading.updateBook', args: [p.id, { title: p.title, author: '' }] });
+      }, before);
+      // 两本样本清掉，别把书架状态留给后面的用例
+      await page.evaluate(async (names) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const ids = (r.data.books || []).filter((b) => names.indexOf(b.title) >= 0).map((b) => b.id);
+        for (let i = 0; i < ids.length; i += 1) {
+          await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [ids[i]] });
+        }
+      }, SAMPLES);
+    });
+
+    await check('146 V3.5 书架分组 / 收藏夹：派生分组、归组、改名合并、解散不删书', async () => {
+      const lib = await libPage();
+      await lib.waitForTimeout(400);
+      // 前序用例若中途断言失败，可能把搜索词 / 分组筛选 / 封面预览留在界面上。
+      // 这条用例自带样本，也必须自带干净入口，不能让上一条的失败串到下一条。
+      await lib.locator('.rd-gchip', { hasText: '全部' }).first().click();
+      await lib.locator('.rd-viewmode button', { hasText: '详细列表' }).click();
+      await lib.locator('.rd-search').fill('');
+      await lib.waitForTimeout(280);
+      // 自带样本：不靠前面用例留下的书架，跑子集也能验（手写加书已下线，走领域层）
+      const SAMPLES = ['分组样本甲', '分组样本乙'];
+      await page.evaluate(async (names) => {
+        for (const t of names) {
+          await window.jiugeBridge.invoke('v1/domain:call', {
+            name: 'reading.addBook', args: [{ title: t, total: 200, unit: '页' }]
+          });
+        }
+      }, SAMPLES);
+      await lib.waitForTimeout(800);
+      const rows0 = await lib.locator('.rd-shelf .rd-book').count();
+      assert.ok(rows0 >= 2, '分组用例的书架不足两本：' + rows0);
+      assert.strictEqual(await lib.locator('.rd-groups').count(), 1, '分组标签条没渲染');
+      assert.ok((await lib.locator('.rd-groups').innerText()).indexOf('★ 收藏夹') >= 0, '收藏夹入口缺失');
+
+      const boardOf = () => lib.evaluate(async () => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        return r.data;
+      });
+
+      // 收藏：只是筛选视图，不新建实体，书一本不少
+      await lib.locator('.rd-shelf .rd-book').first().locator('.rd-fav').click();
+      await lib.waitForTimeout(600);
+      let bd = await boardOf();
+      assert.strictEqual(bd.favoriteCount, 1, '收藏数没进派生统计：' + JSON.stringify(bd.groups));
+      assert.ok((await lib.locator('.rd-groups').innerText()).indexOf('★ 收藏夹 1') >= 0, '收藏夹 chip 没更新');
+      await lib.locator('.rd-gchip', { hasText: '★ 收藏夹' }).click();
+      await lib.waitForTimeout(320);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').count(), 1, '收藏夹没只筛出 1 本');
+      await lib.locator('.rd-gchip', { hasText: '全部' }).first().click();
+      await lib.waitForTimeout(320);
+      assert.strictEqual(await lib.locator('.rd-shelf .rd-book').count(), rows0, '回到全部没复原');
+
+      // 新建分组：分组从书派生，空分组活不下来，所以第一本会被放进去
+      await lib.locator('.rd-groups .rd-mini', { hasText: '＋ 新分组' }).click();
+      await lib.waitForTimeout(220);
+      await lib.locator('[aria-label="新分组名"]').fill('V35测试组');
+      await lib.locator('.rd-groups .rd-mini', { hasText: '建分组' }).click();
+      await lib.waitForTimeout(650);
+      bd = await boardOf();
+      const inGroup = (bd.books || []).filter((b) => b.group === 'V35测试组');
+      assert.strictEqual(inGroup.length, 1, '新建分组没带上第一本书');
+      assert.ok((bd.groups || []).some((g) => g.name === 'V35测试组' && g.count === 1),
+        '派生 groups 没反映分组：' + JSON.stringify(bd.groups));
+
+      // 编辑弹窗里把第二本也归进同一组
+      await lib.locator('.rd-gchip', { hasText: '全部' }).first().click();
+      await lib.waitForTimeout(260);
+      await lib.locator('.rd-shelf .rd-book').nth(1).locator('.rd-mini', { hasText: '编辑' }).click();
+      await lib.waitForTimeout(300);
+      assert.strictEqual(await lib.locator('#rdEditGroup').count(), 1, '编辑弹窗缺「所属分组」');
+      await lib.locator('#rdEditGroup').selectOption('V35测试组');
+      await lib.locator('.rd-modal .rd-primary').click();
+      await lib.waitForTimeout(700);
+      bd = await boardOf();
+      assert.strictEqual((bd.books || []).filter((b) => b.group === 'V35测试组').length, 2,
+        '第二本没归进分组');
+      assert.ok((bd.groups || []).some((g) => g.name === 'V35测试组' && g.count === 2), '分组计数没到 2');
+
+      // 重命名（同名合并由领域层 golden 覆盖），界面回到新名字
+      await lib.locator('.rd-gchip', { hasText: 'V35测试组' }).click();
+      await lib.waitForTimeout(260);
+      await lib.locator('.rd-groups .rd-mini', { hasText: '重命名「' }).click();
+      await lib.waitForTimeout(220);
+      await lib.locator('[aria-label="分组改名"]').fill('V35改名组');
+      await lib.locator('.rd-groups .rd-mini', { hasText: '改名' }).click();
+      await lib.waitForTimeout(650);
+      bd = await boardOf();
+      assert.ok((bd.groups || []).some((g) => g.name === 'V35改名组' && g.count === 2), '改名后分组没跟上');
+      assert.ok(!(bd.groups || []).some((g) => g.name === 'V35测试组'), '旧分组名没清掉');
+      assert.strictEqual((bd.books || []).filter((b) => b.group === 'V35改名组').length, 2,
+        '改名把书弄丢了');
+
+      // 解散分组：只去标签，书一本都不能少
+      await lib.locator('.rd-groups .rd-mini', { hasText: '解散分组' }).click();
+      await lib.waitForTimeout(220);
+      await lib.locator('.rd-groups .rd-mini', { hasText: '确认解散' }).click();
+      await lib.waitForTimeout(650);
+      bd = await boardOf();
+      assert.ok(!(bd.groups || []).some((g) => /V35/.test(g.name)), '分组没解散');
+      assert.strictEqual((bd.books || []).filter((b) => /分组样本/.test(b.title)).length, 2,
+        '解散分组把书删了');
+      assert.ok((bd.books || []).filter((b) => /分组样本/.test(b.title)).every((b) => !b.group),
+        '解散后还留着分组标签');
+
+      // 收尾：样本清掉，别把状态留给后面的用例
+      await lib.evaluate(async (names) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        const ids = (r.data.books || []).filter((b) => names.indexOf(b.title) >= 0).map((b) => b.id);
+        for (let i = 0; i < ids.length; i += 1) {
+          await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [ids[i]] });
+        }
+        localStorage.setItem('jiuge.reading.groupFilter', '__all__');
+      }, SAMPLES);
+    });
+
+    await check('147 V3.5 阅读方式：PDF 原页 / 连续滚动 / 双页 / 全屏（自带双页夹具）', async () => {
+      await page.evaluate(async (paths) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.addFiles', args: [paths] });
+      }, [PDF_FIXTURE]);
+      await page.waitForTimeout(500);
+      const book = await page.evaluate(async (fp) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        return (r.data.books || []).find((b) => b.filePath === fp) || null;
+      }, PDF_FIXTURE);
+      assert.ok(book && book.id, 'PDF 夹具没登进书架');
+
+      const [rd] = await Promise.all([
+        app.waitForEvent('window'),
+        page.evaluate((id) => window.jiugeBridge.invoke('v1/reader:open', { bookId: id }), book.id)
+      ]);
+      rd.on('pageerror', function (err) { jsErrors.push('reader-v35: ' + String(err && err.message || err)); });
+      await rd.waitForSelector('#rrApp', { timeout: 30000 });
+      // 等第一页真被 pdf.js 画出来：只等 DOM 会验到「容器在但画布空」
+      await rd.waitForSelector('#rrPdf .rr-pdf-page canvas', { timeout: 45000 });
+
+      // 偏好跨窗口共享，不能假定是默认态；按 aria-pressed 归位再验
+      const ensureMode = async (sel, want) => {
+        const on = (await rd.locator(sel).getAttribute('aria-pressed')) === 'true';
+        if (on !== want) { await rd.locator(sel).click(); await rd.waitForTimeout(500); }
+        assert.strictEqual((await rd.locator(sel).getAttribute('aria-pressed')), String(want),
+          sel + ' 没切到 ' + want);
+      };
+      await ensureMode('#rrFlow', false);
+      await ensureMode('#rrSpread', false);
+
+      assert.strictEqual(await rd.locator('#rrPdf').isVisible(), true, 'PDF 画布容器没显示');
+      assert.strictEqual(await rd.locator('#rrPage').evaluate((el) => el.style.display), 'none',
+        'PDF 不该再挂空 iframe 盖住画布');
+      assert.ok((await rd.locator('#rrModePages').innerText()).indexOf('2 页') >= 0, '页数不是解码器给的 2 页');
+      assert.strictEqual(await rd.locator('#rrToc .rr-toc-item').count(), 2, '按页目录没生成 2 项');
+      assert.ok((await rd.locator('#rrToc .rr-toc-name').first().innerText()).indexOf('第 1 页') >= 0,
+        'PDF 目录被兜底成「第 N 节」了');
+      assert.strictEqual(await rd.locator('#rrPdf .rr-pdf-page').count(), 1, '按页模式不该一次铺开所有页');
+
+      // 连续滚动：全部页依次排开
+      await ensureMode('#rrFlow', true);
+      assert.strictEqual(await rd.locator('#rrPdf .rr-pdf-page').count(), 2, '连续滚动没把两页都铺上');
+      assert.ok(await rd.locator('#rrPdf .rr-pdf-page canvas').count() >= 1, '连续滚动没画出画布');
+
+      // 双页并排：grid 换成两列
+      await ensureMode('#rrSpread', true);
+      const cls = await rd.locator('#rrPdf .rr-pdf-pages').getAttribute('class');
+      assert.ok(cls.indexOf('rr-pdf-spread') >= 0, '双页并排没切到两列 grid：' + cls);
+
+      // 全屏：三栏 / 工具条 / 伴读浮窗全收，退出按钮可见
+      await rd.locator('#rrFull').click();
+      await rd.waitForTimeout(700);
+      assert.strictEqual(await rd.locator('#rrApp').getAttribute('data-full'), '1', '全屏标记没打上');
+      assert.strictEqual(await rd.evaluate(() => document.body.getAttribute('data-full')), '1',
+        'body 没打全屏标记，伴读浮窗会漏出来');
+      assert.strictEqual(await rd.locator('#rrFullExit').isVisible(), true, '退出全屏按钮没出现');
+      assert.strictEqual(await rd.locator('.rr-ask').isVisible(), false, '全屏里还留着伴读浮窗');
+      await rd.locator('#rrFullExit').click();
+      await rd.waitForTimeout(500);
+      assert.strictEqual(await rd.locator('#rrApp').getAttribute('data-full'), '0', '退出全屏没还原');
+
+      // 归位偏好并收尾：别把「连续 + 双页」留给后面的用例
+      await ensureMode('#rrSpread', false);
+      await ensureMode('#rrFlow', false);
+      await rd.close();
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+      }, book.id);
+    });
+
+    await check('148 V3.5 流式正文：书内连续滚动自动接章 / 双页并排（分页两页）/ 全屏', async () => {
+      await page.evaluate(async (paths) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.addFiles', args: [paths] });
+      }, [TXT_FIXTURE]);
+      await page.waitForTimeout(500);
+      const book = await page.evaluate(async (fp) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        return (r.data.books || []).find((b) => b.filePath === fp) || null;
+      }, TXT_FIXTURE);
+      assert.ok(book && book.id, 'TXT 夹具没登进书架');
+
+      const [rd] = await Promise.all([
+        app.waitForEvent('window'),
+        page.evaluate((id) => window.jiugeBridge.invoke('v1/reader:open', { bookId: id }), book.id)
+      ]);
+      rd.on('pageerror', function (err) { jsErrors.push('reader-v35-txt: ' + String(err && err.message || err)); });
+      await rd.waitForSelector('#rrApp', { timeout: 30000 });
+      const frameOf = () => rd.frames().filter((f) => f !== rd.mainFrame())[0];
+      await frameOf().waitForSelector('p', { timeout: 20000 });
+
+      const ensureMode = async (sel, want) => {
+        const on = (await rd.locator(sel).getAttribute('aria-pressed')) === 'true';
+        if (on !== want) { await rd.locator(sel).click(); await rd.waitForTimeout(600); }
+        assert.strictEqual((await rd.locator(sel).getAttribute('aria-pressed')), String(want),
+          sel + ' 没切到 ' + want);
+      };
+      await ensureMode('#rrFlow', false);
+      await ensureMode('#rrSpread', false);
+      await ensureMode('#rrPaged', false);
+      assert.strictEqual(await rd.locator('#rrPdf').isVisible(), false, '流式正文不该挂 PDF 画布');
+
+      // 分章态：iframe 是单章文档，没有连续滚动的 section
+      assert.strictEqual(await frameOf().locator('.rr-flow-ch').count(), 0,
+        '分章态就出现了连续滚动 section');
+
+      // 连续滚动：换成一个多 section 的 srcdoc，滚到底自动接下一章
+      await ensureMode('#rrFlow', true);
+      await frameOf().waitForSelector('.rr-flow-ch', { timeout: 20000 });
+      const first = await frameOf().locator('.rr-flow-ch').count();
+      assert.ok(first >= 1, '连续滚动没铺出章节 section');
+      await frameOf().evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await rd.waitForTimeout(1100);
+      const after = await frameOf().locator('.rr-flow-ch').count();
+      assert.ok(after > first, '滚到底没自动接下一章：' + first + ' → ' + after);
+
+      // 双页并排：现在是「分页的两页」（V3.12 改口径），不是把整章正文分两栏
+      await ensureMode('#rrSpread', true);
+      assert.strictEqual(await rd.locator('#rrFlow').getAttribute('aria-pressed'), 'false',
+        '双页并排没退出连续滚动（两种摆法互斥）');
+      await frameOf().waitForSelector('#rr-pg-in', { timeout: 20000 });
+      const pg = await frameOf().evaluate(() => {
+        const inner = document.getElementById('rr-pg-in');
+        if (!inner) return null;
+        const cs = getComputedStyle(inner);
+        return {
+          gap: cs.columnGap,
+          bodyCol: getComputedStyle(document.body).columnCount,
+          sw: inner.scrollWidth,
+          cw: inner.clientWidth
+        };
+      });
+      assert.ok(pg, '双页并排没有分页容器：还是旧做法（整章正文分两栏）');
+      assert.strictEqual(pg.bodyCol, 'auto', 'body 还在分栏：右栏会变成整章后半段');
+      assert.strictEqual(pg.gap, '44px', '双页的页间缝不对：' + pg.gap);
+      assert.ok(pg.sw > pg.cw + 10, '双页只排出一栏，没有往右接第二页');
+
+      // 全屏：与 PDF 共用同一套 data-full 收起规则
+      await rd.locator('#rrFull').click();
+      await rd.waitForTimeout(650);
+      assert.strictEqual(await rd.locator('#rrApp').getAttribute('data-full'), '1', '流式全屏没打标记');
+      assert.strictEqual(await rd.evaluate(() => document.body.getAttribute('data-full')), '1',
+        '全屏没在 body 上打标记');
+      await rd.locator('#rrFullExit').click();
+      await rd.waitForTimeout(450);
+      assert.strictEqual(await rd.locator('#rrApp').getAttribute('data-full'), '0', '流式全屏没退出');
+
+      await ensureMode('#rrSpread', false);
+      // 偏好跨窗共享：分页态必须归位，否则后面每条用例打开的书都是一页一屏
+      await ensureMode('#rrPaged', false);
+      await ensureMode('#rrFlow', false);
+      await rd.close();
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+      }, book.id);
+    });
+
+    await check('149 V3.6 学习成长右栏：在读书 / 主题学习状态 + 快捷访问', async () => {
+      const invoke = (name, args) => page.evaluate(
+        (p) => window.jiugeBridge.invoke('v1/domain:call', { name: p.name, args: p.args }),
+        { name, args }
+      );
+      const rawOf = async (name) => (await invoke(name, [])).data;
+      let themeId = '', shelfBookId = '';
+      try {
+        // 自带夹具：图书馆书架一本 + 主题书单一本，书名不同，验两源合并
+        await invoke('growth.addTheme', [{ title: 'V36联动主题甲', note: '右栏联动夹具' }]);
+        await invoke('reading.addBook', [{ title: 'V36书架在读书', total: 200, done: 40, status: 'reading' }]);
+        const gs = await rawOf('growth.read');
+        const t = (gs.themes || []).find((x) => x.title === 'V36联动主题甲');
+        assert.ok(t && t.id, '主题夹具没建上');
+        themeId = t.id;
+        await invoke('growth.addBook', [themeId, { title: 'V36主题在读书', total: 100 }]);
+        const gs2 = await rawOf('growth.read');
+        const t2 = (gs2.themes || []).find((x) => x.id === themeId);
+        const tb = t2 && (t2.books || []).find((b) => b.title === 'V36主题在读书');
+        assert.ok(tb && tb.id, '主题书夹具没建上');
+        await invoke('growth.advanceBook', [themeId, tb.id, 30]);
+        const rs = await rawOf('reading.read');
+        const sb = (rs.books || []).find((b) => b.title === 'V36书架在读书');
+        assert.ok(sb && sb.id, '书架在读书夹具没建上');
+        shelfBookId = sb.id;
+
+        // 重新 mount 右栏：先回今天，再双击学习成长格
+        await page.locator('.nav-item').first().click();
+        await page.waitForTimeout(300);
+        await page.locator('.cell[data-cell="growth"] .cell-label').dblclick();
+        await page.waitForTimeout(800);
+        assert.strictEqual(await page.locator('.growth-view').count(), 1, '没进学习成长格');
+        const nowCard = page.locator('.gc-now[aria-label="目前在读的图书"]');
+        const topicCard = page.locator('.gc-topic[aria-label="主题学习状态"]');
+        assert.strictEqual(await nowCard.count(), 1, '右栏缺「目前在读」卡');
+        assert.strictEqual(await topicCard.count(), 1, '右栏缺「主题学习」卡');
+        const nowText = await nowCard.innerText();
+        assert.ok(nowText.indexOf('V36书架在读书') >= 0, '书架在读书没联动：' + nowText);
+        assert.ok(nowText.indexOf('V36主题在读书') >= 0, '主题书单在读书没联动：' + nowText);
+        assert.ok(await nowCard.locator('.gc-bar i').count() >= 2, '在读书缺进度条');
+        const topicText = await topicCard.innerText();
+        assert.ok(topicText.indexOf('V36联动主题甲') >= 0, '主题状态没联动：' + topicText);
+        assert.ok(topicText.indexOf('在读 1') >= 0, '主题在读数不对：' + topicText);
+
+        // 点主题行 → 中栏与右栏同时选中（学习详情切成「主题阅读」）
+        await topicCard.locator('.gc-topic-row', { hasText: 'V36联动主题甲' }).click();
+        await page.waitForTimeout(450);
+        assert.strictEqual(await topicCard.locator('.gc-topic-on').count(), 1, '主题行没高亮选中');
+        assert.strictEqual(await page.locator('.growth-ctx > section').first().locator('.ctx-tag').innerText(),
+          '主题阅读', '点主题没把右栏详情切过去');
+
+        // 快捷访问：未关联文件的书点「去书架关联」→ 开图书馆窗口（V3.14 起是独立窗口）
+        await nowCard.locator('.gc-now-row', { hasText: 'V36书架在读书' }).locator('.gc-now-go').click();
+        await page.waitForTimeout(1200);
+        const lib = await libPage();
+        assert.strictEqual(await lib.locator('.lib-app').count(), 1, '快捷入口没开出图书馆窗口');
+      } finally {
+        // 夹具一律收走，不留脏状态给下一条用例
+        if (themeId) await invoke('growth.removeTheme', [themeId]).catch(() => {});
+        if (shelfBookId) await invoke('reading.removeBook', [shelfBookId]).catch(() => {});
+        await page.locator('.nav-item').first().click().catch(() => {});
+      }
+    });
+
+    await check('150 V3.7 复盘证据面板：Check 派生 / 上期回显 / Act 落成下一步', async () => {
+      const invoke = (name, args) => page.evaluate(
+        (p) => window.jiugeBridge.invoke('v1/domain:call', { name: p.name, args: p.args }),
+        { name, args }
+      );
+      const rawOf = async (name, args) => (await invoke(name, args || [])).data;
+      const pad = (n) => String(n).padStart(2, '0');
+      const dayText = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      const now = new Date();
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      const thisKey = dayText(monday);
+      const todayKey = dayText(now);
+      const prev = new Date(monday);
+      prev.setDate(prev.getDate() - 7);
+      const prevKey = dayText(prev);
+      const ACT_TEXT = 'V37每周只改一条：先清收件箱';
+      let taskId = '', doneId = '', bookId = '', dreamId = '';
+      try {
+        // 自带夹具：一条已完成 GTD 任务 / 一本在读书 / 一条在推目标 / 上期留的一句
+        await invoke('gtd.add', [{ title: 'V37夹具-已完成', status: 'next' }]);
+        const g0 = await rawOf('gtd.board', [todayKey]);
+        const t0 = (g0.groups.next || []).find((x) => x.title === 'V37夹具-已完成');
+        assert.ok(t0 && t0.id, 'GTD 夹具没建上');
+        doneId = t0.id;
+        await invoke('gtd.complete', [doneId]);
+        await invoke('reading.addBook', [{ title: 'V37在读书', total: 100, done: 30, status: 'reading' }]);
+        const rs = await rawOf('reading.read');
+        const bk = (rs.books || []).find((x) => x.title === 'V37在读书');
+        assert.ok(bk && bk.id, '在读书夹具没建上');
+        bookId = bk.id;
+        await invoke('dream.add', [{ title: 'V37目标夹具', status: 'doing' }]);
+        const ds = await rawOf('dream.read');
+        const dm = (ds.dreams || []).find((x) => x.title === 'V37目标夹具');
+        assert.ok(dm && dm.id, '目标夹具没建上');
+        dreamId = dm.id;
+        await invoke('saveReview', ['week', prevKey, ['', '', '上期说：把周复盘挪到周一早上']]);
+        await invoke('saveReview', ['week', thisKey, ['', '', '']]);
+
+        await page.locator('.nav-item').nth(2).click();
+        await page.waitForTimeout(800);
+        assert.strictEqual(await page.locator('.review').count(), 1, '没进回顾页');
+        const ev = page.locator('.rv-evidence');
+        assert.strictEqual(await ev.count(), 1, '缺本期证据卡');
+        assert.strictEqual(await ev.locator('.rv-ev-cell').count(), 5, '证据不是五格');
+        const evText = await ev.innerText();
+        ['今日六条', '本周完成', '落笔天数', '目标推进', '在读书', '不是评分'].forEach((w) => {
+          assert.ok(evText.indexOf(w) >= 0, '证据卡缺项：' + w);
+        });
+        assert.ok(Number((await ev.locator('.rv-ev-val').nth(1).innerText()).replace(/\D/g, '')) >= 1,
+          '本周完成没读到刚勾掉的那条');
+        assert.ok(Number((await ev.locator('.rv-ev-val').nth(4).innerText()).replace(/\D/g, '')) >= 1,
+          '在读书没读到刚建的那本');
+
+        const prevCard = page.locator('.rv-prev');
+        assert.strictEqual(await prevCard.count(), 1, '上期那句没回显');
+        assert.ok((await prevCard.innerText()).indexOf('把周复盘挪到周一早上') >= 0, '上期结论不对');
+        const titles = await page.locator('.rv-q-title').allInnerTexts();
+        assert.strictEqual(titles.length, 3, '三问不是三格');
+        assert.ok(titles[0].indexOf('哪些做法真的有效') >= 0, '第 1 问口径不对');
+        assert.ok(titles[1].indexOf('为什么') >= 0, '第 2 问口径不对');
+        assert.ok(titles[2].indexOf('下期只改哪一条') >= 0, '第 3 问口径不对');
+
+        // Act：第 3 问落成 GTD「下一步」，且不碰今日六条
+        const focusBefore = await rawOf('gtd.focus', [todayKey]);
+        await page.locator('.rv-field textarea').nth(2).fill(ACT_TEXT);
+        await page.locator('.btn', { hasText: '保存复盘三问' }).click();
+        await page.waitForTimeout(450);
+        const railText = await page.locator('.context').innerText();
+        assert.ok(railText.indexOf('1 / 6') >= 0,
+          '存完第 3 问后右栏复盘完成度没刷新：' + railText.slice(0, 120));
+        const actBtn = page.locator('.rv-act-btn');
+        assert.ok(await actBtn.isEnabled(), '第 3 问有内容时落成按钮应可用');
+        await actBtn.click();
+        await page.waitForTimeout(700);
+        assert.ok((await page.locator('.rv-act-msg').innerText()).indexOf('已建成') >= 0,
+          'Act 没落成下一步');
+        const g1 = await rawOf('gtd.board', [todayKey]);
+        const made = (g1.groups.next || []).find((x) => x.title === ACT_TEXT);
+        assert.ok(made && made.id, 'GTD 下一步里没找到第 3 问那条');
+        taskId = made.id;
+        const focusAfter = await rawOf('gtd.focus', [todayKey]);
+        assert.strictEqual(focusAfter.count, focusBefore.count, 'Act 直接改了今日六条（跨天不结转）');
+        assert.ok((await actBtn.innerText()).indexOf('已落成下一步') >= 0, '落成后按钮没收敛');
+      } finally {
+        // 夹具与本期/上期答案一律收走，不留脏状态给下一条用例
+        if (taskId) await invoke('gtd.remove', [taskId]).catch(() => {});
+        if (doneId) await invoke('gtd.remove', [doneId]).catch(() => {});
+        if (bookId) await invoke('reading.removeBook', [bookId]).catch(() => {});
+        if (dreamId) await invoke('dream.remove', [dreamId]).catch(() => {});
+        await invoke('saveReview', ['week', prevKey, ['', '', '']]).catch(() => {});
+        await invoke('saveReview', ['week', thisKey, ['', '', '']]).catch(() => {});
+        await page.locator('.nav-item').first().click().catch(() => {});
+      }
+    });
+
+    await check('151 V3.8 今天页成长主线：目标证据 / 本周推进 / 在读三联 + 跳转', async () => {
+      const invoke = (name, args) => page.evaluate(
+        (p) => window.jiugeBridge.invoke('v1/domain:call', { name: p.name, args: p.args }),
+        { name, args }
+      );
+      const rawOf = async (name, args) => (await invoke(name, args || [])).data;
+      let dreamId = '', taskId = '', bookId = '';
+      try {
+        // 夹具：一条在推目标 + 一件今天完成的关联任务 + 一本刚翻过的在读的书
+        const goalTitle = 'V38在推目标';
+        const taskTitle = 'V38验证任务';
+        const bookTitle = 'V38在读书';
+        // 给目标一个近期限：右栏只铺 3 条，靠「快到期的排前面」把夹具顶到首屏，
+        // 不去改排序规则迁就测试（真实用户也是这么挑的）
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const due = new Date();
+        due.setDate(due.getDate() + 2);
+        const dueIso = due.getFullYear() + '-' + pad2(due.getMonth() + 1) + '-' + pad2(due.getDate());
+        await invoke('dream.add', [{ title: goalTitle, area: 'growth', horizon: 'short', progress: 20, dueDate: dueIso }]);
+        const ds = await rawOf('dream.read');
+        const goal = (ds.dreams || []).find((x) => x.title === goalTitle);
+        assert.ok(goal && goal.id, '目标夹具没建上');
+        dreamId = goal.id;
+
+        await invoke('gtd.add', [{ title: taskTitle, status: 'next' }]);
+        const gs = await rawOf('gtd.read');
+        const task = (gs.tasks || []).find((x) => x.title === taskTitle);
+        assert.ok(task && task.id, '任务夹具没建上');
+        taskId = task.id;
+        await invoke('dream.linkTask', [dreamId, taskId]);
+        await invoke('gtd.complete', [taskId]);
+
+        await invoke('reading.addBook', [{ title: bookTitle, total: 100, done: 25, status: 'reading' }]);
+        const rs = await rawOf('reading.read');
+        const book = (rs.books || []).find((x) => x.title === bookTitle);
+        assert.ok(book && book.id, '书架夹具没建上');
+        bookId = book.id;
+        // 标明「刚翻过」，保证它是右栏那条最近在读
+        await invoke('reading.touch', [bookId, Date.now()]);
+
+        // 回今天页，右栏重新 mount 才会重取三源。
+        // 只点「今天」不会重建组件（本来就停在这一页），所以先切走再切回来。
+        await page.locator('.nav-item').nth(1).click();
+        await page.waitForTimeout(350);
+        await page.locator('.nav-item').first().click();
+        await page.waitForTimeout(900);
+        const card = page.locator('section[aria-label="成长主线"]');
+        assert.strictEqual(await card.count(), 1, '今天页右栏缺「成长主线」卡');
+        const text = await card.innerText();
+        assert.ok(text.indexOf(goalTitle) >= 0, '在推目标没联动：' + text);
+        assert.ok(text.indexOf('个在推') >= 0, '缺「在推」数量口径');
+        // 证据回流：关联任务今天完成 → 近 30 天完成 1 件
+        assert.ok(text.indexOf('完成 1 件相关任务') >= 0, '目标证据没回显：' + text);
+        assert.ok(text.indexOf('本周完成') >= 0 && text.indexOf('可执行') >= 0, '缺本周推进两项');
+        assert.ok(text.indexOf(bookTitle) >= 0, '在读的书没联动：' + text);
+        assert.ok(await card.locator('.tc-goal .tc-bar i').count() >= 1, '目标行缺进度条');
+
+        // 目标行点一下 → 梦想页（只跳转，不在这里改数据）
+        await card.locator('.tc-goal', { hasText: goalTitle }).click();
+        await page.waitForTimeout(800);
+        assert.strictEqual(await page.locator('.dream-view').count(), 1, '目标行没跳到梦想页');
+      } finally {
+        // 夹具一律收走，不留脏状态给下一条用例
+        if (taskId) await invoke('gtd.remove', [taskId]).catch(() => {});
+        if (dreamId) await invoke('dream.remove', [dreamId]).catch(() => {});
+        if (bookId) await invoke('reading.removeBook', [bookId]).catch(() => {});
+        await page.locator('.nav-item').first().click().catch(() => {});
+      }
+    });
+
+    await check('152 V3.9 练习反馈：技能卡点带天数 / 考试错因归类 / 阅读 #行动 回显', async () => {
+      const invoke = (name, args) => page.evaluate(
+        (p) => window.jiugeBridge.invoke('v1/domain:call', { name: p.name, args: p.args }),
+        { name, args }
+      );
+      const rawOf = async (name, args) => (await invoke(name, args || [])).data;
+      const pad2 = (n) => String(n).padStart(2, '0');
+      const day = (n) => {
+        const d = new Date();
+        d.setDate(d.getDate() + n);
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+      };
+      const skillTitle = 'V39卡点技能';
+      const examTitle = 'V39错因考试';
+      const bookTitle = 'V39行动书';
+      let skillId = '', examId = '', bookId = '';
+      try {
+        // 夹具①：技能 + 卡点挂了 20 天（超过 14 天阈值）+ 下次提高
+        await invoke('growth.addSkill', [{ title: skillTitle }]);
+        const g1 = await rawOf('growth.read');
+        const sk = (g1.skills || []).find((x) => x.title === skillTitle);
+        assert.ok(sk && sk.id, '技能夹具没建上');
+        skillId = sk.id;
+        await invoke('growth.setSkillBlocker', [skillId, '看不懂 groupby 的返回结构', day(-19)]);
+        await invoke('growth.setSkillNextUp', [skillId, '手写一遍三种聚合的差别']);
+
+        // 夹具②：考试记一次未通过 + 错因，再重考（历史必须留住）
+        await invoke('growth.addExam', [{ title: examTitle }]);
+        const g2 = await rawOf('growth.read');
+        const ex = (g2.exams || []).find((x) => x.title === examTitle);
+        assert.ok(ex && ex.id, '考试夹具没建上');
+        examId = ex.id;
+        await invoke('growth.setExamResult', [examId, 58, 60, ['calc', 'time']]);
+        await invoke('growth.retakeExam', [examId]);
+
+        // 夹具③：一本书 + 一条打了「行动」标签的笔记
+        await invoke('reading.addBook', [{ title: bookTitle, total: 200, status: 'reading' }]);
+        const rs = await rawOf('reading.read');
+        const bk = (rs.books || []).find((x) => x.title === bookTitle);
+        assert.ok(bk && bk.id, '书架夹具没建上');
+        bookId = bk.id;
+        await invoke('reading.addNote', [{
+          bookId: bookId, mode: 'leisure', bookTitle: bookTitle, type: 'idea',
+          quote: '要事第一', text: '把三个关键结果写进日历', page: 88, tags: ['行动']
+        }]);
+
+        // 进学习格（从今天页九格进去，走真实入口）
+        await page.locator('.nav-item').first().click();
+        await page.waitForTimeout(400);
+        await page.locator('.cell[data-cell="growth"] .cell-label').click();
+        await page.waitForTimeout(900);
+        assert.strictEqual(await page.locator('.growth-view').count(), 1, '没进学习成长页');
+
+        // 中栏：卡点天数与「未过 N」两个信号都要露出来
+        await page.locator('.g-tab', { hasText: '技能学习' }).click();
+        await page.waitForTimeout(350);
+        const skillRow = page.locator('.g-row', { hasText: skillTitle });
+        const badge = await skillRow.locator('.g-badge-warn').innerText();
+        assert.strictEqual(badge.trim(), '已卡 20 天', '中栏没显示卡点天数：' + badge);
+        assert.ok(await page.locator('.chip-row').innerText().then((t) => t.indexOf('卡点') >= 0), '技能统计里没有卡点计数');
+
+        // 右栏：选中技能 → 卡点年龄 + 下次提高都回填
+        await skillRow.click();
+        await page.waitForTimeout(800);
+        const rail = page.locator('#rail-drawer');
+        assert.ok((await rail.innerText()).indexOf('练习卡点') >= 0, '右栏缺「练习卡点」');
+        assert.strictEqual((await rail.locator('.gc-age').innerText()).trim(), '已卡 20 天');
+        assert.strictEqual(await rail.locator('input[aria-label="当前卡点"]').inputValue(), '看不懂 groupby 的返回结构');
+        assert.strictEqual(await rail.locator('input[aria-label="下次提高一点什么"]').inputValue(), '手写一遍三种聚合的差别');
+        assert.strictEqual(await rail.locator('.gc-stuck').count(), 1, '卡超两周却没给换方法的提示');
+
+        // 考试：重考后历史还在，错因勾选回填（这是「只增不改」的界面证据）
+        await page.locator('.g-tab', { hasText: '考试考证' }).click();
+        await page.waitForTimeout(350);
+        const examRow = page.locator('.g-row', { hasText: examTitle });
+        assert.ok((await examRow.innerText()).indexOf('未过 1') >= 0, '中栏没显示未过次数');
+        await examRow.click();
+        await page.waitForTimeout(800);
+        const railText = await rail.innerText();
+        assert.ok(railText.indexOf('这次错在哪') >= 0, '右栏缺错因归类');
+        assert.ok(railText.indexOf('历次最常错') >= 0, '右栏没汇总跨次错因');
+        assert.strictEqual(await rail.locator('.gc-cause').count(), 7, '错因枚举数量不对');
+        const on = await rail.locator('.gc-cause-on').allInnerTexts();
+        assert.deepStrictEqual(on.map((x) => x.trim()), ['计算失误', '时间不够'], '错因没回填到最近一次作答：' + JSON.stringify(on));
+        assert.ok(railText.indexOf('差 2 分') >= 0, '历次成绩没显示差多少分');
+
+        // 「只存错因」只改错因，不新增一次作答
+        await rail.locator('.gc-cause', { hasText: '审题偏差' }).click();
+        await rail.locator('button', { hasText: '只存错因' }).click();
+        await page.waitForTimeout(900);
+        const after = (await rawOf('growth.read')).exams.find((x) => x.id === examId);
+        assert.strictEqual(after.attempts.length, 1, '补记错因凭空多了一次作答');
+        assert.deepStrictEqual(after.attempts[0].causes, ['calc', 'time', 'misread'], '错因没存上');
+
+        // 阅读里的行动：打了 #行动 的笔记要回显，且点得到图书馆
+        assert.ok((await rail.innerText()).indexOf('阅读里的行动') >= 0, '右栏缺「阅读里的行动」');
+        const actRow = rail.locator('.gc-act-row', { hasText: '把三个关键结果写进日历' });
+        assert.strictEqual(await actRow.count(), 1, '#行动 笔记没回显');
+        assert.ok((await actRow.innerText()).indexOf(bookTitle) >= 0, '行动行没带书名');
+      } finally {
+        if (skillId) await invoke('growth.removeSkill', [skillId]).catch(() => {});
+        if (examId) await invoke('growth.removeExam', [examId]).catch(() => {});
+        if (bookId) await invoke('reading.removeBook', [bookId]).catch(() => {});
+        await page.locator('.nav-item').first().click().catch(() => {});
+      }
+    });
+
+    await check('153 V3.10 跨期对照：上期那句的下落 / 连续同一件事 / 链断了照实说', async () => {
+      const invoke = (name, args) => page.evaluate(
+        (p) => window.jiugeBridge.invoke('v1/domain:call', { name: p.name, args: p.args }),
+        { name, args }
+      );
+      const rawOf = async (name, args) => (await invoke(name, args || [])).data;
+      const pad = (n) => String(n).padStart(2, '0');
+      const dayText = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      const now = new Date();
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      const thisKey = dayText(monday);
+      const prevDate = new Date(monday);
+      prevDate.setDate(prevDate.getDate() - 7);
+      const prevKey = dayText(prevDate);
+      const prev2Date = new Date(monday);
+      prev2Date.setDate(prev2Date.getDate() - 14);
+      const prev2Key = dayText(prev2Date);
+      const PROMISE = '每天 23 点前关灯，手机放客厅';
+      const ACT2 = 'V310 每周只改一条：先清收件箱';
+      let linkId = '', madeId = '';
+      try {
+        // 自带夹具：连续三期说同一件事（标点不同），上期承诺落成过一条且已勾掉（老 source 口径）
+        await invoke('saveReview', ['week', thisKey, ['这期想早睡', '因为周日总被打断', PROMISE]]);
+        await invoke('saveReview', ['week', prevKey, ['上周想早睡', '总是刷手机到十二点', '每天23点前关灯 手机放客厅']]);
+        await invoke('saveReview', ['week', prev2Key, ['两周前也想早睡', '手机没拿出卧室', '每天23点前关灯，手机放客厅']]);
+        await invoke('gtd.add', [{
+          title: 'V310把充电器挪到客厅',
+          status: 'next',
+          note: '来自 ' + prevKey + ' 周复盘的第 3 问',
+          source: 'review'
+        }]);
+        const g0 = await rawOf('gtd.read');
+        const t0 = (g0.tasks || []).find((x) => x.title === 'V310把充电器挪到客厅');
+        assert.ok(t0 && t0.id, '承诺任务夹具没建上');
+        linkId = t0.id;
+        await invoke('gtd.complete', [linkId]);
+
+        await page.locator('.nav-item').nth(2).click();
+        await page.waitForTimeout(900);
+        assert.strictEqual(await page.locator('.review').count(), 1, '没进回顾页');
+        const card = page.locator('.rv-cross');
+        assert.strictEqual(await card.count(), 1, '缺跨期对照卡');
+        assert.ok((await card.locator('.rv-prev-text').innerText()).indexOf('手机放客厅') >= 0,
+          '上期那句没摆出来');
+
+        // ① 下落：已勾掉（老 source 也要追上），并且不判定做到没有
+        const link = card.locator('.rv-cross-link');
+        assert.ok((await link.getAttribute('class')).indexOf('rv-cross-done') >= 0, '已勾掉的承诺没认出来');
+        const linkText = await link.innerText();
+        assert.ok(linkText.indexOf('勾掉') >= 0 && linkText.indexOf('V310把充电器挪到客厅') >= 0,
+          '下落没说清是哪条：' + linkText);
+        assert.ok((await card.innerText()).indexOf('不替你打勾') >= 0, '又开始替人判定做到了');
+
+        // ② 连续同一件事：三期算同一句（标点差异不算不同说法）
+        const rep = await card.locator('.rv-cross-repeat').innerText();
+        assert.ok(rep.indexOf('最近 3 期') >= 0, '连续同一件事没数对：' + rep);
+        const histRows = await card.locator('.rv-hist-row').allInnerTexts();
+        assert.ok(histRows.length >= 1 && histRows[0].indexOf(prev2Key.slice(5)) >= 0,
+          '前几期没列到再上期：' + JSON.stringify(histRows));
+        assert.ok((await card.locator('.rv-hist-same').count()) >= 1, '同一句没标出来');
+
+        // ③ 落成下一步时把周期键写进 source，下期才追得到
+        await page.locator('.rv-field textarea').nth(2).fill(ACT2);
+        await page.locator('.btn', { hasText: '保存复盘三问' }).click();
+        await page.waitForTimeout(450);
+        await page.locator('.rv-act-btn').click();
+        await page.waitForTimeout(800);
+        const g1 = await rawOf('gtd.read');
+        const made = (g1.tasks || []).find((x) => x.title === ACT2);
+        assert.ok(made && made.id, '落成下一步失败');
+        madeId = made.id;
+        assert.strictEqual(made.source, 'review:week:' + thisKey, 'source 没带周期键：' + made.source);
+
+        // ④ 找不到记录 ≠ 没做到：清掉那条任务后，措辞必须是「没有痕迹」
+        await invoke('gtd.remove', [linkId]);
+        linkId = '';
+        await page.locator('.seg', { hasText: '周复盘' }).first().click();
+        await page.waitForTimeout(900);
+        assert.ok((await card.locator('.rv-cross-link').getAttribute('class')).indexOf('rv-cross-none') >= 0,
+          '没落成没单独成态');
+        assert.ok((await card.locator('.rv-cross-link').innerText()).indexOf('没有痕迹，不等于没做到') >= 0,
+          '把「没有痕迹」说成了「没做到」');
+
+        // ⑤ 上期那格空着：照实说链断了，不拿再上期顶替
+        await invoke('saveReview', ['week', prevKey, ['上周想早睡', '总是刷手机到十二点', '']]);
+        await page.locator('.seg', { hasText: '周复盘' }).first().click();
+        await page.waitForTimeout(900);
+        assert.strictEqual(await card.locator('.rv-cross-link').count(), 0, '上期空着还在追下落');
+        assert.ok((await card.locator('h2').first().innerText()).indexOf('没留下那一句') >= 0,
+          '标题没照实说');
+        assert.ok((await card.locator('.rv-cross-empty').innerText()).indexOf('断了') >= 0, '没说明链断在哪');
+        assert.strictEqual(await card.locator('.rv-cross-repeat').count(), 0, '链断了还在说连续');
+      } finally {
+        if (linkId) await invoke('gtd.remove', [linkId]).catch(() => {});
+        if (madeId) await invoke('gtd.remove', [madeId]).catch(() => {});
+        for (const k of [thisKey, prevKey, prev2Key]) {
+          await invoke('saveReview', ['week', k, ['', '', '']]).catch(() => {});
+        }
+        await page.locator('.nav-item').first().click().catch(() => {});
+      }
+    });
+
+    await check('154 V3.12 分页阅读：一页一屏 / 滚轮翻页 / 双页是连续两页', async () => {
+      await page.evaluate(async (paths) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.addFiles', args: [paths] });
+      }, [TXT_FIXTURE]);
+      await page.waitForTimeout(500);
+      const book = await page.evaluate(async (fp) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.board', args: [] });
+        return (r.data.books || []).find((b) => b.filePath === fp) || null;
+      }, TXT_FIXTURE);
+      assert.ok(book && book.id, '长 TXT 夹具没登进书架');
+
+      const [rd] = await Promise.all([
+        app.waitForEvent('window'),
+        page.evaluate((id) => window.jiugeBridge.invoke('v1/reader:open', { bookId: id }), book.id)
+      ]);
+      rd.on('pageerror', function (err) { jsErrors.push('reader-v312: ' + String(err && err.message || err)); });
+      await rd.waitForSelector('#rrApp', { timeout: 30000 });
+      const frameOf = () => rd.frames().filter((f) => f !== rd.mainFrame())[0];
+      await frameOf().waitForSelector('p', { timeout: 20000 });
+
+      const ensureMode = async (sel, want) => {
+        const on = (await rd.locator(sel).getAttribute('aria-pressed')) === 'true';
+        if (on !== want) { await rd.locator(sel).click(); await rd.waitForTimeout(800); }
+      };
+      await ensureMode('#rrFlow', false);
+      await ensureMode('#rrSpread', false);
+      await ensureMode('#rrPaged', false);
+
+      // 读一页：页码（父窗口）+ 位移 / 版面 + 「可见区左上角是全文第几个字」
+      // 用字符偏移而不是段落序号：TXT 一章可能只有一个 <p>，它会被切成好几栏，
+      // 段落矩形跨栏之后每一页都「可见」，判不出翻页有没有前进。
+      const readPage = async () => {
+        const inner = await frameOf().evaluate(() => {
+          const box = document.getElementById('rr-pg-in');
+          const clip = document.getElementById('rr-pg-clip');
+          if (!box || !clip) return null;
+          const cr = clip.getBoundingClientRect();
+          const abs = (node, off) => {
+            const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, null);
+            let n = null;
+            let total = 0;
+            while ((n = w.nextNode())) {
+              if (n === node) return total + off;
+              total += n.data.length;
+            }
+            return -1;
+          };
+          const charAt = (fx) => {
+            const r = document.caretRangeFromPoint(cr.left + cr.width * fx, cr.top + 10);
+            if (!r || !r.startContainer || r.startContainer.nodeType !== 3) return -1;
+            return abs(r.startContainer, r.startOffset);
+          };
+          return {
+            transform: getComputedStyle(box).transform,
+            gap: getComputedStyle(box).columnGap,
+            bodyCol: getComputedStyle(document.body).columnCount,
+            sw: box.scrollWidth,
+            cw: box.clientWidth,
+            h: box.clientHeight,
+            sh: box.scrollHeight,
+            head: charAt(0.04),
+            right: charAt(0.75)
+          };
+        });
+        if (!inner) return null;
+        inner.label = (await rd.evaluate(() => {
+          const no = document.querySelector('#rrModePages .rr-pg-no');
+          return (no ? no.textContent : document.getElementById('rrModePages').textContent).replace(/\s+/g, '');
+        }));
+        return inner;
+      };
+
+      // ① 分页：一页一屏，页数 > 1，正文高度锁成一页（不是整章一条长卷）
+      await rd.locator('#rrPaged').click();
+      await rd.waitForTimeout(900);
+      const g1 = await readPage();
+      assert.ok(g1, '点「分页阅读」后没有分页容器');
+      assert.ok(/第1\/\d+页/.test(g1.label), '页码不是「第 1 / N 页」：' + g1.label);
+      const total = Number((g1.label.match(/\/(\d+)页/) || [])[1]);
+      assert.ok(total >= 2, '长章节只排出 ' + total + ' 页，分页没生效');
+      // 正文高度锁成一页：多出来的那点是末段 margin-bottom，不该是「整章一条长卷」
+      assert.ok(g1.sh <= g1.h + 40, '正文没被锁成一页高：' + g1.sh + ' > ' + g1.h);
+
+      // ② 滚轮翻一页：页码 +1、位移正好一整页、可见段落往前走了
+      const t1 = parseFloat((g1.transform.match(/matrix\(1, 0, 0, 1, (-?[\d.]+)/) || [])[1] || '0');
+      await rd.locator('#rrPage').click({ position: { x: 300, y: 240 } });
+      await rd.mouse.move(600, 380);
+      await rd.mouse.wheel(0, 240);
+      await rd.waitForTimeout(800);
+      const g2 = await readPage();
+      assert.strictEqual(g2.label, '第2/' + total + '页', '滚一下没翻到第 2 页：' + g2.label);
+      const t2 = parseFloat((g2.transform.match(/matrix\(1, 0, 0, 1, (-?[\d.]+)/) || [])[1] || '0');
+      assert.ok(Math.abs(Math.abs(t2 - t1) - g2.cw) < 3, '翻一页的位移不是一整页：' + (t2 - t1) + ' vs ' + g2.cw);
+      assert.ok(g2.head > g1.head + 20, '翻页后可见内容没往前走：' + g1.head + ' → ' + g2.head);
+
+      // ③ 双页并排：左右是紧挨着的两页（右栏接左栏），不是把整章分两栏
+      await rd.locator('#rrSpread').click();
+      await rd.waitForTimeout(1000);
+      const s1 = await readPage();
+      assert.ok(s1, '双页并排没有分页容器（还是旧的两栏整章）');
+      assert.strictEqual(s1.bodyCol, 'auto', 'body 还在分栏：右栏会变成整章后半段');
+      assert.strictEqual(s1.gap, '44px', '双页页间缝不对：' + s1.gap);
+      assert.ok(s1.sw > s1.cw + 10, '双页只排出一栏，没有往右接第二页');
+      // 右栏是从左栏接下来往下读的（字符偏移更大），不是同一段并排重复
+      assert.ok(s1.head >= 0 && s1.right > s1.head + 20,
+        '双页右栏不是接左栏往下：' + s1.head + ' → ' + s1.right);
+
+      // ④ 归位：分页是持久偏好，不关掉后面每条用例都会一页一屏
+      await ensureMode('#rrSpread', false);
+      await ensureMode('#rrPaged', false);
+      await rd.close();
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+      }, book.id);
+    });
+
+    await check('155 V3.13 图书馆：主题书不进书架 / 占位印完整书名 / 表格列 / 豆瓣入口', async () => {
+      const SHELF_TITLE = 'V313无封面占位这是一本很长的书名用来测试完整显示';
+      const THEME_TITLE = 'V313主题书污水处理工艺标准解读';
+      // ① 直接走领域层备好四本书：一本休闲（无文件、无封面）、一本挂到新主题下，
+      //    外加两本纯 ASCII 名的（排序断言用：ASCII 之间的大小关系与语言环境无关，
+      //    中文书名在不同 ICU 版本下排序可能不一样，拿它做断言会变成偶发失败）
+      const seeded = await page.evaluate(async (p) => {
+        const call = (name, args) => window.jiugeBridge.invoke('v1/domain:call', { name, args });
+        const th = await call('reading.themeAdd', [{ title: 'V313 测试主题' }]);
+        const themeId = th && th.data && th.data.id;
+        await call('reading.addBook', [{ title: p.shelf, total: 100, unit: '页' }]);
+        await call('reading.addBook', [{ title: p.theme, total: 100, unit: '页', themeId }]);
+        await call('reading.addBook', [{ title: 'V313ZZZ', total: 100, unit: '页' }]);
+        await call('reading.addBook', [{ title: 'V313AAA', total: 100, unit: '页' }]);
+        const board = await call('reading.board', []);
+        const ids = (board.data.books || []).filter((x) => String(x.title).indexOf('V313') === 0).map((x) => x.id);
+        return { themeId, ids };
+      }, { shelf: SHELF_TITLE, theme: THEME_TITLE });
+      assert.ok(seeded.ids.length === 4, '四本测试书没落库：' + JSON.stringify(seeded));
+
+      // ② 进图书馆：领域层写完主进程会广播，独立窗口自己重取一遍，不用退出再进
+      const lib = await libPage();
+      await lib.locator('.rd-tab').nth(0).click();
+      await lib.waitForSelector('.rd-trow', { timeout: 8000 });
+      await lib.waitForTimeout(700);
+
+      // ③ 主题书不在休闲书架里：一行都不许出现；册数由左栏两个栏目各自认账
+      const shelfText = await lib.locator('.rd-table').innerText();
+      assert.ok(shelfText.indexOf(THEME_TITLE) < 0, '主题书混进了休闲书架');
+      assert.ok(shelfText.indexOf(SHELF_TITLE) >= 0, '休闲书没出现在书架里');
+      const themeRow = (await lib.locator('.lib-row.lib-root').filter({ hasText: '主题阅读' }).first().innerText())
+        .replace(/\s+/g, ' ').trim();
+      const themeN = Number((themeRow.match(/(\d+)\s*$/) || [])[1]);
+      assert.ok(themeN >= 1, '左栏「主题阅读」的册数不对：' + themeRow);
+
+      // ④ calibre 式表格：列头齐、可点排序、行内「格式 · 大小」有值
+      const heads = await lib.locator('.rd-thead .rd-th').allInnerTexts();
+      const headLine = heads.join('|');
+      ['书名', '作者', '格式 · 大小', '最近读过', '进度', '操作'].forEach((h) => {
+        assert.ok(headLine.indexOf(h) >= 0, '表头缺列：' + h + '（实际 ' + headLine + '）');
+      });
+      await lib.locator('.rd-thead .rd-th-title').click();
+      await lib.waitForTimeout(400);
+      const arrow = (await lib.locator('.rd-thead .rd-th-title').innerText()).trim();
+      assert.ok(arrow.indexOf('↑') >= 0 || arrow.indexOf('↓') >= 0, '点列头没有出现排序方向：' + arrow);
+      const names = await lib.locator('.rd-trow .rd-tname').allInnerTexts();
+      const ia = names.indexOf('V313AAA');
+      const iz = names.indexOf('V313ZZZ');
+      assert.ok(ia >= 0 && iz >= 0 && ia < iz, '书名升序没生效（AAA 应排在 ZZZ 前面）：' + JSON.stringify(names));
+
+      // ⑤ 无封面时占位印完整书名（不是首字）
+      await lib.locator('.rd-viewmode button', { hasText: '封面预览' }).click();
+      await lib.waitForSelector('.rd-card', { timeout: 8000 });
+      await lib.waitForTimeout(500);
+      const card = await lib.evaluate((t) => {
+        const cards = Array.from(document.querySelectorAll('.rd-card'));
+        const hit = cards.filter((c) => (c.textContent || '').indexOf(t) >= 0)[0];
+        if (!hit) return null;
+        const init = hit.querySelector('.rd-card-initial');
+        if (!init) return { noPlaceholder: true };
+        return { text: init.textContent.trim(), size: parseFloat(getComputedStyle(init).fontSize) };
+      }, SHELF_TITLE);
+      assert.ok(card, '封面预览里没找到那本书');
+      assert.ok(!card.noPlaceholder, '无封面的书没有占位封面');
+      assert.strictEqual(card.text, SHELF_TITLE, '占位封面没印完整书名（只印了首字或截断了）');
+      assert.ok(card.size <= 20, '长书名的占位字号没缩小，会溢出：' + card.size + 'px');
+
+      // ⑥ 豆瓣入口在编辑弹窗里（只断言存在，不点：门禁不依赖网络）
+      await lib.locator('.rd-viewmode button', { hasText: '详细列表' }).click();
+      await lib.waitForSelector('.rd-trow', { timeout: 8000 });
+      await lib.locator('.rd-trow', { hasText: SHELF_TITLE }).locator('.rd-mini', { hasText: '编辑' }).click();
+      await lib.waitForSelector('.rd-modal', { timeout: 8000 });
+      const btn = await lib.locator('.rd-modal button', { hasText: '从豆瓣找封面' }).count();
+      assert.ok(btn === 1, '编辑弹窗里没有「从豆瓣找封面」');
+      await lib.locator('.rd-modal .rd-x').click();
+
+      // ⑦ 归位：把这几本与测试主题清掉，别留给后面的用例
+      await page.evaluate(async (p) => {
+        for (const id of p.ids) {
+          await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+        }
+        if (p.themeId) await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.themeRemove', args: [p.themeId] });
+      }, seeded);
+      await lib.waitForTimeout(400);
+    });
+
+    // V3.16：PDF 正文发虚的根因是「位图 1x、屏幕却是 125%/150%」，浏览器只能整幅上采样。
+    // 这条用例量的是像素密度本身：位图宽 / CSS 宽 必须约等于 devicePixelRatio。
+    // 另外验一遍「窗口变窄后重画」——画布有固有尺寸，靠 CSS 压小就等于二次重采样。
+    await check('156 V3.16 PDF 画布按屏幕密度出图：位图/CSS = devicePixelRatio，变形后重画', async () => {
+      const TITLE = 'V316 像素密度';
+      const book = await page.evaluate(async (p) => {
+        const call = (n, a) => window.jiugeBridge.invoke('v1/domain:call', { name: n, args: a });
+        await call('reading.addBook', [{
+          title: p.title, total: 2, unit: '页', filePath: p.file, fileExt: 'pdf', format: 'PDF'
+        }]);
+        const board = await call('reading.board', []);
+        return (board.data.books || []).filter((x) => x.title === p.title)[0] || {};
+      }, { title: TITLE, file: PDF_FIXTURE });
+      assert.ok(book.id, 'V316 夹具没登进书架');
+
+      const [rd2] = await Promise.all([
+        app.waitForEvent('window'),
+        page.evaluate((id) => window.jiugeBridge.invoke('v1/reader:open', { bookId: id }), book.id)
+      ]);
+      rd2.on('pageerror', function (err) { jsErrors.push('reader-v316: ' + String(err && err.message || err)); });
+      await rd2.waitForSelector('#rrApp', { timeout: 30000 });
+      await rd2.waitForSelector('#rrPdf .rr-pdf-page canvas', { timeout: 45000 });
+      // 只等 DOM 会验到「容器在、画布空」；等位图真有内容
+      await rd2.waitForFunction(() => {
+        const c = document.querySelector('#rrPdf .rr-pdf-page canvas');
+        return !!c && c.width > 100 && c.height > 100;
+      }, null, { timeout: 30000 });
+
+      const probe = () => rd2.evaluate(() => {
+        const c = document.querySelector('#rrPdf .rr-pdf-page canvas');
+        const r = c.getBoundingClientRect();
+        return {
+          bw: c.width, bh: c.height, cw: r.width, ch: r.height,
+          dpr: window.devicePixelRatio, inlineW: c.style.width, inlineH: c.style.height
+        };
+      });
+      const m = await probe();
+      // ① CSS 尺寸是写死的像素值，不是交给 width:100% 去拉
+      assert.ok(/^\d+px$/.test(m.inlineW || ''), '画布没写死 CSS 宽（会被样式拉伸）：' + JSON.stringify(m));
+      assert.ok(/^\d+px$/.test(m.inlineH || ''), '画布没写死 CSS 高：' + JSON.stringify(m));
+      // ② 位图密度跟屏幕走：dpr=1 时比值就是 1（说明没被放大），dpr>1 时必须 >1
+      assert.ok(Math.abs(m.bw / m.cw - m.dpr) < 0.05,
+        '位图宽/CSS 宽 没对上 devicePixelRatio：' + JSON.stringify(m));
+      assert.ok(Math.abs(m.bh / m.ch - m.dpr) < 0.05,
+        '位图高/CSS 高 没对上 devicePixelRatio：' + JSON.stringify(m));
+
+      // ③ 窗口变窄：位图必须重画（宽度变了），不能只被 CSS 压小
+      const before = m.bw;
+      await rd2.setViewportSize({ width: 900, height: 760 });
+      await rd2.waitForTimeout(2000);
+      const after = await probe();
+      assert.notStrictEqual(after.bw, before, '窗口变窄后画布没重画（靠 CSS 拉伸会把字糊掉）');
+      assert.ok(Math.abs(after.bw / after.cw - after.dpr) < 0.08,
+        '重画后的密度没跟上当前 dpr：' + JSON.stringify(after));
+
+      // ④ 归位：关窗、下架
+      await rd2.close().catch(() => {});
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+      }, book.id);
+    });
+
+    await check('157 V3.17 PDF 可选中可搜索：文本层 / 划选摘录 / 命中标黄 / 点结果定位', async () => {
+      const TITLE = 'V317 选中搜索';
+      const book = await page.evaluate(async (p) => {
+        const call = (n, a) => window.jiugeBridge.invoke('v1/domain:call', { name: n, args: a });
+        await call('reading.addBook', [{
+          title: p.title, total: 2, unit: '页', filePath: p.file, fileExt: 'pdf', format: 'PDF'
+        }]);
+        const board = await call('reading.board', []);
+        return (board.data.books || []).filter((x) => x.title === p.title)[0] || {};
+      }, { title: TITLE, file: PDF_FIXTURE });
+      assert.ok(book.id, 'V317 夹具没登进书架');
+
+      const [rd3] = await Promise.all([
+        app.waitForEvent('window'),
+        page.evaluate((id) => window.jiugeBridge.invoke('v1/reader:open', { bookId: id }), book.id)
+      ]);
+      rd3.on('pageerror', function (err) { jsErrors.push('reader-v317: ' + String(err && err.message || err)); });
+      await rd3.waitForSelector('#rrPdf .rr-pdf-text span', { timeout: 45000 });
+
+      // ① 文本层真有文字，且与画布像素对齐（不对齐划选就会框到别的行上）
+      const layer = await rd3.evaluate(() => {
+        const cv = document.querySelector('#rrPdf .rr-pdf-page canvas');
+        const la = document.querySelector('#rrPdf .rr-pdf-text');
+        const box = document.querySelector('#rrPdf .rr-pdf-page');
+        const a = cv.getBoundingClientRect(), b = la.getBoundingClientRect();
+        return {
+          spans: la.querySelectorAll('span').length,
+          text: box.__pdfText || '',
+          dx: Math.round(b.left - a.left), dy: Math.round(b.top - a.top),
+          dw: Math.round(b.width - a.width)
+        };
+      });
+      assert.ok(layer.spans > 0, 'PDF 没有生成文本层');
+      assert.ok(layer.text.indexOf('Jiuge V35 Page One') >= 0,
+        '文本层没提出 PDF 里的原文：' + layer.text.slice(0, 60));
+      assert.ok(Math.abs(layer.dx) <= 1 && Math.abs(layer.dy) <= 1 && Math.abs(layer.dw) <= 1,
+        '文本层没和画布对齐：' + JSON.stringify(layer));
+
+      // ② 划选 → 浮动工具条出现，且能读到 PDF 的原文（不是空字符串）
+      const selected = await rd3.evaluate(() => {
+        const spans = Array.prototype.slice.call(document.querySelectorAll('#rrPdf .rr-pdf-text span'));
+        const best = spans.sort((a, b) => b.textContent.length - a.textContent.length)[0];
+        const r = document.createRange(); r.selectNodeContents(best);
+        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        document.body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        return s.toString();
+      });
+      await rd3.waitForTimeout(300);
+      assert.ok(selected.length > 3, 'PDF 划选拿不到文字：' + JSON.stringify(selected));
+      assert.ok(await rd3.locator('#rrSelBar').isVisible(), '划选后没弹工具条');
+      assert.strictEqual(await rd3.locator('#rrSelBar [data-act="copy"]').count(), 1, '工具条缺「复制」');
+      assert.strictEqual(await rd3.locator('#rrSelBar [data-act="quote"]').count(), 1, '工具条缺「摘录」');
+
+      // ③ 摘录落进笔记，带页码与页内锚点
+      await rd3.locator('#rrSelBar [data-act="quote"]').click();
+      await rd3.waitForTimeout(400);
+      const saved = await rd3.evaluate(async (a) => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.notes', args: [{ bookId: a.id }] });
+        const items = ((r && r.data) || r || {}).items || [];
+        return items.filter((n) => n.quote === a.text).map((n) => ({ anchor: n.anchor, page: n.page, chapterId: n.chapterId }));
+      }, { id: book.id, text: selected });
+      assert.ok(saved.length > 0, '摘录没存进读书笔记');
+      assert.ok(/^\d+:\d+-\d+$/.test(saved[0].anchor), '摘录没带页内锚点：' + JSON.stringify(saved[0]));
+      assert.strictEqual(saved[0].page, 1, '摘录没记 PDF 页码');
+
+      // ④ 搜索：命中标黄 + 结果带页码；不再只扫前 200 页
+      await rd3.locator('#rrSearchInput').fill('Jiuge');
+      await rd3.locator('#rrSearchBtn').click();
+      await rd3.waitForFunction(() => /处|没有/.test((document.getElementById('rrSearchCount') || {}).textContent || ''),
+        null, { timeout: 25000 });
+      const hitRows = await rd3.locator('.rr-hit').count();
+      const count = await rd3.locator('#rrSearchCount').innerText();
+      const litSpans = await rd3.locator('#rrPdf .rr-pdf-text span.rr-pdf-hit').count();
+      assert.ok(hitRows >= 2, '两页各一处「Jiuge」，结果条数不对：' + hitRows);
+      assert.ok(/2\s*处/.test(count), '搜索没扫到第二页：' + count);
+      assert.ok(litSpans >= 1, '当前可见页的命中词没标黄：' + litSpans);
+
+      // ⑤ 点第 2 页那条：单页模式下要重建页容器并懒渲染文本层，再滚到命中处点亮
+      await rd3.locator('.rr-hit').nth(1).click();
+      await rd3.waitForTimeout(900);
+      assert.ok(await rd3.locator('#rrPdf .rr-pdf-text span.rr-pdf-hit-on').count() >= 1,
+        '点结果后没把命中处点亮');
+      assert.strictEqual(await rd3.locator('#rrPdf .rr-pdf-page').first().getAttribute('data-page'),
+        '2', '点第 2 页的结果没翻到第 2 页');
+
+      // ⑥ Ctrl+F 落到书内搜索（浏览器原生 Ctrl+F 对 canvas 是无效的）
+      await rd3.keyboard.press('Control+f');
+      assert.strictEqual(await rd3.evaluate(() => document.activeElement && document.activeElement.id),
+        'rrSearchInput', 'Ctrl+F 没落到书内搜索框');
+
+      // ⑦ 归位
+      await rd3.close().catch(() => {});
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
+      }, book.id);
     });
 
     await check('113 真实窗口无 JS 运行时异常', async () => {

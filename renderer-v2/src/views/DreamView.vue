@@ -158,7 +158,19 @@ function toggleDone(row: Row): void {
   });
 }
 
+const confirmDel = ref('');
+let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+
 async function removeRow(row: Row): Promise<void> {
+  // 不可逆操作统一行内两步确认：第一次点变「确认删除？」，3 秒后回落
+  if (confirmDel.value !== row.id) {
+    confirmDel.value = row.id;
+    if (confirmTimer) clearTimeout(confirmTimer);
+    confirmTimer = setTimeout(() => { confirmDel.value = ''; }, 3000);
+    say('再点一次「确认删除」才会删掉「' + row.title + '」');
+    return;
+  }
+  confirmDel.value = '';
   await callDomain('dream.remove', null, row.id);
   if (props.selected === row.id) emit('select-dream', '');
   await load();
@@ -296,27 +308,31 @@ watch(function () { return props.tick; }, load);
             <button
               class="g-title"
               :aria-pressed="selected === row.id"
-              :title="'在右栏编辑「' + row.title + '」'"
+              :title="row.title"
               @click="select(row)"
             >{{ row.title }}</button>
-            <span v-if="row.hasImage" class="g-pic" title="已配具象化图片" aria-label="已配图">▣</span>
-            <span class="g-hz">{{ row.horizonLabel }}</span>
-            <span v-if="row.dueDate" class="g-due" :class="{ 'g-due-hot': row.overdue }">{{ row.dueDate }} · {{ row.pace }}</span>
-            <span v-if="row.priority === 'high'" class="g-pri">高</span>
-            <span v-if="row.taskTotal" class="g-task" :class="{ 'g-task-done': row.taskOpen === 0 }">
-              行动 {{ row.taskDone }}/{{ row.taskTotal }}
+            <span class="g-progress">
+              <span class="g-bar" :aria-label="'进度 ' + row.progress + '%'">
+                <span class="g-bar-in" :style="{ width: row.progress + '%' }"></span>
+              </span>
+              <span class="g-pct">{{ row.progress }}%</span>
+              <button class="g-del" :aria-label="'删除「' + row.title + '」'" @click="removeRow(row)">{{ confirmDel === row.id ? '确认删除？' : '×' }}</button>
             </span>
-            <span v-if="row.fund" class="g-fund" :class="{ 'g-fund-ready': row.fund.ready }">
-              账户 ¥{{ centsToYuan(row.fund.saved) }} / {{ centsToYuan(row.fund.target) }}
-              <template v-if="row.fund.ready">· 可动</template>
+            <span class="g-meta">
+              <button class="g-act" @click="makeAction(row)">拆成行动</button>
+              <span v-if="row.hasImage" class="g-pic" title="已配具象化图片" aria-label="已配图">▣</span>
+              <span class="g-hz">{{ row.horizonLabel }}</span>
+              <span v-if="row.dueDate" class="g-due" :class="{ 'g-due-hot': row.overdue }">{{ row.dueDate }} · {{ row.pace }}</span>
+              <span v-if="row.priority === 'high'" class="g-pri">高</span>
+              <span v-if="row.taskTotal" class="g-task" :class="{ 'g-task-done': row.taskOpen === 0 }">
+                行动 {{ row.taskDone }}/{{ row.taskTotal }}
+              </span>
+              <span v-if="row.fund" class="g-fund" :class="{ 'g-fund-ready': row.fund.ready }">
+                账户 ¥{{ centsToYuan(row.fund.saved) }} / {{ centsToYuan(row.fund.target) }}
+                <template v-if="row.fund.ready">· 可动</template>
+              </span>
+              <span class="g-status">{{ row.statusLabel }}</span>
             </span>
-            <span class="g-bar" :aria-label="'进度 ' + row.progress + '%'">
-              <span class="g-bar-in" :style="{ width: row.progress + '%' }"></span>
-            </span>
-            <span class="g-pct">{{ row.progress }}%</span>
-            <span class="g-status">{{ row.statusLabel }}</span>
-            <button class="g-act" @click="makeAction(row)">拆成行动</button>
-            <button class="g-del" :aria-label="'删除「' + row.title + '」'" @click="removeRow(row)">×</button>
           </div>
         </div>
       </section>
@@ -331,12 +347,12 @@ watch(function () { return props.tick; }, load);
 <style scoped>
 .dream-view { display: flex; flex-direction: column; gap: var(--space-2); }
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.theme-title { font-size: 15px; font-weight: 500; margin: 0; }
-.head .sub { font-size: 12px; color: var(--surface-muted); margin: 4px 0 0; line-height: 1.7; max-width: 62ch; }
+.theme-title { font-size: var(--text-h2); font-weight: 500; margin: 0; }
+.head .sub { font-size: var(--text-sm); color: var(--surface-muted); margin: 4px 0 0; line-height: 1.7; max-width: 62ch; }
 .add-btn {
   flex: 0 0 auto; padding: 5px 14px;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
-  background: var(--surface-raised); font-size: 12px;
+  background: var(--surface-raised); font-size: var(--text-sm);
 }
 .add-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 
@@ -353,7 +369,7 @@ watch(function () { return props.tick; }, load);
 }
 .ap-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ap-sel, .ap-date, .ap-mini, .ap-num, .ap-unit {
-  padding: 4px 8px; font-size: 12px;
+  padding: 4px 8px; font-size: var(--text-sm);
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
   background: var(--surface-raised); outline: none;
 }
@@ -362,10 +378,10 @@ watch(function () { return props.tick; }, load);
 .ap-mini { width: 120px; }
 .ap-num { width: 68px; }
 .ap-unit { width: 60px; }
-.ap-hint, .ap-arrow { font-size: 11px; color: var(--surface-muted); }
+.ap-hint, .ap-arrow { font-size: var(--text-xs); color: var(--surface-muted); }
 .ap-save {
   padding: 5px 14px; border: 0.5px solid var(--palette-primary); border-radius: var(--radius-md);
-  background: var(--palette-primary); color: var(--palette-on); font-size: 12px;
+  background: var(--palette-primary); color: var(--palette-on); font-size: var(--text-sm);
 }
 
 .hz-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -373,24 +389,24 @@ watch(function () { return props.tick; }, load);
   display: flex; align-items: baseline; gap: 4px;
   padding: 4px 10px;
   border: 0.5px solid var(--surface-border); border-radius: 999px;
-  background: var(--surface-raised); font-size: 12px; color: var(--surface-muted);
+  background: var(--surface-raised); font-size: var(--text-sm); color: var(--surface-muted);
 }
 .hz-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.hz-tab .num { font-size: 11px; opacity: 0.85; }
-.hz-hint { font-size: 10px; opacity: 0.7; }
+.hz-tab .num { font-size: var(--text-xs); opacity: 0.85; }
+.hz-hint { font-size: var(--text-xs); opacity: 0.7; }
 
-.insight { margin: 0; font-size: 12px; color: var(--surface-text); line-height: 1.7; }
-.stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--surface-muted); }
-.stats em { font-style: normal; color: var(--surface-text); font-size: 14px; }
+.insight { margin: 0; font-size: var(--text-sm); color: var(--surface-text); line-height: 1.7; }
+.stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--text-sm); color: var(--surface-muted); }
+.stats em { font-style: normal; color: var(--surface-text); font-size: var(--text-h2); }
 .st-warn em { color: var(--state-warn); }
-.dv-msg { margin: 0; font-size: 12px; color: var(--palette-primary); }
+.dv-msg { margin: 0; font-size: var(--text-sm); color: var(--palette-primary); }
 
 .rows { display: flex; flex-direction: column; gap: var(--space-2); }
 .area { display: flex; flex-direction: column; gap: 4px; }
-.area-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; font-size: 12px; font-weight: 500; }
+.area-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 2px; font-size: var(--text-sm); font-weight: 500; }
 .area-label { color: var(--palette-primary); }
-.area-count { font-size: 11px; color: var(--surface-muted); font-weight: 400; }
-.area-hint { font-size: 11px; color: var(--surface-muted); font-weight: 400; }
+.area-count { font-size: var(--text-xs); color: var(--surface-muted); font-weight: 400; }
+.area-hint { font-size: var(--text-xs); color: var(--surface-muted); font-weight: 400; }
 .goal {
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -399,40 +415,53 @@ watch(function () { return props.tick; }, load);
 .goal-overdue { border-color: var(--state-warn); }
 /* 选中态要一眼看出来：右栏现在改的是这一条，点错行等于改错目标 */
 .goal-on { border-color: var(--palette-primary); box-shadow: inset 2px 0 0 var(--palette-primary); }
-.goal-main { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; }
+.goal-main {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 8px; padding: 6px 8px; font-size: var(--text-sm);
+  min-width: 0; width: 100%;
+}
+.g-check { order: 0; flex: 0 0 24px; }
+.g-progress { order: 2; flex: 0 0 120px; margin-left: auto; }
+/* 第一行只留勾选 / 标题 / 进度，标题吃满剩余宽度；次要信息统一挪到第二行 */
+.g-progress { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.g-meta {
+  order: 3; flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 2px 8px; font-size: var(--text-xs); color: var(--surface-muted);
+  min-width: 0; max-width: 100%;
+}
 .g-check {
-  flex: 0 0 auto; width: 18px; height: 18px; padding: 0;
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
   border: 0.5px solid var(--surface-border); border-radius: 50%;
-  background: var(--surface-panel); font-size: 11px; line-height: 1; color: var(--surface-muted);
+  background: var(--surface-panel); font-size: var(--text-xs); line-height: 1; color: var(--surface-muted);
 }
 .goal-done .g-check { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .g-title {
-  flex: 1 1 auto; min-width: 0; text-align: left;
-  border: 0; background: transparent; font-size: 12px; color: var(--surface-text);
+  flex: 1 1 0; min-width: 0; text-align: left;
+  border: 0; background: transparent; font-size: var(--text-sm); color: var(--surface-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .g-title:hover { color: var(--palette-primary); }
 .goal-done .g-title { text-decoration: line-through; color: var(--surface-muted); }
-.g-pic { flex: 0 0 auto; font-size: 9px; color: var(--palette-primary); }
-.g-hz { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); }
-.g-due { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); }
+.g-pic { flex: 0 0 auto; font-size: var(--text-xs); color: var(--palette-primary); }
+.g-hz { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
+.g-due { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
 .g-due-hot { color: var(--state-warn); }
-.g-pri { flex: 0 0 auto; font-size: 10px; color: var(--state-warn); border: 0.5px solid var(--state-warn); border-radius: 3px; padding: 0 3px; }
-.g-task { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); }
+.g-pri { flex: 0 0 auto; font-size: var(--text-xs); color: var(--state-warn); border: 0.5px solid var(--state-warn); border-radius: 3px; padding: 0 3px; }
+.g-task { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
 .g-task-done { color: var(--palette-primary); }
-.g-bar { flex: 0 0 70px; height: 4px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; }
+.g-bar { flex: 0 0 48px; height: 4px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; }
 .g-bar-in { display: block; height: 100%; background: var(--palette-accent); }
-.g-pct { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); min-width: 32px; text-align: right; }
-.g-status { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); min-width: 42px; }
+.g-pct { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); min-width: 32px; text-align: right; }
+.g-status { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); min-width: 42px; }
 .g-act {
-  flex: 0 0 auto; padding: 2px 8px; font-size: 11px;
+  flex: 0 0 auto; padding: 2px 8px; font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border); border-radius: 999px;
   background: var(--surface-panel); color: var(--surface-muted);
 }
 .g-act:hover { color: var(--palette-primary); border-color: var(--palette-border); }
-.g-del { flex: 0 0 auto; border: 0; background: transparent; color: var(--surface-muted); font-size: 13px; }
+.g-del { flex: 0 0 auto; min-width: 24px; min-height: 24px; border: 0; background: transparent; color: var(--surface-muted); font-size: var(--text-body); }
 .g-del:hover { color: var(--state-warn); }
-.g-fund { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); }
+.g-fund { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
 .g-fund-ready { color: var(--palette-primary); font-weight: 500; }
-.empty { font-size: 12px; color: var(--surface-muted); margin: 6px 0 0; line-height: 1.7; }
+.empty { font-size: var(--text-sm); color: var(--surface-muted); margin: 6px 0 0; line-height: 1.7; }
 </style>

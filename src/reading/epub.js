@@ -3,7 +3,7 @@
 //
 // EPUB 本质是 ZIP。这里不引任何解压库，自己读中央目录 → 按条目 inflateRaw，
 // 只取 container.xml / OPF / 封面图三个小文件；不把整本书读进渲染层。
-// 安全边界：文件 ≤100MB、条目数 ≤20000、XML 解压上限 8MB、封面 ≤500KB、
+// 安全边界：文件 ≤100MB、条目数 ≤20000、XML 解压上限 8MB、封面 ≤4MB、
 // 条目名含 ".." 一律跳过（防 zip 路径穿越），只认图片扩展名。
 // PDF / MOBI / TXT 不做解析（零依赖下无法可靠取封面），由主进程用文件名兜底。
 
@@ -12,7 +12,8 @@ const zlib = require('zlib');
 
 const ALLOWED_EXTS = ['epub', 'pdf', 'txt', 'md', 'mobi', 'azw3'];
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
-const MAX_COVER_BYTES = 500 * 1024;
+// 封面常见 1–3MB（扫描图 / 高清封面），旧的 500KB 上限会让「书里明明有封面」的书回落到色块
+const MAX_COVER_BYTES = 4 * 1024 * 1024;
 const MAX_ENTRIES = 20000;
 const MAX_INFLATE = 16 * 1024 * 1024;                // 单条解压上限（含超长章节）
 const OVERSIZE_BYTES = 2 * 1024 * 1024;             // 单章超过 2MB 记「超长」，降级但照读
@@ -96,6 +97,61 @@ function entryData(buf, e) {
 }
 
 /** 解析 EPUB，返回 { title, author, cover:{data:Buffer,ext}|null }；失败返回 null。 */
+// ---- 封面定位用的小工具：manifest 摊平 / 相对路径解析 / 封面页首图 ----
+// 封面写法各家不同，逐级兜底比「一条正则定生死」更接近「除非书里没有」。
+function opfItems(xml) {
+    const map = {};
+    (xml.match(/<item\b[^>]*>/gi) || []).forEach(function (tag) {
+        const id = /id\s*=\s*["']([^"']+)["']/i.exec(tag);
+        const href = /href\s*=\s*["']([^"']+)["']/i.exec(tag);
+        const mt = /media-type\s*=\s*["']([^"']+)["']/i.exec(tag);
+        if (id && href) map[id[1]] = { href: href[1], type: mt ? mt[1] : '', tag: tag };
+    });
+    return map;
+}
+
+function dirOf(p) { return p.indexOf('/') >= 0 ? p.slice(0, p.lastIndexOf('/') + 1) : ''; }
+
+// 相对路径要能吃 '..'（封面页常写 ../images/cover.jpg），否则 guide 兜底永远找不到条目
+function joinPath(basePath, href) {
+    const raw = /^\//.test(href) ? href : dirOf(basePath) + href;
+    const out = [];
+    raw.split('/').forEach(function (seg) {
+        if (!seg || seg === '.') return;
+        if (seg === '..') { out.pop(); return; }
+        out.push(seg);
+    });
+    return out.join('/');
+}
+
+function entryForHref(byName, basePath, href) {
+    let decoded = href;
+    try { decoded = decodeURIComponent(href); } catch (_) { /* 保持原样 */ }
+    const full = joinPath(basePath, decoded);
+    return byName[full] || byName[full.replace(/^\.\//, '')] || null;
+}
+
+// 有些书的封面文件扩展名与真实内容不符（cover.jpg 里装的是 PNG），
+// 落盘后缀按魔数定，免得 dataURL 声明错 mime 后封面变空白。
+function sniffExt(data) {
+    if (!data || data.length < 12) return '';
+    if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return 'png';
+    if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'jpg';
+    if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) return 'gif';
+    if (data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+    return '';
+}
+
+function firstImageHref(byName, buf, pagePath) {
+    const e = byName[pagePath.replace(/^\/+/, '')];
+    if (!e) return '';
+    const x = entryData(buf, e);
+    if (!x) return '';
+    const m = /<(?:img|image)\b[^>]*(?:src|xlink:href|href)\s*=\s*["']([^"']+)["']/i.exec(x.toString('utf8'));
+    if (!m || /^data:/i.test(m[1])) return '';
+    return m[1];
+}
+
 function inspect(filePath) {
     try {
         if (extOf(filePath) !== 'epub') return null;
@@ -118,36 +174,49 @@ function inspect(filePath) {
         if (!ox) return null;
         const xml = ox.toString('utf8');
 
+        const items = opfItems(xml);
         let href = '';
+        let basePath = opfPath;
+        // ① EPUB2：<meta name="cover" content="封面 id">
         const meta = /<meta\b[^>]*name=["']cover["'][^>]*content=["']([^"']+)["'][^>]*>/i.exec(xml)
             || /<meta\b[^>]*content=["']([^"']+)["'][^>]*name=["']cover["'][^>]*>/i.exec(xml);
-        if (meta) {
-            const id = escapeRe(meta[1]);
-            const item = new RegExp('<item\\b[^>]*id=["\']' + id + '["\'][^>]*href=["\']([^"\']+)["\'][^>]*>', 'i').exec(xml)
-                || new RegExp('<item\\b[^>]*href=["\']([^"\']+)["\'][^>]*id=["\']' + id + '["\'][^>]*>', 'i').exec(xml);
-            if (item) href = item[1];
-        }
+        if (meta && items[meta[1]]) href = items[meta[1]].href;
+        // ② manifest 里带 cover 字样的图片（EPUB3 的 properties="cover-image" 也落在这条）
         if (!href) {
-            const items = xml.match(/<item\b[^>]*>/gi) || [];
-            for (let i = 0; i < items.length; i += 1) {
-                if (/cover/i.test(items[i]) && /image\//i.test(items[i])) {
-                    const h = /href=["']([^"']+)["']/i.exec(items[i]);
-                    if (h) { href = h[1]; break; }
-                }
+            Object.keys(items).forEach(function (id) {
+                if (href) return;
+                if (/cover/i.test(items[id].tag) && /^image\//i.test(items[id].type)) href = items[id].href;
+            });
+        }
+        // ③ guide 里 type="cover" 的封面页：取这页的第一张图（EPUB2 的常见写法）
+        if (!href) {
+            const g = /<reference\b[^>]*type=["']cover["'][^>]*href=["']([^"']+)["'][^>]*>/i.exec(xml)
+                || /<reference\b[^>]*href=["']([^"']+)["'][^>]*type=["']cover["'][^>]*>/i.exec(xml);
+            if (g) {
+                const page = entryForHref(byName, opfPath, g[1]);
+                const img = page ? firstImageHref(byName, buf, page.name) : '';
+                if (img) { href = img; basePath = page.name; }
+            }
+        }
+        // ④ spine 第一页里的第一张图，只在文件名像封面时才认——避免把正文插图当封面
+        if (!href) {
+            const sp = /<spine\b[^>]*>[\s\S]*?<itemref\b[^>]*idref=["']([^"']+)["']/i.exec(xml);
+            const it = sp && items[sp[1]];
+            if (it && /\.x?html?$/i.test(it.href)) {
+                const page = entryForHref(byName, opfPath, it.href);
+                const img = page ? firstImageHref(byName, buf, page.name) : '';
+                if (img && /(cover|front|title)/i.test(img)) { href = img; basePath = page.name; }
             }
         }
         let cover = null;
         if (href) {
-            let decoded = href;
-            try { decoded = decodeURIComponent(href); } catch (_) { /* 保持原样 */ }
-            const dir = opfPath.indexOf('/') >= 0 ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
-            const full = (dir + decoded).replace(/\/+/g, '/').replace(/^\.\//, '');
-            const ce = byName[full] || byName[full.replace(/^\.\//, '')];
-            const extM = /\.(jpe?g|png|gif|webp)$/i.exec(ce ? ce.name : '');
+            const ce = entryForHref(byName, basePath, href);
+            const extM = /\.(jpe?g|png|gif|webp)$/i.exec(ce ? ce.name : href);
             if (ce && extM && ce.compressedSize <= MAX_COVER_BYTES) {
                 const data = entryData(buf, ce);
                 if (data && data.length) {
-                    cover = { data: data, ext: extM[1].toLowerCase() === 'jpeg' ? 'jpg' : extM[1].toLowerCase() };
+                    const real = sniffExt(data) || (extM[1].toLowerCase() === 'jpeg' ? 'jpg' : extM[1].toLowerCase());
+                    cover = { data: data, ext: real };
                 }
             }
         }

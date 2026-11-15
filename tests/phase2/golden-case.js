@@ -27,6 +27,7 @@ const modTags = require(path.resolve(__dirname, '../../src/tags/board.js'));
 const modRecur = require(path.resolve(__dirname, '../../src/recur/board.js'));
 const modRelation = require(path.resolve(__dirname, '../../src/relation/board.js'));
 const modReview = require(path.resolve(__dirname, '../../src/review/term.js'));
+const modCross = require(path.resolve(__dirname, '../../src/review/cross.js'));
 const modTrace = require(path.resolve(__dirname, '../../src/trace/board.js'));
 const modVault = require(path.resolve(__dirname, '../../src/secure/vault.js'));
 const modAttach = require(path.resolve(__dirname, '../../src/attach/links.js'));
@@ -1516,6 +1517,185 @@ test('growth', '旧学习库导入：书/影/画进阅读、课进技能、按�
   assert.strictEqual(again.state.themes.length, 2);
 });
 
+// V3.9 练习反馈：技能卡点带年龄，考试错因只增不改
+test('growth', 'V3.9 技能卡点：天数从开始日算、改文本才重置、清走进留档', function () {
+  let s = growthBoard.empty();
+  s = growthBoard.addSkill(s, { title: 'Python' });
+  const id = s.skills[0].id;
+
+  // 没卡点时不该凭空出现 0 天
+  assert.strictEqual(growthBoard.board(s, '2026-11-15').skills[0].blockerDays, 0);
+  assert.strictEqual(growthBoard.board(s, '2026-11-15').skills[0].stuck, false);
+
+  s = growthBoard.setSkillBlocker(s, id, '看不懂 groupby 的返回结构', '2026-10-20');
+  let row = growthBoard.board(s, '2026-11-15').skills[0];
+  assert.strictEqual(row.blocker, '看不懂 groupby 的返回结构');
+  assert.strictEqual(row.blockerDays, 27, '10-20 到 11-15 应是 26 天差、按「第 N 天」记 27');
+  assert.strictEqual(row.stuck, true, '27 天该判「挂着」');
+  assert.strictEqual(row.blockerText, '已卡 27 天');
+
+  // 同一条文本重存不该把年龄清零——否则每次打开都变「今天才开始卡」
+  s = growthBoard.setSkillBlocker(s, id, '看不懂 groupby 的返回结构', '2026-11-14');
+  assert.strictEqual(growthBoard.board(s, '2026-11-15').skills[0].blockerDays, 27, '重存同一句把开始日重置了');
+
+  // 当天记的算第 1 天，不写 0 天
+  let fresh = growthBoard.empty();
+  fresh = growthBoard.addSkill(fresh, { title: 'A' });
+  fresh = growthBoard.setSkillBlocker(fresh, fresh.skills[0].id, '刚卡住', '2026-11-15');
+  assert.strictEqual(growthBoard.board(fresh, '2026-11-15').skills[0].blockerDays, 1);
+
+  // 阈值边界：10-20 起算，11-01 是第 13 天（不报警），11-02 是第 14 天（报警）
+  assert.strictEqual(growthBoard.board(s, '2026-11-01').skills[0].blockerDays, 13);
+  assert.strictEqual(growthBoard.board(s, '2026-11-01').skills[0].stuck, false, '13 天不该报警');
+  assert.strictEqual(growthBoard.board(s, '2026-11-02').skills[0].stuck, true, '14 天该报警');
+
+  // 清走：卡点清空、留档保住开始日与解决日
+  s = growthBoard.clearSkillBlocker(s, id, '2026-11-16');
+  row = growthBoard.board(s, '2026-11-16').skills[0];
+  assert.strictEqual(row.blocker, '');
+  assert.strictEqual(row.blockerDays, 0);
+  assert.strictEqual(row.clearedCount, 1);
+  assert.strictEqual(row.clearedRecent[0].text, '看不懂 groupby 的返回结构');
+  assert.strictEqual(row.clearedRecent[0].since, '2026-10-20', '留档没保住开始日，就算不出「卡了多久才过」');
+  assert.strictEqual(row.clearedRecent[0].clearedAt, '2026-11-16');
+
+  // 空文本等价于清走（前端把人清空输入框当「已过去」处理，不该留个空白卡点）
+  let empty2 = growthBoard.empty();
+  empty2 = growthBoard.addSkill(empty2, { title: 'B' });
+  const bid = empty2.skills[0].id;
+  empty2 = growthBoard.setSkillBlocker(empty2, bid, '卡了', '2026-11-01');
+  empty2 = growthBoard.setSkillBlocker(empty2, bid, '   ', '2026-11-05');
+  assert.strictEqual(empty2.skills[0].blocker, '');
+  assert.strictEqual(empty2.skills[0].cleared.length, 1, '清空文本该走留档，而不是留个空卡点');
+});
+
+test('growth', 'V3.9 技能：下次提高一点什么单独存，不进里程碑', function () {
+  let s = growthBoard.empty();
+  s = growthBoard.addSkill(s, { title: 'Python' });
+  const id = s.skills[0].id;
+  s = growthBoard.setSkillNextUp(s, id, '手写一遍三种聚合的差别');
+  const row = growthBoard.board(s, '2026-11-15').skills[0];
+  assert.strictEqual(row.nextUp, '手写一遍三种聚合的差别');
+  assert.strictEqual(row.milestoneTotal, 0, '「下次提高」被当成里程碑了');
+  // 超长裁剪到 60，不走 NOTE_MAX
+  s = growthBoard.setSkillNextUp(s, id, 'x'.repeat(200));
+  assert.strictEqual(s.skills[0].nextUp.length, 60);
+});
+
+test('growth', 'V3.9 考试错因：只增不改、重考不清历史、同日同分不重复', function () {
+  let s = growthBoard.empty();
+  s = growthBoard.addExam(s, { title: '一建', examDate: '2026-11-20' });
+  const id = s.exams[0].id;
+
+  // 未通过 + 错因
+  s = growthBoard.setExamResult(s, id, 58, 60, ['calc', 'time'], '2026-09-20');
+  let row = growthBoard.board(s, '2026-11-15').exams[0];
+  assert.strictEqual(row.status, 'failed');
+  assert.strictEqual(row.attemptCount, 1);
+  assert.strictEqual(row.failCount, 1);
+  assert.deepStrictEqual(row.lastFail.causesLabel, ['计算失误', '时间不够']);
+  assert.strictEqual(row.lastFail.gap, -2, '差 2 分应以负数记，界面取绝对值');
+
+  // 同日同分重存：只更新错因，不新增一次考试
+  s = growthBoard.setExamResult(s, id, 58, 60, ['calc'], '2026-09-20');
+  assert.strictEqual(growthBoard.board(s, '2026-11-15').exams[0].attemptCount, 1, '手滑点两下变成了考两次');
+  assert.deepStrictEqual(growthBoard.board(s, '2026-11-15').exams[0].lastFail.causesLabel, ['计算失误']);
+
+  // 重考：当前成绩清空，历史留住——这是重考唯一的方向感
+  s = growthBoard.retakeExam(s, id);
+  row = growthBoard.board(s, '2026-11-15').exams[0];
+  assert.strictEqual(row.score, 0);
+  assert.strictEqual(row.status, 'plan');
+  assert.strictEqual(row.attemptCount, 1, '重考把历史成绩一起清了');
+  assert.strictEqual(row.lastFail.score, 58);
+
+  // 第二次没过：两条历史，错因跨次聚合
+  s = growthBoard.setExamResult(s, id, 55, 60, ['calc'], '2027-09-19');
+  row = growthBoard.board(s, '2027-09-20').exams[0];
+  assert.strictEqual(row.attemptCount, 2);
+  assert.strictEqual(row.failCount, 2);
+  assert.strictEqual(row.causeTop[0].key, 'calc');
+  assert.strictEqual(row.causeTop[0].count, 2, '两次都栽在计算，却没聚合出来');
+  assert.strictEqual(row.lastFail.date, '2027-09-19', 'lastFail 不是最近一次');
+
+  // 事后补记错因：只改最近一条，不动分数、不新增
+  s = growthBoard.setExamCauses(s, id, ['concept', 'misread']);
+  row = growthBoard.board(s, '2027-09-20').exams[0];
+  assert.strictEqual(row.attemptCount, 2);
+  assert.deepStrictEqual(row.lastFail.causesLabel, ['概念没懂', '审题偏差']);
+  assert.strictEqual(row.lastFail.score, 55, '补记错因把分数改了');
+
+  // 通过之后再重考：通过的那次也留在历史里
+  s = growthBoard.setExamResult(s, id, 72, 60, [], '2028-09-18');
+  s = growthBoard.retakeExam(s, id);
+  row = growthBoard.board(s, '2028-09-19').exams[0];
+  assert.strictEqual(row.attemptCount, 3);
+  assert.strictEqual(row.failCount, 2, '通过的记录被算成未过了');
+});
+
+test('growth', 'V3.9 错因归类：非法 key 丢弃、最多 4 条、跨考试汇总', function () {
+  let s = growthBoard.empty();
+  s = growthBoard.addExam(s, { title: 'A' });
+  s = growthBoard.addExam(s, { title: 'B' });
+  const a = s.exams[0].id;
+  const b = s.exams[1].id;
+  s = growthBoard.setExamResult(s, a, 50, 60, ['calc', '瞎写', 'calc', 'time', 'concept', 'practice', 'state'], '2026-09-20');
+  const row = growthBoard.board(s, '2026-11-15').exams.filter(function (e) { return e.id === a; })[0];
+  assert.deepStrictEqual(row.attempts[0].causes, ['calc', 'time', 'concept', 'practice'], '非法 key 没丢 / 没截到 4 条 / 没去重');
+
+  s = growthBoard.setExamResult(s, b, 40, 60, ['calc'], '2026-09-21');
+  const board = growthBoard.board(s, '2026-11-15');
+  assert.strictEqual(board.causeTop[0].key, 'calc');
+  assert.strictEqual(board.causeTop[0].count, 2, '跨考试没汇总');
+  assert.strictEqual(board.stats.examAttempts, 2);
+  assert.strictEqual(board.stats.examFails, 2);
+
+  // 没记过成绩就补错因：不报错、不凭空造一条作答
+  let fresh = growthBoard.empty();
+  fresh = growthBoard.addExam(fresh, { title: 'C' });
+  const c = fresh.exams[0].id;
+  const after = growthBoard.setExamCauses(fresh, c, ['calc']);
+  assert.strictEqual(after.exams[0].attempts.length, 0, '没有作答却造出了一条历史');
+});
+
+test('growth', 'V3.9 兼容：老数据没有 attempts / blocker 也不炸，脏值丢弃', function () {
+  // 老版本存的 md_growth：技能只有里程碑与练习、考试只有当前分数
+  const legacy = {
+    version: 1,
+    exams: [{ id: 'ex1', title: '老考试', status: 'passed', score: 80, passLine: 60 }],
+    skills: [{ id: 'sk1', title: '老技能', level: 2, milestones: [], practices: [] }],
+    themes: []
+  };
+  const s = growthBoard.normalize(legacy);
+  assert.strictEqual(s.exams[0].attempts.length, 0, '老数据被凭空补了历史');
+  assert.strictEqual(s.skills[0].blocker, '');
+  assert.strictEqual(s.skills[0].blockerSince, '');
+  assert.strictEqual(s.skills[0].cleared.length, 0);
+  assert.strictEqual(growthBoard.board(s, '2026-11-15').skills[0].blockerDays, 0);
+  // 幂等：新字段反复 normalize 不漂移
+  assert.deepStrictEqual(growthBoard.normalize(s).skills[0], s.skills[0]);
+
+  // 脏 attempts：没有分数或合格线的那条要丢；causes 里的非字符串丢掉
+  const dirty = growthBoard.normalize({
+    exams: [{
+      title: 'T', status: 'failed', score: 50, passLine: 60,
+      attempts: [
+        { score: 0, passLine: 0, causes: ['calc'] },
+        { id: 'at1', date: '2026-09-20', score: 50, passLine: 60, causes: ['calc', null, 7] }
+      ]
+    }],
+    skills: [{ title: 'K', blocker: '卡住', blockerSince: '2026-13-40', cleared: [{ text: '' }] }]
+  });
+  assert.strictEqual(dirty.exams[0].attempts.length, 1, '没有分数的那条没丢');
+  assert.deepStrictEqual(dirty.exams[0].attempts[0].causes, ['calc']);
+  assert.strictEqual(dirty.exams[0].attempts[0].passed, false);
+  assert.strictEqual(dirty.skills[0].blockerSince, '', '非法日期没丢');
+  assert.strictEqual(dirty.skills[0].cleared.length, 0, '空文本留档没被丢掉');
+
+  // 有卡点但开始日非法：按「今天」兜底，不写 0 天
+  assert.strictEqual(growthBoard.board(dirty, '2026-11-15').skills[0].blockerDays, 1);
+});
+
 test('growth', 'normalize：非法日期丢弃、超限裁剪、幂等、脏数据不抛', function () {
   let s = growthBoard.empty();
   s = growthBoard.addExam(s, { title: '一建' });
@@ -2031,6 +2211,107 @@ test('v2', 'reading/board：normalize / 翻页 / 删书不删笔记 / 标签归�
   assert.strictEqual(modReading.notesQuery(s, {}).items[0].orphan, true, '原书移出应标 orphan');
 });
 
+test('v2', 'reading/board：书架顺序 / 拖动重排 / 最近在读 / 再读一遍 / 按书导出', function () {
+  let s = modReading.empty();
+  s = modReading.addBook(s, { id: 'b1', title: '甲', total: 100 });
+  s = modReading.addBook(s, { id: 'b2', title: '乙', total: 100 });
+  s = modReading.addBook(s, { id: 'b3', title: '丙', total: 100 });
+  // 新书排最前：每本的 order 比现有最小值再小一，刚放上书架的那本立刻在第一屏
+  assert.deepStrictEqual(modReading.board(s, []).books.map(function (b) { return b.id; }), ['b3', 'b2', 'b1'],
+    '新书没排在最前');
+  assert.strictEqual(modReading.normalize(s).books.length, 3, 'order 字段应进白名单，不被 normalize 削掉');
+
+  // 拖动重排：只认传入的 id 次序，未列入的保持相对次序接在后面
+  s = modReading.normalize(modReading.reorderBooks(s, ['b1', 'b3']));
+  const order = modReading.board(s, []).books.map(function (b) { return b.id; });
+  assert.deepStrictEqual(order, ['b1', 'b3', 'b2'], '拖动重排没生效：' + JSON.stringify(order));
+  const first = modReading.board(s, []).books[0];
+  assert.strictEqual(first.order, 0, '重排后应从头编号');
+  // 传入未知 id / 空数组：不炸、不改顺序
+  assert.deepStrictEqual(
+    modReading.board(modReading.normalize(modReading.reorderBooks(s, ['nope', 'b3', 'b1'])), []).books.map(function (b) { return b.id; }),
+    ['b3', 'b1', 'b2'], '含未知 id 的重排把顺序弄乱了');
+
+  // 最近在读：只改时间，不碰进度与状态
+  s = modReading.normalize(modReading.advanceBook(s, 'b1', 30, '2026-11-14'));
+  s = modReading.normalize(modReading.touchBook(s, 'b1', 1763000000000));
+  let b1 = s.books.filter(function (b) { return b.id === 'b1'; })[0];
+  assert.strictEqual(b1.lastReadAt, 1763000000000, '最近在读没打上时间戳');
+  assert.strictEqual(b1.done, 30, '打点不该改进度');
+  assert.strictEqual(b1.status, 'reading', '打点不该改状态');
+
+  // 再读一遍：进度归零、状态回在读、时间戳刷新，书签与笔记一条不动
+  s = modReading.normalize(modReading.addBookmark(s, { bookId: 'b1', chapterIndex: 2, anchor: 'a-1' }));
+  s = modReading.normalize(modReading.addNote(s, {
+    mode: 'leisure', bookId: 'b1', bookTitle: '甲', type: 'highlight', quote: '一句', text: '想法', page: 3, tags: []
+  }));
+  const marksBefore = s.bookmarks.length;
+  const notesBefore = s.notes.length;
+  s = modReading.normalize(modReading.rereadBook(s, 'b1', 1763000009999));
+  b1 = s.books.filter(function (b) { return b.id === 'b1'; })[0];
+  assert.strictEqual(b1.done, 0, '再读一遍没把进度归零');
+  assert.strictEqual(b1.status, 'reading', '再读一遍应回到在读');
+  assert.strictEqual(b1.finishedAt, '', '再读一遍应清掉读完时间');
+  assert.strictEqual(b1.lastReadAt, 1763000009999, '再读一遍应刷新最近在读');
+  assert.strictEqual(s.bookmarks.length, marksBefore, '再读一遍不该删书签');
+  assert.strictEqual(s.notes.length, notesBefore, '再读一遍不该删笔记');
+
+  // 按书导出：只导这一本的笔记，全库汇总仍是另一条路
+  s = modReading.normalize(modReading.addNote(s, {
+    mode: 'leisure', bookId: 'b2', bookTitle: '乙', type: 'note', quote: '', text: '乙书的想法', page: 9, tags: []
+  }));
+  const one = modReading.exportMarkdown(s, [], 'b1');
+  const all = modReading.exportMarkdown(s, [], '');
+  assert.ok(one.indexOf('一句') >= 0, '按书导出漏了这本书的笔记');
+  assert.ok(one.indexOf('乙书的想法') < 0, '按书导出混进了别的书的笔记');
+  assert.ok(all.indexOf('一句') >= 0 && all.indexOf('乙书的想法') >= 0, '全库汇总漏了笔记');
+  const other = modReading.exportMarkdown(s, [], 'b2');
+  assert.ok(other.indexOf('乙书的想法') >= 0, '按书导出的另一本取错');
+  assert.ok(other.indexOf('一句') < 0, '按书导出混进了别的书的笔记');
+});
+
+test('v2', 'reading/board：书架分组 / 收藏 / 重命名合并 / 解散不删书', function () {
+  let s = modReading.empty();
+  s = modReading.normalize(modReading.addBook(s, { id: 'b1', title: '甲', total: 100, group: '技术', favorite: true }));
+  s = modReading.normalize(modReading.addBook(s, { id: 'b2', title: '乙', total: 100 }));
+  s = modReading.normalize(modReading.addBook(s, { id: 'b3', title: '丙', total: 100 }));
+  let bd = modReading.board(s, []);
+  assert.deepStrictEqual(bd.groups, [{ name: '技术', count: 1 }], '分组清单没从 books 派生');
+  assert.strictEqual(bd.favoriteCount, 1, '收藏数不对');
+
+  // 收藏开关：开一次、关一次，别只认 true 不认 false
+  s = modReading.normalize(modReading.setBookFavorite(s, 'b2', true));
+  s = modReading.normalize(modReading.setBookFavorite(s, 'b1', false));
+  bd = modReading.board(s, []);
+  assert.strictEqual(bd.favoriteCount, 1, '收藏开关没生效');
+  assert.strictEqual(bd.books.filter(function (x) { return x.id === 'b2'; })[0].favorite, true);
+
+  s = modReading.normalize(modReading.setBookGroup(s, 'b2', '技术'));
+  s = modReading.normalize(modReading.setBookGroup(s, 'b3', '工具'));
+  bd = modReading.board(s, []);
+  assert.strictEqual(bd.groups.reduce(function (m, g) { return m + g.count; }, 0), 3, '分组总数不对');
+
+  // 重命名到已有组 = 合并，一本书都不能丢
+  s = modReading.normalize(modReading.renameGroup(s, '工具', '技术'));
+  bd = modReading.board(s, []);
+  assert.deepStrictEqual(bd.groups, [{ name: '技术', count: 3 }], '重命名合并没生效');
+  assert.strictEqual(s.books.length, 3, '合并把书弄丢了');
+
+  // 解散只清标签，绝不删书
+  s = modReading.normalize(modReading.removeGroup(s, '技术'));
+  bd = modReading.board(s, []);
+  assert.deepStrictEqual(bd.groups, [], '解散后仍残留分组');
+  assert.strictEqual(s.books.length, 3, '解散分组把书删了');
+  assert.ok(s.books.every(function (x) { return x.group === ''; }), '解散后分组字段没清空');
+
+  // 脏数据：长名截断、非布尔收藏丢掉、normalize 幂等
+  const dirty = { books: [{ id: 'd1', title: '丁', group: 'x'.repeat(200), favorite: 'yes' }] };
+  const n1 = modReading.normalize(dirty);
+  assert.ok(n1.books[0].group.length <= 24, '分组名没截断');
+  assert.strictEqual(n1.books[0].favorite, false, 'favorite 非布尔没被丢掉');
+  assert.deepStrictEqual(modReading.normalize(n1), n1, 'normalize 不幂等');
+});
+
 test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单自建', function () {
   const n = {
     mode: 'theme', bookTitle: '给水排水', page: 32, tags: ['管网', '读书'],
@@ -2139,6 +2420,66 @@ test('v2', 'reading/epub：零依赖 ZIP + OPF 解析出书名 / 作者 / 封面
   }
 });
 
+test('v2', 'reading/epub 封面：meta / properties / guide 三级兜底，4MB 上限，格式按魔数纠正（V3.11）', function () {
+  // 真实 PNG 头 + 700KB 填充：超过旧 500KB 上限，用来钉住「书里有封面就必须抽到」
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(700 * 1024, 7)]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuge-epub-cover-'));
+  const files = [];
+  function write(name, buf) {
+    const p = path.join(dir, name);
+    fs.writeFileSync(p, buf);
+    files.push(p);
+    return p;
+  }
+  try {
+    // ① 规范 meta 封面 + 大图：旧逻辑按 500KB 卡，会静默回落成色块
+    const a = write('a.epub', makeZip([
+      { name: 'mimetype', data: 'application/epub+zip' },
+      { name: 'META-INF/container.xml', data: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>' },
+      { name: 'OEBPS/content.opf', data: '<package><metadata><dc:title>大图封面</dc:title><meta name="cover" content="ci"/></metadata><manifest><item id="ci" href="images/cover.png" media-type="image/png"/></manifest><spine><itemref idref="ci"/></spine></package>' },
+      { name: 'OEBPS/images/cover.png', data: png }
+    ]));
+    const ia = modEpub.inspect(a);
+    assert.ok(ia && ia.cover, '700KB 封面应当抽到（上限已放宽到 4MB）');
+    assert.strictEqual(ia.cover.data.length, png.length, '大封面字节被截断');
+
+    // ② 只有 guide type="cover" 指向封面页，页内 src 用 ../ 跨目录
+    const b = write('b.epub', makeZip([
+      { name: 'mimetype', data: 'application/epub+zip' },
+      { name: 'META-INF/container.xml', data: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>' },
+      { name: 'OEBPS/content.opf', data: '<package><metadata><dc:title>guide 封面</dc:title></metadata><manifest><item id="cp" href="text/cover.xhtml" media-type="application/xhtml+xml"/><item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine><guide><reference type="cover" title="Cover" href="text/cover.xhtml"/></guide></package>' },
+      { name: 'OEBPS/text/cover.xhtml', data: '<html><body><img src="../images/front.jpg" alt="cover"/></body></html>' },
+      { name: 'OEBPS/text/ch1.xhtml', data: '<html><body><p>正文</p></body></html>' },
+      { name: 'OEBPS/images/front.jpg', data: png }
+    ]));
+    const ib = modEpub.inspect(b);
+    assert.ok(ib && ib.cover, 'guide 指向的封面页没取到首图（../ 相对路径没解析？）');
+    assert.strictEqual(ib.cover.ext, 'png', '扩展名写 jpg、内容是 PNG，应按魔数纠正，否则 dataURL 声明错 mime 会白图');
+
+    // ③ EPUB3 的 properties="cover-image"，文件名不含 cover
+    const c = write('c.epub', makeZip([
+      { name: 'mimetype', data: 'application/epub+zip' },
+      { name: 'META-INF/container.xml', data: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>' },
+      { name: 'OEBPS/content.opf', data: '<package><metadata><dc:title>EPUB3</dc:title></metadata><manifest><item id="i1" href="img/c1.png" media-type="image/png" properties="cover-image"/></manifest><spine><itemref idref="i1"/></spine></package>' },
+      { name: 'OEBPS/img/c1.png', data: png }
+    ]));
+    assert.ok(modEpub.inspect(c).cover, 'properties="cover-image" 没认出来');
+
+    // ④ 真的没有封面：正文里的插图不许被当成封面
+    const d = write('d.epub', makeZip([
+      { name: 'mimetype', data: 'application/epub+zip' },
+      { name: 'META-INF/container.xml', data: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>' },
+      { name: 'OEBPS/content.opf', data: '<package><metadata><dc:title>没有封面</dc:title></metadata><manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/fig1.png" media-type="image/png"/></manifest><spine><itemref idref="ch1"/></spine></package>' },
+      { name: 'OEBPS/ch1.xhtml', data: '<html><body><img src="images/fig1.png"/><p>正文</p></body></html>' },
+      { name: 'OEBPS/images/fig1.png', data: png }
+    ]));
+    assert.strictEqual(modEpub.inspect(d).cover, null, '把正文插图当封面了：宁可没有，也不能给错');
+  } finally {
+    files.forEach(function (p) { try { fs.unlinkSync(p); } catch (e) { /* noop */ } });
+    try { fs.rmdirSync(dir); } catch (e) { /* noop */ }
+  }
+});
+
 test('v2', 'reading/board：本地书字段读回不丢、路径去重、normalize 幂等', function () {
   let s = modReading.empty();
   const patch = {
@@ -2199,11 +2540,13 @@ test('v2', 'reading/epub：目录（NCX 两层）+ 按章正文 + 图片内联 +
   }
 });
 
-test('v2', 'reading/reader-source：TXT / MD 分章、PDF 明确不支持、编码兜底不抛', function () {
+test('v2', 'reading/reader-source：TXT / MD 分章、PDF 只验文件头并交给阅读窗、编码兜底不抛', function () {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuge-text-'));
   const md = path.join(dir, 'note.md');
   const txt = path.join(dir, 'book.txt');
   const pdf = path.join(dir, 'a.pdf');
+  const badPdf = path.join(dir, 'broken.pdf');
+  const mobi = path.join(dir, 'b.mobi');
   try {
     fs.writeFileSync(md, '# 第一节 开头\n\n第一段 **重点**。\n\n## 子标题\n\n- 一条\n- 两条\n\n> 引用一句\n', 'utf8');
     const m = modReaderSource.openBook(md);
@@ -2216,13 +2559,28 @@ test('v2', 'reading/reader-source：TXT / MD 分章、PDF 明确不支持、编�
     const t = modReaderSource.openBook(txt);
     assert.ok(t.ok && t.chapterCount >= 3, 'TXT 应按章节分章');
     assert.ok(modReaderSource.chapter(txt, 1).html.indexOf('内容二') >= 0, 'TXT 第二章没读到');
-    fs.writeFileSync(pdf, 'x');
+    // V3.5：PDF 不再「明确不支持」。主进程只认 %PDF- 文件头 + 体积上限，
+    // 页数 / 目录 / 文字层全交给阅读窗的本地 pdf.js，所以这里 chapterCount 必须是 0。
+    fs.writeFileSync(pdf, '%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
     const p = modReaderSource.openBook(pdf);
-    assert.ok(p.ok && p.supported === false && p.reason, 'PDF 应如实标注不支持');
+    assert.ok(p.ok && p.supported && p.kind === 'pdf' && p.pdf === true,
+      '合法 PDF 头应交给阅读窗：' + JSON.stringify(p).slice(0, 200));
+    assert.strictEqual(p.chapterCount, 0, '主进程不该解析 PDF 页数');
+    assert.deepStrictEqual(p.toc, [], 'PDF 目录由阅读窗按页生成');
+    assert.strictEqual(modReaderSource.FORMATS.pdf.supported, true, 'FORMATS.pdf 应标为支持');
+    assert.ok(modReaderSource.MAX_PDF_BYTES > 0, 'PDF 必须有体积上限');
+    fs.writeFileSync(badPdf, 'x');
+    const bp = modReaderSource.openBook(badPdf);
+    assert.strictEqual(bp.ok, false, '假 PDF 不能放行');
+    assert.strictEqual(bp.kind, 'pdf', '假 PDF 也要保留 pdf 类型，界面才能给对的提示');
+    assert.ok(bp.reason && bp.reason.indexOf('文件头') >= 0, '假 PDF 应说明是文件头问题');
+    fs.writeFileSync(mobi, 'x');
+    const mb = modReaderSource.openBook(mobi);
+    assert.ok(mb.ok && mb.supported === false && mb.reason, 'MOBI / AZW3 仍如实标注不支持');
     assert.strictEqual(modReaderSource.openBook(path.join(dir, 'nope.epub')).ok, false, '不存在应 ok:false');
     assert.strictEqual(modReaderSource.chapter(md, 999).ok, false, '越界应 ok:false');
   } finally {
-    [md, txt, pdf].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) { /* noop */ } });
+    [md, txt, pdf, badPdf, mobi].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) { /* noop */ } });
     try { fs.rmdirSync(dir); } catch (e) { /* noop */ }
   }
 });
@@ -2935,6 +3293,116 @@ test('v2', 'free/接线：白名单、备份注入与导入、打包清单三处
   assert.ok(yml.indexOf('src/free/**/*') >= 0 && yml.indexOf('src/writing/**/*') >= 0, '打包清单漏了');
 });
 
+test('dream', '证据回流：近 30 天完成的任务 / 存入的钱才算「在推」，过期记录不算（V3.8）', function () {
+  const day = function (iso) { return new Date(iso + 'T10:00:00').getTime(); };
+  let s = dreamBoard.empty();
+  s = dreamBoard.add(s, { title: '每周运动 3 次', area: 'health', horizon: 'short' });
+  const id = s.dreams[0].id;
+  s = dreamBoard.linkTask(s, id, 't-old');
+  s = dreamBoard.linkTask(s, id, 't-new');
+  s = dreamBoard.linkTask(s, id, 't-open');
+  const tasks = [
+    { id: 't-old', title: '两个月前做的', status: 'done', doneAt: day('2026-09-01') },
+    { id: 't-new', title: '上周做的', status: 'done', doneAt: day('2026-11-12') },
+    { id: 't-open', title: '还没做的', status: 'next', doneAt: 0 }
+  ];
+  const b = dreamBoard.board(s, tasks, '2026-11-15');
+  const row = b.rows[0];
+  assert.strictEqual(row.evidence.windowDays, 30, '证据窗口不是 30 天');
+  assert.strictEqual(row.evidence.doneCount, 1, '窗口内完成数算错：' + row.evidence.doneCount);
+  assert.deepStrictEqual(row.evidence.doneTitles, ['上周做的'], '窗口外的完成被算成了证据');
+  assert.strictEqual(row.evidence.lastDoneDate, '2026-11-12');
+  assert.strictEqual(row.evidence.has, true);
+  assert.strictEqual(b.stats.evidenceCount, 1);
+  assert.strictEqual(b.stats.staleCount, 0);
+  assert.strictEqual(b.evidenceDays, 30);
+
+  // 把唯一一条窗口内完成抽走 → 同一目标立刻变「挂着」，且不靠进度条判断
+  const b2 = dreamBoard.board(s, [tasks[0], tasks[2]], '2026-11-15');
+  assert.strictEqual(b2.rows[0].evidence.has, false, '30 天前的完成仍被算作证据');
+  assert.strictEqual(b2.rows[0].evidence.doneCount, 0);
+  assert.strictEqual(b2.stats.evidenceCount, 0);
+  // 但刚建的目标不算「挂着」：还没到能说「没动」的时候
+  assert.strictEqual(b2.stats.staleCount, 0, '刚建的目标被判成「30 天没动」');
+  const oldState = dreamBoard.normalize({
+    dreams: [{ id: 'dr-old', title: '半年前定的', status: 'doing', progress: 30, createdAt: day('2026-05-01') }]
+  });
+  const bOld = dreamBoard.board(oldState, [], '2026-11-15');
+  assert.strictEqual(bOld.stats.staleCount, 1, '建了半年的零证据目标没算挂着');
+  assert.strictEqual(bOld.stats.evidenceCount, 0);
+
+  // 存款有日期可回查，单独也能当证据；本窗口外的存款不算
+  let s3 = dreamBoard.empty();
+  s3 = dreamBoard.add(s3, { title: '换工作站' });
+  const i3 = s3.dreams[0].id;
+  s3 = dreamBoard.setFund(s3, i3, 1000000);
+  s3 = dreamBoard.deposit(s3, i3, 300000, '2026-11-10', '', 'money');
+  const r3 = dreamBoard.board(s3, [], '2026-11-15').rows[0];
+  assert.strictEqual(r3.evidence.has, true, '窗口内存款没算证据');
+  assert.ok(r3.evidence.text.indexOf('存入') >= 0, '存款证据没写清来源：' + r3.evidence.text);
+  s3 = dreamBoard.deposit(s3, i3, 100000, '2026-08-01', '', 'money');
+  const r4 = dreamBoard.board(s3, [], '2026-11-15').rows[0];
+  assert.strictEqual(r4.evidence.depositCount, 1, '窗口外存款被算进来了');
+  assert.strictEqual(r4.evidence.lastDepositDate, '2026-11-10', '最近一笔存款取错');
+
+  // 什么都没挂：要说得清是「没挂事」，不是含糊的「没推动」
+  const bare = dreamBoard.board(dreamBoard.add(dreamBoard.empty(), { title: '空目标' }), [], '2026-11-15');
+  assert.ok(bare.rows[0].evidence.text.indexOf('还没挂') >= 0, '空目标文案不诚实：' + bare.rows[0].evidence.text);
+  // 任务列表整个缺失也不能崩（老数据 / 首启没有 md_gtd）
+  assert.strictEqual(dreamBoard.board(s, undefined, '2026-11-15').stats.evidenceCount, 0);
+});
+
+test('v2', 'metrics/成效侧：完成 / 目标推进 / 阅读推进 / 复盘只记次数，不记标题与答案（V3.8）', function () {
+  const os = require('os');
+  const { createMetrics, ALLOWED } = require(path.resolve(__dirname, '../../src/core/metrics.js'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiuge-outcome-'));
+  const m = createMetrics(dir);
+
+  // ① 白名单只放行计数与枚举，正文类字段即使硬塞也写不进去
+  ['outcome_task_done', 'outcome_dream_move', 'outcome_read_move', 'outcome_review'].forEach(function (k) {
+    assert.ok(ALLOWED[k], '成效侧缺白名单：' + k);
+  });
+  const ts = new Date().toISOString();
+  m.record('outcome_task_done', { ts: ts, date: '2026-11-15', n: 3, title: '绝不该出现的任务标题' });
+  m.record('outcome_dream_move', { ts: ts, date: '2026-11-15', kind: 'progress', title: '绝不该出现的目标名' });
+  m.record('outcome_read_move', { ts: ts, date: '2026-11-15', n: 1 });
+  m.record('outcome_review', { ts: ts, date: '2026-11-15', period: 'week', text: '绝不该出现的复盘答案' });
+  const raw = fs.readFileSync(m.file, 'utf8');
+  assert.ok(raw.indexOf('绝不该出现') < 0, '成效指标里出现了正文');
+
+  // ② 汇总真的算出来，且与「近 7 / 近 30 天」同口径
+  const o = m.summary().outcome;
+  assert.strictEqual(o.available, true);
+  assert.strictEqual(o.events, 4);
+  assert.strictEqual(o.total.taskDone, 3, 'n 没累加：' + o.total.taskDone);
+  assert.strictEqual(o.window7.taskDone, 3);
+  assert.strictEqual(o.window30.taskDone, 3);
+  assert.strictEqual(o.window7.dreamMove, 1);
+  assert.strictEqual(o.window7.readMove, 1);
+  assert.strictEqual(o.window7.review, 1);
+  assert.strictEqual(o.total.dreamMove, 1);
+
+  // ③ 一条成效事件都没有时 available=false：界面据此写「还没有」，不是一排 0
+  const empty = createMetrics(fs.mkdtempSync(path.join(os.tmpdir(), 'jiuge-outcome0-')));
+  const o0 = empty.summary().outcome;
+  assert.strictEqual(o0.available, false);
+  assert.strictEqual(o0.events, 0);
+
+  // ④ 接线：四类事件由 domain:call 成功后才记；只认参数键名，不读值
+  const api = fs.readFileSync(path.resolve(__dirname, '../../src/core/api-layer.js'), 'utf8');
+  ['gtd.complete', 'reading.advanceBook', 'reading.readerProgress', 'dream.deposit', 'dream.update', 'saveReview'].forEach(function (n) {
+    assert.ok(api.indexOf("'" + n + "'") >= 0, '成效侧漏了接线：' + n);
+  });
+  assert.ok(api.indexOf('function outcomeEvent') >= 0, '成效事件没有统一判定函数');
+  assert.ok(api.indexOf('patch.metric !== undefined') >= 0 && api.indexOf('patch.title') < 0,
+    '目标推进在按值判断（读值就有机会把标题写进日志）');
+  assert.ok(api.indexOf('trim().length > 0') >= 0, '复盘落成没区分「真的写了」与「清空答案」');
+  // 前端必须展示成效侧，且区分「没有事件」与「全是 0」
+  const dc = fs.readFileSync(path.resolve(__dirname, '../../renderer-v2/src/components/DataCenter.vue'), 'utf8');
+  assert.ok(dc.indexOf('成效侧') >= 0, '数据中心没有成效侧区块');
+  assert.ok(dc.indexOf('metrics.outcome.available') >= 0, '数据中心没区分「没有成效事件」');
+});
+
 test('v2', 'metrics/隐私：指标只写本机独立文件，正文与关键词一律丢弃（R-11）', function () {
   const os = require('os');
   const { createMetrics } = require(path.resolve(__dirname, '../../src/core/metrics.js'));
@@ -2974,6 +3442,184 @@ test('v2', 'metrics/隐私：指标只写本机独立文件，正文与关键词
   assert.ok(api.indexOf("'v1/metrics:setEnabled'") >= 0, '缺少指标开关路由');
   const preload = fs.readFileSync(path.resolve(__dirname, '../../src/preload/v2-preload.js'), 'utf8');
   assert.ok(preload.indexOf('v1/metrics:record') < 0, 'preload 暴露了写原始事件的通道');
+});
+
+test('review', '跨期对照：同一句只认同文或包含，短句不判（V3.10）', function () {
+  const same = modCross.samePromise;
+  assert.strictEqual(same('每天早睡，23 点前关灯', '每天早睡 23 点前关灯'), true, '标点差异被当成两句话');
+  assert.strictEqual(same('每天 23 点前关灯，手机放客厅', '每天23点前关灯'), true, '包含关系没认出来');
+  assert.strictEqual(same('多陪家人', '多运动'), false, '模糊比相似把两件事判成一件');
+  assert.strictEqual(same('早睡', '每天早睡'), false, '少于 4 个字的短句不该判同一句');
+  assert.strictEqual(same('', ''), false);
+  // 只脱标点、不脱字：字不同就是不同说法，系统不替人改写
+  assert.strictEqual(modCross.normPromise('每天早睡（23 点前）'), '每天早睡23点前');
+});
+
+test('review', '跨期对照：周期键回退跨年不断、脏键不炸（V3.10）', function () {
+  assert.deepStrictEqual(modCross.keysBack('week', '2026-11-09', 3), ['2026-11-09', '2026-11-02', '2026-10-26']);
+  assert.deepStrictEqual(modCross.keysBack('week', '2026-01-05', 2), ['2026-01-05', '2025-12-29'], '周键跨年断了');
+  assert.deepStrictEqual(modCross.keysBack('month', '2026-01', 3), ['2026-01', '2025-12', '2025-11'], '月键跨年断了');
+  assert.deepStrictEqual(modCross.keysBack('week', '不是日期', 3), [], '脏键没被拒绝');
+  assert.strictEqual(modCross.prevKey('week', ''), '');
+});
+
+test('review', '跨期对照：三种下落分开说，「没有痕迹」不等于「没做到」（V3.10）', function () {
+  const slots = [
+    { key: '2026-11-09', answers: ['本周把复盘挪到周一', '因为周日容易被打断', '每天 23 点前关灯，手机放客厅'] },
+    { key: '2026-11-02', answers: ['a', 'b', '每天23点前关灯 手机放客厅'] },
+    { key: '2026-10-26', answers: ['a', 'b', '每天 23 点前关灯，手机放客厅。'] },
+    { key: '2026-10-19', answers: ['', '', ''] }
+  ];
+  const done = {
+    id: 't1', title: '把充电器挪到客厅', status: 'done',
+    doneAt: new Date(2026, 10, 12, 10).getTime(), source: 'review', note: '来自 2026-11-02 周复盘的第 3 问'
+  };
+  const base = { period: 'week', key: '2026-11-09', slots: slots, today: '2026-11-15' };
+
+  // ① 老口径（source='review'，键在 note 里）：升级前落成的承诺也得追上
+  const r1 = modCross.compare(Object.assign({ tasks: [done] }, base));
+  assert.strictEqual(r1.prevPromise, '每天23点前关灯 手机放客厅');
+  assert.ok(r1.link && r1.link.pending === false, '老 source 的任务没追上');
+  assert.strictEqual(r1.link.doneText, '2026-11-12');
+  assert.strictEqual(r1.streak, 3, '连续三期说同一件事没数对');
+  assert.strictEqual(r1.history.length, 1, '前几期不该重复列上期那句');
+  assert.strictEqual(r1.history[0].key, '2026-10-26');
+  assert.strictEqual(r1.history[0].sameAsNewer, true, '与前一期同一句没标出来');
+
+  // ② 新口径（source 带周期键）：没勾掉就是「还在清单里」，不判「没做到」
+  const open = Object.assign({}, done, {
+    id: 't2', status: 'next', doneAt: 0, dueDate: '2026-11-13', source: 'review:week:2026-11-02'
+  });
+  const r2 = modCross.compare(Object.assign({ tasks: [open] }, base));
+  assert.strictEqual(r2.link.pending, true);
+  assert.strictEqual(r2.link.dueText, '已过 2026-11-13', '逾期没说清');
+
+  // ③ 压根没落成：结论是「没有痕迹」，不是「没做到」——findLink 必须返回 null
+  assert.strictEqual(modCross.compare(Object.assign({ tasks: [] }, base)).link, null, '没有记录却硬塞了一条下落');
+
+  // ④ 别的周期的任务不能串台
+  const other = Object.assign({}, done, { source: 'review:week:2026-10-26', note: '来自 2026-10-26 周复盘的第 3 问' });
+  assert.strictEqual(modCross.compare(Object.assign({ tasks: [other] }, base)).link, null, '把别的期的承诺算到上期头上');
+});
+
+test('review', '跨期对照：上期空则不追、本期草稿可覆盖、全空不出卡（V3.10）', function () {
+  const slots = [
+    { key: '2026-11-09', answers: ['a', 'b', '每天 23 点前关灯'] },
+    { key: '2026-11-02', answers: ['a', 'b', ''] },
+    { key: '2026-10-26', answers: ['a', 'b', '每天 23 点前关灯'] }
+  ];
+  const r = modCross.compare({
+    period: 'week', key: '2026-11-09', slots: slots, today: '2026-11-15',
+    tasks: [{ id: 't', title: '不该被追上', status: 'done', doneAt: 0, source: 'review:week:2026-11-02' }]
+  });
+  assert.strictEqual(r.prevPromise, '', '上期空着却有了承诺');
+  assert.strictEqual(r.link, null, '上期没写第 3 问却去追了任务');
+  assert.strictEqual(r.streak, 1, '上期空着还算连续');
+  assert.strictEqual(r.history.length, 1, '再上期那句应该还在');
+  assert.strictEqual(r.history[0].sameAsNewer, false, '隔了一期空档不能算同一句');
+  assert.strictEqual(r.hasAny, true);
+
+  // 本期草稿优先：还没保存的那句也要立刻参与对照
+  const draft = modCross.compare({
+    period: 'week', key: '2026-11-09', current: '每天早睡，23 点前关灯', tasks: [], today: '2026-11-15',
+    slots: [{ key: '2026-11-09', answers: ['', '', ''] }, { key: '2026-11-02', answers: ['', '', '每天早睡 23 点前关灯'] }]
+  });
+  assert.strictEqual(draft.streak, 2, '草稿没参与对照');
+
+  // 一期都没写：hasAny=false，界面据此不摆这张卡（空卡片比没有更烦）
+  const empty = modCross.compare({ period: 'week', key: '2026-11-09', slots: [{ key: '2026-11-09', answers: ['', '', ''] }], tasks: [] });
+  assert.strictEqual(empty.hasAny, false);
+  assert.strictEqual(empty.streak, 0);
+});
+
+test('review', '跨期对照接线：路由只读、白名单登记、source 带周期键（V3.10）', function () {
+  const main = fs.readFileSync(path.resolve(__dirname, '../../src/main/main-v2.js'), 'utf8');
+  const api = fs.readFileSync(path.resolve(__dirname, '../../src/core/api-layer.js'), 'utf8');
+  const view = fs.readFileSync(path.resolve(__dirname, '../../renderer-v2/src/components/ReviewView.vue'), 'utf8');
+  assert.ok(main.indexOf("'review.cross': function") >= 0, '主进程缺 review.cross 路由');
+  assert.ok(api.indexOf("'review.cross'") >= 0, '白名单漏登记 review.cross');
+  // 只读：这条路由里不许出现任何写操作，否则「对照」会顺手改掉被对照的东西。
+  // 截到下一个路由为止，别把后一条 trace.add 的 mutate 算进来
+  const at = main.indexOf("'review.cross': function");
+  const next = main.indexOf("'trace.", at);
+  const seg = main.slice(at, next > at ? next : at + 1200);
+  ['mutate', '.add(', 'remove', 'saveReview'].forEach(function (w) {
+    assert.ok(seg.indexOf(w) < 0, '跨期对照路由里出现了写操作：' + w);
+  });
+  assert.ok(view.indexOf("callDomain<CrossView | null>('review.cross'") >= 0, '渲染层没接上跨期对照');
+  assert.ok(view.indexOf("source: 'review:' + period.value + ':' + reviewKey.value") >= 0,
+    '落成下一步时没把周期键写进 source');
+});
+
+test('v2', 'reading/board：主题书不进休闲书架，主题行与书架同一套派生（V3.13）', function () {
+  const s0 = modReading.empty();
+  const s1 = modReading.addBook(s0, { id: 'l1', title: '活着', total: 300, status: 'reading' });
+  const s2 = modReading.addBook(s1, { id: 'l2', title: '量化投资之道', total: 200 });
+  // 主题书：同一个主题下三份同主题文件
+  const s3 = modReading.addBook(s2, { id: 't1', title: 'GB 18918 解读', total: 100, themeId: 'th1', unit: '页' });
+  const s4 = modReading.addBook(s3, { id: 't2', title: 'A2O 工艺', total: 100, themeId: 'th1' });
+  const s5 = modReading.addBook(s4, { id: 't3', title: 'MBR 膜污染', total: 100, themeId: 'th2' });
+  const s = modReading.normalize(modReading.addTheme(s5, { id: 'th1', title: '污水处理工艺' }));
+  // 一条主题书的笔记：主题行也要数上（以前只数 leisure，主题下永远 0 条）
+  const s6 = modReading.normalize(modReading.addNote(s, {
+    mode: 'theme', themeId: 'th1', bookId: 't1', bookTitle: 'GB 18918 解读', type: 'highlight', text: '一条批注'
+  }));
+
+  const b = modReading.board(s6, []);
+  assert.deepStrictEqual(b.books.map(function (x) { return x.id; }), ['t3', 't2', 't1', 'l2', 'l1'],
+    'books 应仍是全部（其他消费方按旧口径读）');
+  assert.deepStrictEqual(b.leisureBooks.map(function (x) { return x.id; }), ['l2', 'l1'],
+    '书架里不该出现主题书');
+  assert.strictEqual(b.stats.books, 2, '统计头的「休闲书」被主题书撑大了');
+  assert.strictEqual(b.stats.themeBooks, 3, '统计头没分开算主题书');
+  // 书架顺序 / 派生字段与主题行一致
+  const t1 = b.themeGroups.filter(function (g) { return g.themeId === 'th1'; })[0];
+  assert.ok(t1 && t1.rows.length === 2, '主题分组没带上该主题的书');
+  const row = t1.rows.filter(function (x) { return x.id === 't1'; })[0];
+  assert.strictEqual(row.progressText, '0/100 页', '主题行缺进度文本（渲染层会显示空白）');
+  assert.strictEqual(row.statusLabel, '待读', '主题行缺状态文案');
+  assert.strictEqual(row.noteCount, 1, '主题行的笔记数没算上（只数了 leisure）');
+  // 主题表里没登记的主题 id 也要能成组，不然书会「消失」在界面上
+  assert.ok(b.themeGroups.some(function (g) { return g.themeId === 'th2'; }), '未登记的主题没兜底成组');
+  // 分组 / 收藏只数休闲书：主题书身上残留的标签不该出现在书架的筛选条上
+  assert.deepStrictEqual(b.groups, [], '分组清单混进了主题书');
+});
+
+test('v2', 'reading/cover-net：只认豆瓣两类域名、只取图书、格式按魔数（V3.13）', function () {
+  const net = require(path.resolve(__dirname, '../../src/reading/cover-net.js'));
+  // 域名白名单留在客户端里：新增一个调用点也绕不过去
+  assert.ok(net.checkJsonHost('book.douban.com') === 'book.douban.com', '检索域名应放行');
+  assert.ok(net.checkImgHost('img9.doubanio.com') === 'img9.doubanio.com', '封面域名应放行');
+  ['evil.com', 'img.doubanio.com.evil.com', 'book.douban.com.evil.com', 'doubanio.com'].forEach(function (h) {
+    assert.throws(function () { net.checkImgHost(h); }, /BLOCKED_HOST|白名单/, '图片域名白名单被绕过了：' + h);
+  });
+  assert.throws(function () { net.checkJsonHost('img9.doubanio.com'); }, /白名单/, '图片域不该能当检索域用');
+
+  // 只认 type 'b'（图书）：影视 / 音乐条目混进来会让人套错封面
+  const buf = Buffer.from(JSON.stringify([
+    { title: '活着', author_name: '余华', year: '2012', type: 'b', pic: 'https://img9.doubanio.com/view/subject/s/public/s1.jpg', url: 'https://book.douban.com/subject/1/' },
+    { title: '活着（电影）', type: 'm', pic: 'https://img9.doubanio.com/view/subject/s/public/s2.jpg' },
+    { title: '', type: 'b', pic: 'https://img9.doubanio.com/view/subject/s/public/s3.jpg' },
+    { title: '野图', type: 'b', pic: 'https://evil.com/view/subject/s/public/s4.jpg' }
+  ]));
+  const list = net.parseSuggest(buf);
+  assert.strictEqual(list.length, 1, '非图书 / 空书名 / 野域名的条目都应被丢掉');
+  assert.strictEqual(list[0].title, '活着');
+  assert.strictEqual(list[0].picHost, 'img9.doubanio.com');
+  assert.strictEqual(list[0].picPath, '/view/subject/s/public/s1.jpg');
+  assert.deepStrictEqual(net.parseSuggest(Buffer.from('不是 json')), [], '脏响应应返回空数组而不是抛');
+
+  // 大图优先：s → l，失败由调用方退回 s
+  assert.strictEqual(net.biggerPic('/view/subject/s/public/s1.jpg'), '/view/subject/l/public/s1.jpg');
+  assert.strictEqual(net.biggerPic('/view/subject/l/public/s1.jpg'), '/view/subject/l/public/s1.jpg', '已经是 l 就别动');
+
+  // 格式按魔数认（豆瓣的 .jpg 偶尔其实是 webp，扩展名骗人会让封面打不开）
+  assert.strictEqual(net.sniffExt(Buffer.from('ffd8ffe000104a464946', 'hex')), 'jpg');
+  assert.strictEqual(net.sniffExt(Buffer.from('89504e470d0a1a0a0000', 'hex')), 'png');
+  assert.strictEqual(net.sniffExt(Buffer.from('474946383961', 'hex')), 'gif');
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]);
+  assert.strictEqual(net.sniffExt(webp), 'webp');
+  assert.strictEqual(net.sniffExt(Buffer.from('<html></html>')), '', '不是图片就该返回空');
 });
 
 console.log('');

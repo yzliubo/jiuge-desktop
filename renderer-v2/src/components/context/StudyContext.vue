@@ -9,30 +9,45 @@
 // 写边界与工作台一致：这一栏只写「当前选中的那一条」，所有写调用的第二个参数都是 sel.id；
 // 新建与批量操作在中栏，这里只改细节。
 import { computed, onMounted, ref, watch } from 'vue';
-import { callDomain } from '../../composables/useDomain';
+import { asArray, callDomain } from '../../composables/useDomain';
 import { localDate } from '../../types';
+import type { ViewKey } from '../../types';
 
 const props = defineProps<{ itemId: string; tick?: number }>();
 const emit = defineEmits<{
   (e: 'changed'): void;
   (e: 'select-item', id: string): void;
   (e: 'notify', text: string): void;
+  // V3.6：右栏新增快捷访问（去图书馆 / 语料库），只跳转，不在这里写数据
+  (e: 'navigate', key: ViewKey): void;
 }>();
 
 interface Subject { id: string; title: string; unit: string; total: number; done: number; pct: number; progressText: string }
+// V3.9：一次作答 = 一组成绩 + 组错因。只增不改，重考也不清（清掉就丢了「上次死在哪」）
+interface Attempt {
+  id: string; date: string; score: number; passLine: number; passed: boolean;
+  causes: string[]; causesLabel: string[]; gap: number;
+}
+interface CauseRow { key: string; label: string; count: number }
 interface ExamRow {
   id: string; title: string; org: string; examDate: string; enrollDate: string;
   status: string; score: number; passLine: number; note: string;
   subjects: Subject[]; pct: number; countdown: string; stageLabel: string;
   resultText: string; enrollMissed: boolean;
+  attempts: Attempt[]; attemptCount: number; failCount: number;
+  lastFail: Attempt | null; causeTop: CauseRow[];
 }
 interface Milestone { id: string; title: string; done: boolean }
 interface Practice { id: string; date: string; minutes: number; note?: string }
+interface Cleared { id: string; text: string; since: string; clearedAt: string }
 interface SkillRow {
   id: string; title: string; level: number; targetLevel: number; note: string;
   milestones: Milestone[]; practices: Practice[];
   levelText: string; milestoneDone: number; milestoneTotal: number; milestonePct: number;
   minutes: number; hoursText: string; weekText: string; nextTitle: string; ready: boolean;
+  // V3.9 练习反馈
+  blocker: string; blockerSince: string; blockerDays: number; blockerText: string;
+  stuck: boolean; nextUp: string; cleared: Cleared[]; clearedCount: number; clearedRecent: Cleared[];
 }
 interface Quote { id: string; text: string; page: number }
 interface BookRow {
@@ -42,16 +57,37 @@ interface BookRow {
 interface ThemeRow {
   id: string; title: string; note: string; books: BookRow[];
   bookTotal: number; bookDone: number; pct: number; quoteTotal: number; bookText: string;
+  readingCount: number; currentTitle: string;
 }
 interface GrowthStats {
   examTotal: number; examSoon: number; skillTotal: number; skillHours: number;
   skillWeek: number; themeTotal: number; bookTotal: number; bookDone: number;
   quoteTotal: number; total: number;
+  skillBlocked: number; skillStuck: number; examAttempts: number; examFails: number;
 }
 interface Alert { kind: string; id: string; title: string; level: string; text: string }
 interface Board {
   exams: ExamRow[]; skills: SkillRow[]; themes: ThemeRow[];
   stats: GrowthStats; alerts: Alert[]; insight: string;
+  causeTop: CauseRow[]; blockerStaleDays: number;
+}
+// V3.9：阅读笔记里打了 #行动 的那些——「书里让我去做的事」，回显到学习台
+interface ActionNote { id: string; bookId: string; bookTitle: string; quote: string; text: string; page: number; createdAt: number }
+interface NoteBoard { items: ActionNote[]; total: number }
+// V3.6：图书馆书架（md_reading）的在读书。board() 派生 pct / progressText / statusLabel，
+// 主进程再补 fileMissing / fileSizeText；这里只读，不写回任何一本。
+interface ShelfBook {
+  id: string; title: string; author: string; status: string;
+  pct: number; progressText: string; statusLabel: string;
+  done: number; total: number; unit: string;
+  lastReadAt: number; filePath: string; fileMissing: boolean;
+  themeId: string; group: string;
+}
+interface ShelfBoard { books: ShelfBook[] }
+interface NowBook {
+  key: string; id: string; title: string; author: string;
+  pct: number; progressText: string; meta: string;
+  canOpen: boolean; sortAt: number;
 }
 
 const EXAM_STATUS = [
@@ -60,12 +96,27 @@ const EXAM_STATUS = [
   { key: 'passed', label: '已通过' },
   { key: 'failed', label: '未通过' }
 ];
+// 与 src/growth/board.js 的 EXAM_CAUSES 同一套 key。归类而不是自由文本：
+// 自由文本写三次不会重样，就统计不出「你总栽在哪」。
+const EXAM_CAUSES = [
+  { key: 'concept', label: '概念没懂' },
+  { key: 'calc', label: '计算失误' },
+  { key: 'misread', label: '审题偏差' },
+  { key: 'time', label: '时间不够' },
+  { key: 'material', label: '资料不对' },
+  { key: 'practice', label: '练得不够' },
+  { key: 'state', label: '状态不好' }
+];
 const LEVELS = [
   { level: 1, label: '初识' }, { level: 2, label: '入门' }, { level: 3, label: '熟练' },
   { level: 4, label: '精通' }, { level: 5, label: '传授' }
 ];
 
 const board = ref<Board | null>(null);
+const readingBoard = ref<ShelfBoard | null>(null);
+// V3.9：书里让我去做的事（阅读笔记打了 #行动）
+const actionNotes = ref<ActionNote[]>([]);
+const actionTotal = ref(0);
 const loading = ref(true);
 const msg = ref('');
 let msgTimer: ReturnType<typeof setTimeout> | null = null;
@@ -89,6 +140,75 @@ const theme = computed<ThemeRow | null>(function () {
   return board.value.themes.filter(function (t) { return t.id === props.itemId; })[0] || null;
 });
 
+// ---------- V3.6：目前在读 / 主题学习（只读联动 + 快捷访问） ----------
+// 两份数据、一个视图：书架在读书来自 md_reading，主题书单在读书来自 md_growth。
+// 同一本书可能两边都在（主题书单的书也会进书架），按书名去重后以书架那条为准，
+// 因为只有它带 id / filePath，能真的「继续读」。
+function shortDate(ts: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const p = function (n: number) { return (n < 10 ? '0' : '') + n; };
+  return p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+const allNowBooks = computed<NowBook[]>(function () {
+  const out: NowBook[] = [];
+  const seen: Record<string, boolean> = {};
+  const shelf = readingBoard.value ? readingBoard.value.books : [];
+  shelf.forEach(function (b) {
+    if (b.status !== 'reading') return;
+    seen[b.title.trim()] = true;
+    const last = b.lastReadAt ? '最近读过 ' + shortDate(b.lastReadAt) : '书架 · 在读';
+    const file = b.fileMissing ? ' · 原文件已移走'
+      : (b.filePath ? ' · 已关联文件' : ' · 未关联文件');
+    out.push({
+      key: 'shelf-' + b.id, id: b.id, title: b.title, author: b.author,
+      pct: b.pct, progressText: b.progressText, meta: last + file,
+      canOpen: !!(b.filePath && !b.fileMissing), sortAt: b.lastReadAt || 0
+    });
+  });
+  const themes = board.value ? board.value.themes : [];
+  themes.forEach(function (t) {
+    t.books.forEach(function (b) {
+      if (b.status !== 'reading' || seen[b.title.trim()]) return;
+      seen[b.title.trim()] = true;
+      out.push({
+        key: 'theme-' + t.id + '-' + b.id, id: b.id, title: b.title, author: b.author,
+        pct: b.pct, progressText: b.progressText,
+        meta: '主题书单 · ' + t.title + ' · 未关联文件',
+        canOpen: false, sortAt: 0
+      });
+    });
+  });
+  return out.sort(function (a, b) { return (b.sortAt - a.sortAt) || (b.pct - a.pct); });
+});
+// 右栏只有 300px 宽、一屏高：各只铺前 3 条，剩下的给一句「还有 N 条」+ 跳图书馆，
+// 保证「目前在读」和「主题学习」两张卡都能在首屏看见，不用先滚。
+const NOW_LIMIT = 3;
+const TOPIC_LIMIT = 3;
+const nowBooks = computed<NowBook[]>(function () { return allNowBooks.value.slice(0, NOW_LIMIT); });
+const nowMore = computed<number>(function () { return Math.max(0, allNowBooks.value.length - NOW_LIMIT); });
+const themeRows = computed<ThemeRow[]>(function () {
+  return board.value ? board.value.themes.slice(0, TOPIC_LIMIT) : [];
+});
+const themeMore = computed<number>(function () {
+  return Math.max(0, (board.value ? board.value.themes.length : 0) - TOPIC_LIMIT);
+});
+
+function goReading(): void { emit('navigate', 'reading'); }
+function openTheme(t: ThemeRow): void { emit('select-item', t.id); }
+async function continueRead(b: NowBook): Promise<void> {
+  if (!b.canOpen) {
+    goReading();
+    say('《' + b.title + '》还没关联本机文件，先去书架');
+    return;
+  }
+  const r = await callDomain<{ ok: boolean; reason?: string } | null>('reading.readerOpen', null, b.id);
+  if (!r || !r.ok) { say((r && r.reason) || '没能打开阅读窗'); return; }
+  say('已翻开《' + b.title + '》');
+}
+
 // 表单草稿：换了一条就整份回填，同一条只在本机没有未保存改动时回填
 const dTitle = ref('');
 const dOrg = ref('');
@@ -100,6 +220,10 @@ const dPassLine = ref('');
 const dNote = ref('');
 const dLevel = ref(1);
 const dTarget = ref(2);
+// V3.9：错因勾选（跟着「记成绩」一起提交）与技能卡点 / 下次提高
+const dCauses = ref<string[]>([]);
+const dBlocker = ref('');
+const dNextUp = ref('');
 
 const syncedId = ref('__init__');
 
@@ -114,12 +238,17 @@ function syncDraft(): void {
     dScore.value = e.score ? String(e.score) : '';
     dPassLine.value = e.passLine ? String(e.passLine) : '';
     dNote.value = e.note || '';
+    // 最近一次作答的错因先勾上：多数时候是「补记」，不是从零填
+    const last = e.attempts && e.attempts.length ? e.attempts[e.attempts.length - 1] : null;
+    dCauses.value = last ? last.causes.slice() : [];
   } else if (skill.value) {
     const s = skill.value;
     dTitle.value = s.title;
     dLevel.value = s.level;
     dTarget.value = s.targetLevel;
     dNote.value = s.note || '';
+    dBlocker.value = s.blocker || '';
+    dNextUp.value = s.nextUp || '';
   } else if (theme.value) {
     dTitle.value = theme.value.title;
     dNote.value = theme.value.note || '';
@@ -129,7 +258,17 @@ function syncDraft(): void {
 
 async function load(): Promise<void> {
   loading.value = true;
-  board.value = await callDomain<Board | null>('growth.board', null, localDate());
+  // V3.6：右栏同时读「学习库」与「图书馆」两份派生数据，并发一次取回，不多开通道
+  // V3.9：第三路取「笔记里打了 #行动 的那些」，仍是已有路由 + 已有标签，零新增字段
+  const [b, rb, an] = await Promise.all([
+    callDomain<Board | null>('growth.board', null, localDate()),
+    callDomain<ShelfBoard | null>('reading.board', null),
+    callDomain<NoteBoard | null>('reading.notes', null, { tag: '行动' })
+  ]);
+  board.value = b;
+  readingBoard.value = rb;
+  actionNotes.value = an ? asArray<ActionNote>(an.items).slice(0, 3) : [];
+  actionTotal.value = an ? an.total : 0;
   loading.value = false;
   const found = exam.value || skill.value || theme.value;
   if (props.itemId && !found) emit('select-item', '');
@@ -163,8 +302,23 @@ async function saveResult(): Promise<void> {
   const score = Number(dScore.value) || 0;
   const pass = Number(dPassLine.value) || 0;
   if (!score || !pass) { say('分数和合格线都要填，才判得了通过'); return; }
-  await callDomain('growth.setExamResult', null, exam.value.id, score, pass);
-  await afterChange(score >= pass ? '已记为通过' : '已记为未通过');
+  await callDomain('growth.setExamResult', null, exam.value.id, score, pass, dCauses.value);
+  await afterChange(score >= pass ? '已记为通过（这次作答已存档）' : '已记为未通过，错因已记下');
+}
+
+// 只存错因：隔了几天才想明白「为什么没过」，不该为了补这一句重填分数
+async function saveCausesOnly(): Promise<void> {
+  if (!exam.value) return;
+  if (!exam.value.attemptCount) { say('还没有成绩记录，先记一次分数'); return; }
+  await callDomain('growth.setExamCauses', null, exam.value.id, dCauses.value);
+  await afterChange(dCauses.value.length ? '错因已更新到最近一次作答' : '已清空最近一次作答的错因');
+}
+
+function toggleCause(key: string): void {
+  const i = dCauses.value.indexOf(key);
+  if (i >= 0) dCauses.value.splice(i, 1);
+  else if (dCauses.value.length < 4) dCauses.value.push(key);
+  else say('最多勾四条，圈太多等于没归因');
 }
 
 async function retake(): Promise<void> {
@@ -175,7 +329,9 @@ async function retake(): Promise<void> {
   dScore.value = '';
   dPassLine.value = '';
   dStatus.value = 'plan';
-  await afterChange('已重置为备考中，科目进度归零');
+  // 新一轮重新归因：上次的错因留在历史里可查，但不该被默认带进下一次
+  dCauses.value = [];
+  await afterChange('已重置为备考中，科目进度归零；上次成绩与错因仍留在历史里');
 }
 
 const newSubject = ref('');
@@ -244,6 +400,26 @@ async function removePractice(p: Practice): Promise<void> {
   if (!skill.value) return;
   await callDomain('growth.removePractice', null, skill.value.id, p.id);
   await afterChange('已删这条练习记录');
+}
+
+// ---------- 技能：练习反馈（V3.9） ----------
+async function saveBlocker(): Promise<void> {
+  if (!skill.value) return;
+  const text = dBlocker.value.trim();
+  await callDomain('growth.setSkillBlocker', null, skill.value.id, text, localDate());
+  await afterChange(text ? '卡点已记下——同一条不会重置天数' : '卡点已清空');
+}
+async function dropBlocker(): Promise<void> {
+  if (!skill.value) return;
+  if (!skill.value.blocker) { say('现在没有卡点可清'); return; }
+  await callDomain('growth.clearSkillBlocker', null, skill.value.id, localDate());
+  dBlocker.value = '';
+  await afterChange('这条卡点已算过去，留档了');
+}
+async function saveNextUp(): Promise<void> {
+  if (!skill.value) return;
+  await callDomain('growth.setSkillNextUp', null, skill.value.id, dNextUp.value.trim());
+  await afterChange(dNextUp.value.trim() ? '下次练的靶子已存' : '已清空「下次提高」');
 }
 
 // ---------- 阅读 ----------
@@ -407,6 +583,33 @@ watch(() => props.itemId, function () { syncDraft(); });
           <button class="gc-btn" @click="retake">再来一次</button>
         </div>
 
+        <!-- V3.9 错因归类：分数只说明「没过」，错因才说明「下一步练什么」 -->
+        <span class="gc-label">这次错在哪（最多四条，归类才看得出规律）</span>
+        <div class="gc-causes">
+          <button
+            v-for="c in EXAM_CAUSES"
+            :key="c.key"
+            class="gc-cause"
+            :class="{ 'gc-cause-on': dCauses.indexOf(c.key) >= 0 }"
+            :aria-pressed="dCauses.indexOf(c.key) >= 0"
+            @click="toggleCause(c.key)"
+          >{{ c.label }}</button>
+        </div>
+        <div class="gc-add">
+          <button class="gc-btn" @click="saveCausesOnly">只存错因</button>
+          <span v-if="exam.causeTop.length" class="gc-hint">
+            历次最常错：{{ exam.causeTop[0].label }}（{{ exam.causeTop[0].count }} 次）
+          </span>
+        </div>
+        <div v-if="exam.attemptCount" class="gc-list">
+          <div v-for="a in exam.attempts.slice(-2).reverse()" :key="a.id" class="gc-item">
+            <span class="gc-item-main">{{ a.date || '未记日期' }} · {{ a.score }} / {{ a.passLine }}</span>
+            <span class="gc-item-side" :class="{ 'gc-warn': !a.passed }">
+              {{ a.passed ? '通过' : (a.gap ? '差 ' + Math.abs(a.gap) + ' 分' : '未通过') }}
+            </span>
+          </div>
+        </div>
+
         <label class="gc-label" for="gc-note">备注</label>
         <textarea id="gc-note" v-model="dNote" class="gc-in gc-area" rows="2" maxlength="200"
           placeholder="报名材料、考场、复习资料…" aria-label="考试备注"></textarea>
@@ -468,6 +671,38 @@ watch(() => props.itemId, function () { syncDraft(); });
           </div>
         </div>
         <p v-if="skill.nextTitle" class="ctx-muted">下一步：{{ skill.nextTitle }}</p>
+
+        <!-- V3.9 练习反馈：练了多少是投入，「卡在哪 / 卡了多久」才是反馈。
+             刻意练习的前提是每次都盯着一个具体弱点，而不是把时长堆上去。 -->
+        <span class="gc-label">
+          练习卡点
+          <span v-if="skill.blocker" class="gc-age" :class="{ 'gc-age-warn': skill.stuck }">{{ skill.blockerText }}</span>
+        </span>
+        <div class="gc-add">
+          <input
+            v-model="dBlocker" class="gc-in gc-wide" maxlength="60"
+            placeholder="如：看不懂 groupby 的返回结构" aria-label="当前卡点"
+            @keydown.enter.prevent="saveBlocker"
+          />
+          <button class="gc-btn" @click="saveBlocker">记下</button>
+          <button v-if="skill.blocker" class="gc-btn" @click="dropBlocker">已过去</button>
+        </div>
+        <p v-if="skill.stuck" class="gc-stuck">
+          卡了 {{ skill.blockerDays }} 天还没下走 —— 练得少是加时间，卡住是换方法：拆小一号、找人看一次、换份材料。
+        </p>
+        <p v-else-if="skill.clearedCount" class="ctx-muted">
+          已经过去 {{ skill.clearedCount }} 条卡点，最近一条：{{ skill.clearedRecent[0].text }}
+        </p>
+
+        <label class="gc-label" for="gc-next">下次练，提高一点什么</label>
+        <div class="gc-add">
+          <input
+            id="gc-next" v-model="dNextUp" class="gc-in" maxlength="60"
+            placeholder="如：手写一遍三种聚合的差别" aria-label="下次提高一点什么"
+            @keydown.enter.prevent="saveNextUp"
+          />
+          <button class="gc-btn" @click="saveNextUp">存</button>
+        </div>
 
         <label class="gc-label" for="gc-snote">备注</label>
         <textarea id="gc-snote" v-model="dNote" class="gc-in gc-area" rows="2" maxlength="200"
@@ -541,6 +776,83 @@ watch(() => props.itemId, function () { syncDraft(); });
       </template>
     </section>
 
+    <!-- V3.6 ① 目前在读的图书：书架 + 主题书单两源合并，进度 / 最近在读 / 继续读 -->
+    <section class="ctx-card gc-now" aria-label="目前在读的图书">
+      <h2 class="ctx-title">目前在读<span class="ctx-tag">{{ allNowBooks.length }} 本</span></h2>
+      <div class="gc-now-list">
+        <div v-for="b in nowBooks" :key="b.key" class="gc-now-row">
+          <div class="gc-now-top">
+            <span class="gc-now-title" :title="b.title">《{{ b.title }}》</span>
+            <span class="gc-now-pct">{{ b.pct }}%</span>
+          </div>
+          <span class="gc-bar"><i :style="{ width: b.pct + '%' }"></i></span>
+          <div class="gc-now-foot">
+            <span class="gc-now-meta">{{ b.progressText }} · {{ b.meta }}</span>
+            <button class="gc-now-go" @click="continueRead(b)">{{ b.canOpen ? '继续读 →' : '去书架关联 →' }}</button>
+          </div>
+        </div>
+        <p v-if="!allNowBooks.length" class="ctx-muted">
+          还没有在读的书。去图书馆把一本标成「在读」，这里就会跟着走。
+        </p>
+        <p v-if="nowMore" class="ctx-muted">还有 {{ nowMore }} 本在读书，去书架看全。</p>
+      </div>
+      <div class="ctx-links gc-now-links">
+        <button class="ctx-link" @click="goReading">图书馆 →</button>
+        <button class="ctx-link" @click="emit('navigate', 'inspire')">语料库 →</button>
+      </div>
+    </section>
+
+    <!-- V3.6 ② 主题学习：进度 / 书单 / 摘录，点一行即选中中栏与右栏详情 -->
+    <section class="ctx-card gc-topic" aria-label="主题学习状态">
+      <h2 class="ctx-title">主题学习<span class="ctx-tag">{{ board ? board.themes.length : 0 }} 个</span></h2>
+      <div class="gc-topic-list">
+        <button
+          v-for="t in themeRows"
+          :key="t.id"
+          class="gc-topic-row"
+          :class="{ 'gc-topic-on': t.id === itemId }"
+          :aria-label="'查看主题 ' + t.title"
+          @click="openTheme(t)"
+        >
+          <span class="gc-topic-top">
+            <span class="gc-topic-title">{{ t.title }}</span>
+            <span class="gc-now-pct">{{ t.pct }}%</span>
+          </span>
+          <span class="gc-bar"><i :style="{ width: t.pct + '%' }"></i></span>
+          <span class="gc-now-meta">{{ t.bookText }} · 在读 {{ t.readingCount }} · 摘录 {{ t.quoteTotal }} 条</span>
+          <span v-if="t.currentTitle" class="gc-now-meta">正在读《{{ t.currentTitle }}》</span>
+        </button>
+        <p v-if="!themeRows.length" class="ctx-muted">
+          还没有主题。在中栏「主题阅读」里建一个，书单进度会同步到这里。
+        </p>
+        <p v-if="themeMore" class="ctx-muted">还有 {{ themeMore }} 个主题，在中栏看全部。</p>
+      </div>
+    </section>
+
+    <!-- V3.9 阅读里的行动：书里打了 #行动 的笔记回显到这里。
+         零新增字段——阅读笔记本来就有标签，缺的只是「打了个标签没人看」的回显。 -->
+    <section class="ctx-card gc-act" aria-label="阅读里的行动">
+      <h2 class="ctx-title">阅读里的行动<span class="ctx-tag">{{ actionTotal }} 条</span></h2>
+      <div class="gc-now-list">
+        <button
+          v-for="n in actionNotes"
+          :key="n.id"
+          class="gc-act-row"
+          :aria-label="'查看《' + n.bookTitle + '》的这条行动'"
+          @click="emit('navigate', 'reading')"
+        >
+          <span class="gc-act-main">{{ n.text || n.quote }}</span>
+          <span class="gc-now-meta">《{{ n.bookTitle }}》<template v-if="n.page"> · p.{{ n.page }}</template></span>
+        </button>
+        <p v-if="!actionNotes.length" class="ctx-muted">
+          还没有。在图书馆给一条笔记打 #行动 标签，书里要求你做的事就会列在这里。
+        </p>
+        <p v-if="actionTotal > actionNotes.length" class="ctx-muted">
+          还有 {{ actionTotal - actionNotes.length }} 条，去图书馆看全。
+        </p>
+      </div>
+    </section>
+
     <!-- 2. 三块总览 -->
     <section class="ctx-card">
       <h2 class="ctx-title">学习库 · 三块<span class="ctx-tag">{{ board ? board.stats.total : 0 }} 条目</span></h2>
@@ -567,6 +879,12 @@ watch(() => props.itemId, function () { syncDraft(); });
         {{ board && board.stats.skillWeek >= 60 ? (board.stats.skillWeek / 60).toFixed(1) + ' 小时' : (board ? board.stats.skillWeek : 0) + ' 分钟' }}
         · 摘录 {{ board ? board.stats.quoteTotal : 0 }} 条
       </p>
+      <p v-if="board && board.stats.skillBlocked" class="ctx-muted">
+        卡点 {{ board.stats.skillBlocked }} 项<template v-if="board.stats.skillStuck">，其中挂超 {{ board.blockerStaleDays }} 天 {{ board.stats.skillStuck }} 项</template>
+      </p>
+      <p v-if="board && board.stats.examAttempts" class="ctx-muted">
+        考过 {{ board.stats.examAttempts }} 次，未过 {{ board.stats.examFails }} 次<template v-if="board.causeTop.length">，最常错「{{ board.causeTop[0].label }}」</template>
+      </p>
       <p v-if="loading" class="ctx-muted">读取中…</p>
     </section>
 
@@ -592,10 +910,10 @@ watch(() => props.itemId, function () { syncDraft(); });
 <style scoped>
 .growth-ctx { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .gc-on { border-color: var(--palette-border); }
-.gc-label { display: block; margin: 6px 0 2px; font-size: 11px; color: var(--surface-muted); }
-.gc-count { margin: 0 0 4px; font-size: 11px; line-height: 1.6; color: var(--palette-primary); }
+.gc-label { display: block; margin: 6px 0 2px; font-size: var(--text-xs); color: var(--surface-muted); }
+.gc-count { margin: 0 0 4px; font-size: var(--text-xs); line-height: 1.6; color: var(--palette-primary); }
 .gc-in {
-  width: 100%; padding: 5px 8px; font-size: 12px; box-sizing: border-box;
+  width: 100%; padding: 5px 8px; font-size: var(--text-sm); box-sizing: border-box;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
   background: var(--surface-panel); outline: none;
 }
@@ -607,7 +925,7 @@ watch(() => props.itemId, function () { syncDraft(); });
 .gc-add { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
 .gc-add .gc-in { flex: 1 1 80px; }
 .gc-btn {
-  padding: 4px 10px; font-size: 11px; border: 0.5px solid var(--surface-border);
+  padding: 4px 10px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm); background: var(--surface-panel); flex: 0 0 auto;
 }
 .gc-btn:hover { border-color: var(--palette-border); color: var(--palette-primary); }
@@ -618,35 +936,106 @@ watch(() => props.itemId, function () { syncDraft(); });
 .gc-item {
   display: flex; align-items: center; gap: 6px; padding: 3px 6px;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
-  background: var(--surface-panel); font-size: 11px;
+  background: var(--surface-panel); font-size: var(--text-xs);
 }
 .gc-item-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gc-item-side { flex: 0 0 auto; font-size: 10px; color: var(--surface-muted); }
+.gc-item-side { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); }
 .gc-done { text-decoration: line-through; color: var(--surface-muted); }
-.gc-check { border: 0; background: transparent; color: var(--palette-primary); font-size: 11px; padding: 0 2px; }
+.gc-check { border: 0; background: transparent; color: var(--palette-primary); font-size: var(--text-xs); padding: 0 2px; }
 .gc-mini {
-  flex: 0 0 auto; padding: 1px 6px; font-size: 10px;
+  flex: 0 0 auto; padding: 1px 6px; font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
   background: var(--surface-raised); color: var(--surface-muted);
 }
-.gc-x { flex: 0 0 auto; border: 0; background: transparent; color: var(--surface-muted); font-size: 11px; }
+.gc-x { flex: 0 0 auto; border: 0; background: transparent; color: var(--surface-muted); font-size: var(--text-xs); }
 .gc-book { flex-wrap: wrap; }
 .gc-book-on { border-color: var(--palette-primary); background: var(--palette-soft); }
 .gc-book-title {
   flex: 1 1 100%; min-width: 0; text-align: left; border: 0; background: transparent;
-  font-size: 11px; padding: 0; color: var(--surface-text);
+  font-size: var(--text-xs); padding: 0; color: var(--surface-text);
 }
 .gc-quote {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 6px;
   border-left: 2px solid var(--palette-border); background: var(--surface-panel);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 11px; line-height: 1.6;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: var(--text-xs); line-height: 1.6;
 }
 .gc-quote-text { flex: 1; min-width: 0; }
-.gc-ready { margin: 4px 0 0; font-size: 11px; color: var(--palette-primary); }
+.gc-ready { margin: 4px 0 0; font-size: var(--text-xs); color: var(--palette-primary); }
 .gc-alert-on { border-color: var(--palette-primary); background: var(--palette-soft); }
+/* V3.6：在读书 / 主题学习两卡。300px 右栏里每行压到 3 层：标题+百分比 / 进度条 / 状态与去处 */
+.gc-now-list, .gc-topic-list { display: flex; flex-direction: column; gap: 6px; }
+.gc-now-row, .gc-topic-row {
+  display: block; width: 100%; box-sizing: border-box; padding: 6px 8px;
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-panel); text-align: left;
+}
+.gc-topic-row { cursor: pointer; }
+.gc-topic-row:hover { border-color: var(--palette-border); }
+.gc-topic-on { border-color: var(--palette-primary); background: var(--palette-soft); }
+.gc-now-top, .gc-topic-top { display: flex; align-items: baseline; gap: 6px; }
+.gc-now-title, .gc-topic-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--surface-text);
+}
+.gc-now-pct { flex: 0 0 auto; font-size: var(--text-xs); color: var(--palette-primary); }
+.gc-bar {
+  display: block; height: 5px; margin: 5px 0 3px; border-radius: 999px;
+  background: var(--palette-soft); overflow: hidden;
+}
+.gc-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--palette-primary); }
+.gc-now-foot { display: flex; align-items: center; gap: 6px; }
+.gc-now-meta {
+  flex: 1; min-width: 0; display: block; margin: 0;
+  font-size: var(--text-xs); line-height: 1.5; color: var(--surface-muted);
+}
+.gc-now-go {
+  flex: 0 0 auto; padding: 2px 8px; font-size: var(--text-xs);
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-raised); color: var(--palette-primary); cursor: pointer;
+}
+.gc-now-go:hover { border-color: var(--palette-border); }
+.gc-now-links { margin-top: 8px; }
 .gc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+/* V3.9 练习反馈：错因 chips / 卡点年龄 / 阅读行动 */
+/* 四列等宽网格而不是 flex 换行：7 个标签换行会参差不齐，且行数不可控；
+   四列正好两行，300px 下每格约 66px，四个汉字放得下 */
+.gc-causes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 2px; }
+.gc-cause {
+  padding: 3px 2px; font-size: var(--text-xs); border-radius: var(--radius-sm);
+  border: 0.5px solid var(--surface-border); background: var(--surface-panel);
+  color: var(--surface-muted); cursor: pointer; white-space: nowrap;
+}
+.gc-cause:hover { border-color: var(--palette-border); }
+.gc-cause-on { background: var(--state-warn-soft); color: var(--state-warn); border-color: var(--state-warn); }
+.gc-hint { flex: 1 1 auto; font-size: var(--text-xs); color: var(--surface-muted); align-self: center; }
+.gc-warn { color: var(--state-warn); }
+/* 卡点输入框独占一行：一句话要写清「卡在哪」，挤在 110px 里等于逼人缩写。
+   必须写成 .gc-add .gc-wide——上面那条 .gc-add .gc-in 是双类选择器，单类盖不住它 */
+.gc-add .gc-wide { flex: 1 1 100%; }
+/* 卡点年龄：默认是中性灰，超过两周才变警告色——不是一卡就报警，那会让卡点变成噪音 */
+.gc-age {
+  margin-left: 6px; padding: 0 5px; border-radius: 999px;
+  background: var(--surface-panel); color: var(--surface-muted); font-size: var(--text-xs);
+}
+.gc-age-warn { background: var(--state-warn-soft); color: var(--state-warn); }
+.gc-stuck {
+  margin: 4px 0 0; padding: 5px 7px; border-radius: var(--radius-sm);
+  background: var(--state-warn-soft); color: var(--state-warn);
+  font-size: var(--text-xs); line-height: 1.6;
+}
+.gc-act-row {
+  display: block; width: 100%; box-sizing: border-box; padding: 5px 8px;
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-panel); text-align: left; cursor: pointer;
+}
+.gc-act-row:hover { border-color: var(--palette-border); background: var(--palette-soft); }
+.gc-act-main {
+  font-size: var(--text-sm); color: var(--surface-text); line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
 .gc-msg {
   padding: 6px 8px; border-radius: var(--radius-sm);
-  background: var(--palette-soft); color: var(--palette-primary); font-size: 11px;
+  background: var(--palette-soft); color: var(--palette-primary); font-size: var(--text-xs);
 }
 </style>

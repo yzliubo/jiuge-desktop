@@ -24,7 +24,14 @@ Thumbs.db
 # 多版本构建产物（v1 之外的打包目录）
 build-v2/
 build-v2b/
+build-v2c/
+build-v2d/
 renderer-v2/dist/
+
+# 一次性探针里的 pdf.js 二进制副本与截图（正本在 renderer-v2/reader/vendor/）
+tests/qa-tmp/pdfjs-probe/pdf.min.js
+tests/qa-tmp/pdfjs-probe/pdf.worker.min.js
+tests/qa-tmp/pdfjs-probe/probe.png
 renderer-v2/node_modules/
 tests/e2e/node_modules/
 

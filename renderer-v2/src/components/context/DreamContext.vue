@@ -426,33 +426,33 @@ watch(function () { return props.dreamId; }, function () {
 }
 .dctx-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .dctx-photo-hold { text-align: center; padding: 8px 10px; }
-.dctx-photo-glyph { display: block; font-size: 22px; line-height: 1; color: var(--palette-border); margin-bottom: 6px; }
-.dctx-photo-tip { margin: 0; font-size: 11px; line-height: 1.6; color: var(--surface-muted); }
+.dctx-photo-glyph { display: block; font-size: var(--text-h1); line-height: 1; color: var(--palette-border); margin-bottom: 6px; }
+.dctx-photo-tip { margin: 0; font-size: var(--text-xs); line-height: 1.6; color: var(--surface-muted); }
 /* 图上压标题：一屏里图片多起来时，得知道这张是谁的 */
 .dctx-photo-cap {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   padding: 12px 8px 5px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: #fff;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dctx-photo-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-.dctx-photo-note { font-size: 10px; color: var(--surface-muted); }
+.dctx-photo-note { font-size: var(--text-xs); color: var(--surface-muted); }
 
-.dctx-name { font-size: 13px; color: var(--surface-text); }
-.dctx-meta { margin: 2px 0 0; font-size: 11px; color: var(--surface-muted); line-height: 1.6; }
+.dctx-name { font-size: var(--text-body); color: var(--surface-text); }
+.dctx-meta { margin: 2px 0 0; font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.6; }
 
 .dctx-sec { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 0.5px dashed var(--surface-border); }
-.dctx-h { margin: 0 0 5px; font-size: 11px; font-weight: 500; color: var(--surface-muted); letter-spacing: 0.02em; }
+.dctx-h { margin: 0 0 5px; font-size: var(--text-xs); font-weight: 500; color: var(--surface-muted); letter-spacing: 0.02em; }
 
 .dctx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-.dctx-field { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; color: var(--surface-muted); }
+.dctx-field { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: var(--text-xs); color: var(--surface-muted); }
 .dctx-field > span { flex: 0 0 auto; }
 .dctx-field input {
   flex: 1 1 auto; min-width: 0; width: 100%;
-  padding: 3px 6px; font-size: 11px;
+  padding: 3px 6px; font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
   background: var(--surface-panel); outline: none; color: var(--surface-text);
 }
@@ -463,7 +463,7 @@ watch(function () { return props.dreamId; }, function () {
 
 .dctx-btn {
   flex: 0 0 auto;
-  padding: 3px 10px; font-size: 11px;
+  padding: 3px 10px; font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border); border-radius: 999px;
   background: var(--surface-panel); color: var(--surface-text);
 }
@@ -472,7 +472,7 @@ watch(function () { return props.dreamId; }, function () {
 .dctx-btn-main { background: var(--palette-primary); border-color: var(--palette-primary); color: var(--palette-on); }
 .dctx-btn-main:hover:not(:disabled) { color: var(--palette-on); }
 
-.dctx-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--surface-muted); }
+.dctx-hint { margin: 5px 0 0; font-size: var(--text-xs); line-height: 1.6; color: var(--surface-muted); }
 .dctx-hint em { font-style: normal; color: var(--palette-primary); }
 .dctx-bar-row { margin-top: 6px; }
 .dctx-bar { height: 4px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; }
@@ -481,10 +481,10 @@ watch(function () { return props.dreamId; }, function () {
 .dctx-summary {
   width: 100%; margin-top: 6px; padding: 5px 7px; resize: vertical;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
-  background: var(--surface-panel); outline: none; font-size: 11px; line-height: 1.6;
+  background: var(--surface-panel); outline: none; font-size: var(--text-xs); line-height: 1.6;
   color: var(--surface-text);
 }
 .dctx-summary:focus { border-color: var(--palette-border); }
 .dctx-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.dctx-dirty { font-size: 10px; color: var(--state-warn); }
+.dctx-dirty { font-size: var(--text-xs); color: var(--state-warn); }
 </style>

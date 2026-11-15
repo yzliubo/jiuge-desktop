@@ -60,7 +60,7 @@ onMounted(async () => {
       <div class="ctx-kv"><span class="ctx-kv-label">本周已写</span><span class="ctx-kv-val">{{ stats.weekCount }}<span class="ctx-kv-unit">/ {{ stats.weekGoal }} 天</span></span></div>
       <div class="ctx-kv"><span class="ctx-kv-label">当前连续</span><span class="ctx-kv-val">{{ stats.streak }}<span class="ctx-kv-unit">天</span></span></div>
       <div class="ctx-kv"><span class="ctx-kv-label">最长连续</span><span class="ctx-kv-val">{{ stats.bestStreak }}<span class="ctx-kv-unit">天</span></span></div>
-      <div class="ctx-kv"><span class="ctx-kv-label">最近一篇</span><span class="ctx-kv-val" style="font-size: 13px">{{ stats.latest || '—' }}</span></div>
+      <div class="ctx-kv"><span class="ctx-kv-label">最近一篇</span><span class="ctx-kv-val" style="font-size: var(--text-body)">{{ stats.latest || '—' }}</span></div>
     </div>
     <div class="ctx-links">
       <button class="ctx-link" @click="emit('navigate', 'habit')">看坚持</button>

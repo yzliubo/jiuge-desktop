@@ -1,0 +1,2 @@
+﻿18932	parent=30104	WorkBuddy.exe	start=11/14/2026 19:31:37	D:\Program Files\WorkBuddy\WorkBuddy.exe
+--self: 31888	powershell

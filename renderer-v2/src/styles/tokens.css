@@ -10,6 +10,30 @@
   --space-2: 12px;
   --space-3: 16px;
   --space-4: 24px;
+  /* 7 级字号 scale：全站 18 个硬编码值向这里收敛 */
+  --text-display: 26px;
+  --text-h1: 20px;
+  --text-h2: 15px;
+  --text-h3: 13px;
+  --text-body: 13px;
+  --text-sm: 12px;
+  --text-xs: 11px;
+  --lh-tight: 1.35;
+  --lh-body: 1.6;
+  /* z 轴统一：sticky 10 / overlay 40 / drawer 60 / toast 1000 */
+  --z-sticky: 10;
+  --z-overlay: 40;
+  --z-drawer: 60;
+  --z-toast: 1000;
+  /* 静态扫描仍能发现的其余别名（含 JS 内联传入的栏宽兜底） */
+  --font-mono: ui-monospace, Consolas, "Courier New", monospace;
+  --line: var(--surface-border);
+  --state-danger: var(--state-warn);
+  --state-danger-soft: var(--state-warn-soft);
+  --state-ok: var(--palette-primary);
+  --warn: var(--state-warn);
+  --nav-w: 240px;
+  --rail-w: 300px;
 }
 
 [data-skin="forest"] {
@@ -51,6 +75,19 @@
   /* 语义色：只用于「逾期 / 停滞 / 缺失」这类需要点名的状态，不参与皮肤色相 */
   --state-warn: #b3261e;
   --state-warn-soft: #fdeceb;
+  /* 卡片边界：原 #d3d1c7 只有 1.53:1，控件边界按 WCAG 1.4.11 需 >=3:1 */
+  --surface-border-strong: #93928a;
+  --surface-faint: #6d6c66;
+  --state-note: #6d6c66;
+  --state-note-soft: #f1efe8;
+  /* 7 个「定义了 0 次却被引用 128 次」的影子变量：统一指向既有 token，不再走 hex 回退 */
+  --text-primary: var(--surface-text);
+  --text-secondary: var(--surface-muted);
+  --text-tertiary: var(--surface-faint);
+  --border-secondary: var(--surface-border-strong);
+  --border-tertiary: var(--surface-border-strong);
+  --background-primary: var(--surface-bg);
+  --background-secondary: var(--surface-panel);
 }
 [data-surface="dark"] {
   --surface-bg: #1e1f1d;
@@ -61,16 +98,37 @@
   --surface-border: #444441;
   --state-warn: #f2b8b5;
   --state-warn-soft: #3a201f;
+  --surface-border-strong: #7a7974;
+  --surface-faint: #b4b2a9;
+  --state-note: #b4b2a9;
+  --state-note-soft: #333431;
+  /* 深浅色跟随放开后，这 7 个别名也会跟着切，不会退回浅色 hex */
+  --text-primary: var(--surface-text);
+  --text-secondary: var(--surface-muted);
+  --text-tertiary: var(--surface-faint);
+  --border-secondary: var(--surface-border-strong);
+  --border-tertiary: var(--surface-border-strong);
+  --background-primary: var(--surface-bg);
+  --background-secondary: var(--surface-panel);
 }
 
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.6;
   color: var(--surface-text);
   background: var(--surface-bg);
 }
 button, input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; }
-button { cursor: pointer; }
+/* 全站按钮命中高度 >=24px（WCAG 2.5.8）；皮肤圆点在下面单独豁免 */
+button { cursor: pointer; min-height: 24px; }
+/* 全站统一焦点可见（原来 55 个 .vue 里只有 4 个写了 :focus-visible） */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--palette-primary, #0f6e56);
+  outline-offset: 2px;
+}
+/* 三条原生 17px 滚动条横吃 51px：收细 */
+.nav-list, .center, .context { scrollbar-width: thin; }

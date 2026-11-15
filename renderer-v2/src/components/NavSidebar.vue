@@ -37,6 +37,13 @@ const years = computed(() => {
   const set = new Set(props.writtenDates.map((d) => d.slice(0, 4)));
   return Array.from(set).sort().reverse().slice(0, 4);
 });
+
+// 自由记录撤掉一级导航后，它的完整页只剩九格目录这一条入口（openCell('free') → view 'free'）。
+// 那时没有 cellKey，得让「自由」这一行自己亮，否则进了页面左栏一处高亮都没有。
+function modOn(key: string): boolean {
+  if (props.active === 'cell') return props.cellKey === key;
+  return props.active === 'free' && key === 'free';
+}
 </script>
 
 <template>
@@ -58,8 +65,8 @@ const years = computed(() => {
             v-for="key in GRID_KEYS"
             :key="key"
             class="nav-sub-item nav-mod"
-            :class="{ 'sub-on': active === 'cell' && cellKey === key }"
-            :aria-current="active === 'cell' && cellKey === key ? 'page' : undefined"
+            :class="{ 'sub-on': modOn(key) }"
+            :aria-current="modOn(key) ? 'page' : undefined"
             :aria-label="'进入' + GRID_LABELS[key] + '完整功能页'"
             @click="emit('open-cell', key)"
           >
@@ -164,7 +171,11 @@ const years = computed(() => {
 .nav-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* T13：一级 7 项 + 九格 9 项 + 时间轴 4 项 + 数据中心 2 项 + 设置，
+     23 个按钮在 1440×900 下原本 654px 内容 / 609px 可视（1.07 倍），
+     设置虽已 sticky 但整块仍要滚一下。收紧行距与一级按钮上下留白即可
+     省下约 76px，把 vRatio 压到 1.0 以内；不动字号也不动命中区高度。 */
+  gap: 2px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -174,7 +185,7 @@ const years = computed(() => {
 .heat-wrap { flex: 0 0 auto; }
 .nav-item {
   text-align: left;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border: 0.5px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
@@ -189,7 +200,7 @@ const years = computed(() => {
   border: 0.5px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--surface-muted);
 }
 .nav-sub-item:hover { border-color: var(--surface-border); }
@@ -205,12 +216,21 @@ const years = computed(() => {
 .mod-dot-on { background: var(--palette-accent); }
 .nav-gear { margin-top: var(--space-2); }
 .gear-on { background: var(--palette-soft); color: var(--palette-primary); }
-.section-title { font-size: 12px; font-weight: 500; margin: 0 0 var(--space-1); color: var(--surface-muted); }
+.section-title { font-size: var(--text-sm); font-weight: 500; margin: 0 0 var(--space-1); color: var(--surface-muted); }
 .heat { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .heat-cell { height: 14px; border-radius: 3px; background: var(--surface-border); }
 .day-on { background: var(--palette-accent); }
 .year-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-2); }
 .year-chip { padding: 2px 8px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); }
 .year-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
-.counter, .muted { color: var(--surface-muted); font-size: 12px; margin: var(--space-2) 0 0; }
+.counter, .muted { color: var(--surface-muted); font-size: var(--text-sm); margin: var(--space-2) 0 0; }
+/* 高度响应式（原来全仓 0 个高度断点）：先让热力图收缩，再让设置常驻可见 */
+.nav-gear { position: sticky; bottom: 0; z-index: 1; background: var(--surface-panel); }
+@media (max-height: 820px) {
+  .nav { gap: var(--space-2); padding: var(--space-2); }
+  .nav-list { gap: 2px; }
+  .heat-wrap .heat, .heat-wrap .year-row, .heat-wrap .counter { display: none; }
+  .heat-wrap .section-title { margin: 0; }
+}
+@media (max-height: 720px) { .heat-wrap { display: none; } }
 </style>

@@ -1,7 +1,12 @@
 'use strict';
-// 独立阅读窗口的统一取数层：只认本地文件，零第三方依赖。
+// 独立阅读窗口的统一取数层：只认本地文件。
 // EPUB 委托 epub.readBook / readChapter；TXT / MD 本地分章并渲染安全 HTML；
-// PDF / MOBI / AZW3 在零依赖下只登记书目，不渲染正文。
+// PDF 交给阅读窗里的 pdf.js 本地解码（主进程只负责给字节，不做解析）；
+// MOBI / AZW3 仍只登记书目与笔记——要可靠渲染得引入整套 Kindle 解码器，不值当。
+//
+// V3.5 说明：PDF 是唯一新增解码器的格式。随包分发的 pdf.min.js / pdf.worker.min.js
+// 是 Mozilla pdf.js 3.11.174 的本地副本，不联网、不用 CDN、不改 CSP；中文实测无需额外 cMap。
+// 这里主进程刻意不解析 PDF 页数：页数只有解码器知道，阅读窗加载完再回报目录。
 
 const fs = require('fs');
 const epub = require('./epub');
@@ -9,13 +14,14 @@ const epub = require('./epub');
 const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const OVERSIZE_BYTES = 2 * 1024 * 1024;      // 与 epub.js 同口径：单章超 2MB 视为超长
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
-const UNSUPPORTED_REASON = 'PDF / MOBI / AZW3 在零依赖、纯本地的前提下无法可靠渲染正文，暂只登记书目与笔记';
+const MAX_PDF_BYTES = 60 * 1024 * 1024;      // 超过这个体积不走 IPC 传字节，避免一次拷贝卡住窗口
+const UNSUPPORTED_REASON = 'MOBI / AZW3 暂只登记书目与笔记：可靠渲染需要整套 Kindle 解码器';
 
 const FORMATS = {
     epub: { supported: true,  kind: 'epub',        note: '解析 OPF / NCX / nav 目录与 XHTML 正文' },
     txt:  { supported: true,  kind: 'text',        note: '按章节标题或约 1500 字分章，纯文本渲染' },
     md:   { supported: true,  kind: 'text',        note: '按 Markdown 标题分章，极简渲染' },
-    pdf:  { supported: false, kind: 'unsupported', note: UNSUPPORTED_REASON },
+    pdf:  { supported: true,  kind: 'pdf',         note: '按原页渲染（本地 pdf.js 解码），页即章' },
     mobi: { supported: false, kind: 'unsupported', note: UNSUPPORTED_REASON },
     azw3: { supported: false, kind: 'unsupported', note: UNSUPPORTED_REASON }
 };
@@ -267,6 +273,29 @@ function openBook(filePath) {
                 chapters: r.chapters.map(function (c) { return { id: c.id, title: c.title }; })
             };
         }
+        if (ext === 'pdf') {
+            // 只确认「这是不是一份能交给解码器的 PDF」；页数、目录、正文全留给阅读窗的 pdf.js。
+            // 主进程不解析 PDF 结构：既省一次全文件扫描，也不会和解码器对页数的理解打架。
+            if (stat.size > MAX_PDF_BYTES) {
+                return Object.assign(emptyResult('PDF 超过 ' + Math.round(MAX_PDF_BYTES / 1048576) +
+                    'MB，为避免一次拷贝卡住窗口，暂不打开'), { kind: 'pdf', format: 'pdf' });
+            }
+            let head = '';
+            try {
+                const fd = fs.openSync(filePath, 'r');
+                const b = Buffer.alloc(5);
+                try { fs.readSync(fd, b, 0, 5, 0); } finally { fs.closeSync(fd); }
+                head = b.toString('latin1');
+            } catch (_) { /* 读不到头就当不是 PDF */ }
+            if (head.indexOf('%PDF-') !== 0) {
+                return Object.assign(emptyResult('文件头不是 %PDF-，可能已损坏或不是 PDF'),
+                    { kind: 'pdf', format: 'pdf' });
+            }
+            return {
+                ok: true, supported: true, reason: '', kind: 'pdf', format: 'pdf', pdf: true,
+                title: epub.titleFromPath(filePath), author: '', toc: [], chapterCount: 0, chapters: []
+            };
+        }
         if (ext === 'txt' || ext === 'md') {
             const t = loadText(filePath, ext);
             if (!t) {
@@ -354,6 +383,10 @@ function search(filePath, keyword, limit) {
     const info = openBook(filePath);
     if (!info.ok) return { ok: false, reason: info.reason || '打不开这本书', hits: [], total: 0 };
     if (!info.supported) return { ok: false, reason: info.reason || '该格式暂不支持搜索正文', hits: [], total: 0 };
+    if (info.kind === 'pdf') {
+        // PDF 正文只有解码器读得出来，书内搜索在阅读窗里按页做（主进程拿不到文字层）
+        return { ok: false, reason: 'PDF 请用阅读窗口里的「在本书里找一句话」', hits: [], total: 0 };
+    }
     const max = Math.max(1, Math.min(Number(limit) || 30, 60));
     const total = Math.min(info.chapterCount, 300);
     const lowerKw = kw.toLowerCase();
@@ -393,5 +426,6 @@ module.exports = {
     chapter: chapter,
     search: search,
     FORMATS: FORMATS,
-    MAX_TEXT_BYTES: MAX_TEXT_BYTES
+    MAX_TEXT_BYTES: MAX_TEXT_BYTES,
+    MAX_PDF_BYTES: MAX_PDF_BYTES
 };

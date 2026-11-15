@@ -82,22 +82,22 @@ function saveCell(): void {
 <style scoped>
 .focus-view { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.head h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.head h2 { margin: 0; font-size: var(--text-h2); font-weight: 500; }
 .head-actions { display: flex; gap: 6px; }
-.muted { font-size: 12px; color: var(--surface-muted); }
+.muted { font-size: var(--text-sm); color: var(--surface-muted); }
 .back {
   padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
   background: var(--surface-raised);
 }
 .editor { display: flex; flex-direction: column; gap: 6px; }
 .editor-head { display: flex; align-items: baseline; gap: 8px; }
-.editor-head strong { font-size: 13px; }
+.editor-head strong { font-size: var(--text-body); }
 .edit-foot { display: flex; align-items: center; justify-content: space-between; }
 .primary {
   padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
   background: var(--surface-raised);
 }
 .primary.fv-save-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.msg { padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; }
+.msg { padding: 6px 10px; border-radius: var(--radius-sm); font-size: var(--text-sm); }
 .message-on { background: var(--palette-soft); color: var(--palette-primary); }
 </style>

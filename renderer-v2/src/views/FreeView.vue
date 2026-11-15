@@ -2,8 +2,10 @@
 // 自由记录 · 三合一：① 胶囊收录（只读派生）② 闪念快记（同步收件箱）③ 长文撰写（写作法体检）。
 // 胶囊原文权威源仍是冻结的 diary-store，这里绝不复制第二份；长文正文存 md_freewrite，
 // 不塞进 cells.free（当日日记 2000 字上限 + 每次保存整篇 record 全量写）。
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { callDomain, callDomainRaw } from '../composables/useDomain';
+import { useWritingCheck } from '../composables/useWritingCheck';
+import type { WHit, WSentence } from '../composables/useWritingCheck';
 import { localDate } from '../types';
 
 type TabKey = 'capsule' | 'flash' | 'long';
@@ -18,14 +20,6 @@ interface CapsuleRow {
   id: string; openAt: string; writtenAt: string; opened: boolean;
   due: boolean; sealed: boolean; text: string; preview: string;
 }
-interface Hit { start: number; end: number; type: string }
-interface Sentence { text: string; level: string; hits: Hit[] }
-interface CheckResult {
-  sentences: Sentence[];
-  counts: { soft: number; hard: number; long: number; weak: number; passive: number; heavy: number; sentences: number };
-  chars: number; avg: number; readability: string;
-}
-interface Card { id: string; title: string; body: string }
 interface FeedRow { key: string; kind: string; at: string; tag: string; tagClass: string; text: string; meta: string; dim: boolean }
 
 const emit = defineEmits<{ (e: 'notify', text: string): void }>();
@@ -33,24 +27,22 @@ const emit = defineEmits<{ (e: 'notify', text: string): void }>();
 const EMPTY_BOARD: FreeBoard = {
   flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false }
 };
-const EMPTY_CHECK: CheckResult = {
-  sentences: [],
-  counts: { soft: 0, hard: 0, long: 0, weak: 0, passive: 0, heavy: 0, sentences: 0 },
-  chars: 0, avg: 0, readability: '偏短'
-};
+
+// 写作法体检改成「中栏写、右栏看」：结果与开关都由 useWritingCheck 共享给右栏那张卡，
+// 中栏不再重复渲染一份统计（同一份数据两处显示，迟早对不上）。
+const {
+  checkOn, result,
+  noteBody, runNow, setActive, hydrate, toggle, loadCards
+} = useWritingCheck();
 
 const tab = ref<TabKey>('capsule');
 const board = ref<FreeBoard>(EMPTY_BOARD);
 const capsules = ref<CapsuleRow[]>([]);
-const cards = ref<Card[]>([]);
 const flashText = ref('');
 const flashBusy = ref(false);
 const docSel = ref('');
 const draftTitle = ref('');
 const draftBody = ref('');
-const checkOn = ref(false);
-const result = ref<CheckResult>(EMPTY_CHECK);
-let checkTimer: ReturnType<typeof setTimeout> | null = null;
 
 function notify(t: string): void { emit('notify', t); }
 
@@ -75,11 +67,6 @@ async function loadCapsules(): Promise<void> {
   capsules.value = Array.isArray(list) ? list : [];
 }
 
-async function loadCards(): Promise<void> {
-  const list = await callDomain<Card[]>('writing.cards', []);
-  cards.value = Array.isArray(list) ? list : [];
-}
-
 onMounted(async function () {
   await loadBoard();
   await loadCapsules();
@@ -88,13 +75,19 @@ onMounted(async function () {
   await callDomain('free.flashSyncPending', { total: 0, synced: 0 });
   const saved = board.value.prefs.lastTab;
   if (saved === 'flash' || saved === 'long') tab.value = saved;
-  checkOn.value = !!board.value.prefs.checkOn;
+  hydrate(!!board.value.prefs.checkOn);
+  setActive(tab.value === 'long');
   if (board.value.docs.length) selectDoc(board.value.docs[0]);
-  if (checkOn.value) void runCheck();
+  if (checkOn.value) runNow();
+  else noteBody(draftBody.value);
 });
+
+// 离开模块时把右栏那张卡收起来，别让「写作法」跟着去别的页
+onUnmounted(function () { setActive(false); });
 
 function switchTab(k: TabKey): void {
   tab.value = k;
+  setActive(k === 'long');
   void callDomain('free.prefs', EMPTY_BOARD.prefs, { lastTab: k });
 }
 
@@ -165,7 +158,7 @@ function selectDoc(d: DocRow): void {
   docSel.value = d.id;
   draftTitle.value = d.title;
   draftBody.value = d.body;
-  if (checkOn.value) void runCheck();
+  noteBody(d.body);
 }
 
 async function newDoc(): Promise<void> {
@@ -195,27 +188,12 @@ async function removeDoc(): Promise<void> {
   notify('长文已删除');
 }
 
-// ---- 写作法体检：只提示，不代写；写作态不高亮，编辑态才逐句标色 ----
-async function runCheck(): Promise<void> {
-  const r = await callDomain<CheckResult>('writing.check', EMPTY_CHECK, draftBody.value);
-  result.value = r && Array.isArray(r.sentences) ? r : EMPTY_CHECK;
-}
+// ---- 写作法体检：只提示，不代写；本页只负责「写 + 标色」，统计卡在右栏 ----
+watch(draftBody, function (v) { noteBody(v); });
 
-function toggleCheck(): void {
-  checkOn.value = !checkOn.value;
-  void callDomain('free.prefs', EMPTY_BOARD.prefs, { checkOn: checkOn.value });
-  if (checkOn.value) void runCheck();
-}
-
-watch(draftBody, function () {
-  if (!checkOn.value) return;
-  if (checkTimer) clearTimeout(checkTimer);
-  checkTimer = setTimeout(function () { void runCheck(); }, 350);
-});
-
-function segments(s: Sentence): Array<{ text: string; type: string }> {
+function segments(s: WSentence): Array<{ text: string; type: string }> {
   const out: Array<{ text: string; type: string }> = [];
-  const hits = Array.isArray(s.hits) ? s.hits : [];
+  const hits = Array.isArray(s.hits) ? s.hits as WHit[] : [];
   let at = 0;
   hits.forEach(function (h) {
     if (h.start > at) out.push({ text: s.text.slice(at, h.start), type: '' });
@@ -226,7 +204,7 @@ function segments(s: Sentence): Array<{ text: string; type: string }> {
   return out;
 }
 
-function sentClass(s: Sentence): string {
+function sentClass(s: WSentence): string {
   return s.level === 'hard' ? 'fw-hard' : (s.level === 'soft' ? 'fw-soft' : '');
 }
 </script>
@@ -272,8 +250,8 @@ function sentClass(s: Sentence): string {
         </div>
       </div>
       <div class="fw-card">
-        <h3>收录口径</h3>
-        <p class="fw-note">未到期胶囊只给元信息，正文与预览都不从主进程送出；已开启的可在此读全文。「写新 / 开启」统一走顶栏弹窗，入口唯一。</p>
+        <h3>记录说明</h3>
+        <p class="fw-note">未到期的胶囊只显示标题与日期，正文和预览不会从后台送出；已开启的可在此读全文。「写新 / 开启」统一走顶栏弹窗，入口唯一。</p>
       </div>
     </section>
 
@@ -318,7 +296,7 @@ function sentClass(s: Sentence): string {
         <div class="fw-editor">
           <div class="fw-ebar">
             <input v-model="draftTitle" class="fw-title" type="text" maxlength="60" aria-label="长文标题" placeholder="标题" />
-            <button class="fw-btn fw-mini" :class="{ 'fw-on-btn': checkOn }" :aria-pressed="checkOn" @click="toggleCheck">
+            <button class="fw-btn fw-mini" :class="{ 'fw-on-btn': checkOn }" :aria-pressed="checkOn" @click="toggle">
               {{ checkOn ? '体检' : '写作' }}
             </button>
             <button class="fw-btn fw-mini" @click="saveDoc">保存</button>
@@ -337,37 +315,24 @@ function sentClass(s: Sentence): string {
           </div>
         </div>
       </div>
-
-      <div class="fw-card">
-        <h3>写作法 · 海明威（只体检，不代写）</h3>
-        <div class="fw-stats">
-          <div class="fw-stat"><b>{{ result.counts.long }}</b><span>长句（&gt;40 / &gt;60 字）</span></div>
-          <div class="fw-stat"><b>{{ result.counts.weak }}</b><span>弱化词 · 副词</span></div>
-          <div class="fw-stat"><b>{{ result.counts.passive + result.counts.heavy }}</b><span>被动 / 繁化动词</span></div>
-        </div>
-        <p class="fw-note">平均句长 {{ result.avg }} 字 · 可读性 {{ result.readability }} · 中文用句长近似，不套 ARI。</p>
-        <div class="fw-cards">
-          <p v-for="c in cards" :key="c.id" class="fw-tip"><b>{{ c.title }}</b>　{{ c.body }}</p>
-        </div>
-        <p class="fw-note">规则为本地纯函数（零联网、零模型、零依赖）。黄=偏长，红=过长，蓝=弱化词；永不给改写文本，也不自动落库。</p>
-      </div>
+      <p class="fw-note fw-rail-hint">写作法的三格统计与技巧卡在右栏「写作法 · 海明威」——中栏只管写，右栏只管看。</p>
     </section>
   </section>
 </template>
 
 <style scoped>
 .free-view { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
-.fw-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.fw-head p { margin: 4px 0 0; font-size: 11.5px; color: var(--surface-muted); line-height: 1.7; }
+.fw-head h2 { margin: 0; font-size: var(--text-h2); font-weight: 600; }
+.fw-head p { margin: 4px 0 0; font-size: var(--text-sm); color: var(--surface-muted); line-height: 1.7; }
 .fw-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--surface-border); }
-.fw-tab { font-size: 13px; padding: 8px 15px; border: 0; background: transparent; color: var(--surface-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.fw-tab { font-size: var(--text-body); padding: 8px 15px; border: 0; background: transparent; color: var(--surface-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .fw-tab.fw-on { color: var(--palette-primary); font-weight: 600; border-bottom-color: var(--palette-primary); }
 .fw-pane { display: flex; flex-direction: column; gap: var(--space-2); }
 .fw-card { padding: var(--space-2); border: 1px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-panel); }
-.fw-card h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
-.fw-note { font-size: 11px; color: var(--surface-muted); line-height: 1.75; margin: 0; }
+.fw-card h3 { margin: 0 0 10px; font-size: var(--text-body); font-weight: 600; }
+.fw-note { font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.75; margin: 0; }
 .fw-counts { display: flex; gap: 6px; margin-bottom: 12px; }
-.fw-chip { display: inline-block; font-size: 10.5px; padding: 2px 9px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); border: 1px solid var(--palette-border); white-space: nowrap; }
+.fw-chip { display: inline-block; font-size: var(--text-xs); padding: 2px 9px; border-radius: 999px; background: var(--palette-soft); color: var(--palette-primary); border: 1px solid var(--palette-border); white-space: nowrap; }
 .fw-chip.fw-tag-blue { background: #e8f0f8; color: #3a6f9c; border-color: #c8dcee; }
 .fw-chip.fw-tag-amber { background: #fbf1de; color: #a8752a; border-color: #ebd6ad; }
 .fw-chip.fw-tag-gray { background: var(--surface-raised); color: var(--surface-muted); border-color: var(--surface-border); }
@@ -377,38 +342,33 @@ function sentClass(s: Sentence): string {
 .fw-dot { position: absolute; left: -15px; top: 14px; width: 7px; height: 7px; border-radius: 50%; background: var(--palette-primary); border: 2px solid var(--surface-panel); }
 .fw-sealed .fw-dot { background: #c39a4d; }
 .fw-feed-body { padding: 9px 11px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
-.fw-meta { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--surface-muted); }
-.fw-feed-body p { margin: 7px 0 5px; font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; }
+.fw-meta { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--surface-muted); }
+.fw-feed-body p { margin: 7px 0 5px; font-size: var(--text-body); line-height: 1.8; white-space: pre-wrap; }
 .fw-dim { color: var(--surface-muted); font-style: italic; }
 .fw-capture { display: flex; gap: 8px; }
-.fw-capture input { flex: 1; font-family: inherit; font-size: 12px; padding: 8px 10px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); outline: none; }
-.fw-sync { margin: 10px 0 12px; padding: 9px 11px; border: 1px solid var(--palette-border); border-radius: var(--radius-md); background: var(--palette-soft); color: var(--palette-primary); font-size: 11.5px; line-height: 1.7; }
+.fw-capture input { flex: 1; font-family: inherit; font-size: var(--text-sm); padding: 8px 10px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); outline: none; }
+.fw-sync { margin: 10px 0 12px; padding: 9px 11px; border: 1px solid var(--palette-border); border-radius: var(--radius-md); background: var(--palette-soft); color: var(--palette-primary); font-size: var(--text-sm); line-height: 1.7; }
 .fw-flash { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); margin-bottom: 8px; }
 .fw-flash-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--palette-primary); flex: 0 0 6px; }
 .fw-flash-body { flex: 1; min-width: 0; }
-.fw-flash-body p { margin: 0; font-size: 12.5px; line-height: 1.7; }
-.fw-btn { font-size: 12px; padding: 6px 12px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; white-space: nowrap; }
+.fw-flash-body p { margin: 0; font-size: var(--text-body); line-height: 1.7; }
+.fw-btn { font-size: var(--text-sm); padding: 6px 12px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; white-space: nowrap; }
 .fw-btn.fw-primary { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.fw-btn.fw-mini { padding: 3px 9px; font-size: 11px; }
+.fw-btn.fw-mini { padding: 3px 9px; font-size: var(--text-xs); }
 .fw-btn.fw-on-btn { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .fw-btn:disabled { opacity: .5; cursor: default; }
 .fw-writing { display: grid; grid-template-columns: 190px 1fr; gap: 12px; }
 .fw-doclist { display: flex; flex-direction: column; gap: 6px; }
-.fw-doc { text-align: left; font-size: 12px; padding: 8px 10px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; }
+.fw-doc { text-align: left; font-size: var(--text-sm); padding: 8px 10px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; }
 .fw-doc.fw-doc-on { border-color: var(--palette-border); background: var(--palette-soft); color: var(--palette-primary); }
-.fw-doc span { display: block; font-size: 10px; color: var(--surface-muted); margin-top: 3px; }
+.fw-doc span { display: block; font-size: var(--text-xs); color: var(--surface-muted); margin-top: 3px; }
 .fw-editor { border: 1px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-panel); overflow: hidden; }
 .fw-ebar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: var(--surface-raised); border-bottom: 1px solid var(--surface-border); }
-.fw-title { flex: 1; min-width: 0; font-family: inherit; font-size: 12px; font-weight: 600; border: 0; background: transparent; outline: none; }
-.fw-paper { display: block; width: 100%; min-height: 240px; border: 0; outline: none; resize: vertical; padding: 14px 16px; font-family: Georgia, 'SimSun', serif; font-size: 13px; line-height: 2; background: transparent; }
-.fw-review { min-height: 240px; padding: 14px 16px; font-family: Georgia, 'SimSun', serif; font-size: 13px; line-height: 2.1; white-space: pre-wrap; }
+.fw-title { flex: 1; min-width: 0; font-family: inherit; font-size: var(--text-sm); font-weight: 600; border: 0; background: transparent; outline: none; }
+.fw-paper { display: block; width: 100%; min-height: 240px; border: 0; outline: none; resize: vertical; padding: 14px 16px; font-family: Georgia, 'SimSun', serif; font-size: var(--text-body); line-height: 2; background: transparent; }
+.fw-review { min-height: 240px; padding: 14px 16px; font-family: Georgia, 'SimSun', serif; font-size: var(--text-body); line-height: 2.1; white-space: pre-wrap; }
 .fw-soft { background: #fbf1de; border-bottom: 1px solid #e9c98c; border-radius: 3px; }
 .fw-hard { background: #f9e9e5; border-bottom: 2px solid #b34a3a; border-radius: 3px; }
 .fw-review mark { background: #e8f0f8; border-bottom: 1px solid #9dbfdd; border-radius: 2px; padding: 0 1px; color: inherit; }
-.fw-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 9px; }
-.fw-stat { padding: 9px 10px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
-.fw-stat b { display: block; font-size: 16px; color: var(--palette-primary); }
-.fw-stat span { font-size: 10.5px; color: var(--surface-muted); }
-.fw-cards { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
-.fw-tip { margin: 0; font-size: 11.5px; line-height: 1.75; padding: 7px 10px; border-left: 2px solid var(--palette-border); background: var(--surface-raised); border-radius: 0 5px 5px 0; }
+.fw-rail-hint { padding-left: 2px; }
 </style>

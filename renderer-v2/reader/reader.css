@@ -513,6 +513,7 @@ button { cursor: pointer; }
 .rr-selbar-btn[data-color="pink"] { background: #ffd3e2; }
 .rr-selbar-quote,
 .rr-selbar-ask { background: var(--primary-soft); color: var(--primary); }
+.rr-selbar-copy { background: var(--panel-2); }
 
 /* ================= 右栏：标注筛选 / 笔记回跳 ================= */
 .rr-style-filter { display: flex; gap: 4px; margin: 6px 0 8px; flex-wrap: wrap; }
@@ -831,3 +832,111 @@ button { cursor: pointer; }
    类选择器会盖过 UA 的 [hidden]{display:none}，导致「收起」失效（输入框一直露着）。 */
 .rr-endcard [hidden],
 .rr-ask [hidden] { display: none !important; }
+
+/* ==================== V3.5 阅读方式 ==================== */
+/* 单独成行，不挤上面那条工具栏：实测多一个下拉就会把「缩放 / 行距」顶到第二行。
+   三栏 grid：中间那栏放选项条并居中，页码留在右侧——用 flex + space-between 会因为
+   左标签与右页码宽度不等而把选项条推偏。 */
+.rr-modes {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px;
+  padding: 6px 8px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2);
+}
+.rr-modes-group { display: inline-flex; align-items: center; gap: 6px; grid-column: 2; justify-self: center; }
+.rr-modes-pages { grid-column: 3; justify-self: end; display: inline-flex; align-items: center; gap: 4px; }
+/* 分页时的页码组：‹ 第 3 / 12 页 › —— 只有分页态才长这两枚按钮 */
+.rr-pg-btn {
+  font-size: 12px; line-height: 1; padding: 2px 6px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); color: var(--text);
+}
+.rr-pg-btn:hover { border-color: var(--primary); }
+.rr-pg-no { font-size: 11px; color: var(--muted); min-width: 66px; text-align: center; }
+.rr-modes-label { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.rr-mode-btn {
+  font-size: 11.5px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--panel); color: var(--text);
+}
+.rr-mode-btn:hover { border-color: var(--primary); }
+.rr-mode-btn.rr-mode-on { background: var(--primary); color: #fff; border-color: var(--primary); }
+.rr-modes-tip, .rr-modes-pages { font-size: 11px; color: var(--muted); }
+.rr-modes .rr-spacer { flex: 1 1 auto; }
+
+/* PDF 原页：canvas 进视口才画，容器自己滚 */
+.rr-pdf {
+  position: absolute; inset: 0; overflow: auto; padding: 16px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  /* 滚动条槽位常驻：否则第一页画出来后才冒出的滚动条会吃掉 17px，
+     页容器跟着变窄，已画好的画布就被压一次 —— 又是重采样，字又糊 */
+  scrollbar-gutter: stable;
+}
+.rr-pdf[hidden] { display: none !important; }
+.rr-pdf-pages { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; justify-items: center; align-content: start; }
+.rr-pdf-pages.rr-pdf-spread { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rr-pdf-pages.rr-pdf-spread .rr-pdf-page-first { grid-column: 1 / -1; }
+.rr-pdf-page {
+  position: relative; width: 100%; max-width: 900px; min-height: 220px;
+  background: #fff; border: 1px solid var(--border); box-shadow: 0 2px 12px var(--shadow);
+  display: flex; align-items: center; justify-content: center;
+}
+/* 尺寸由 JS 按 devicePixelRatio 写死在 canvas 上（位图 dpr 倍、CSS 逻辑像素），
+   这里只兜底不溢出：再写 width:100% 就等于把已经画准的位图又拉伸一次 */
+.rr-pdf-page canvas { display: block; max-width: 100%; height: auto; }
+/* 画布与文本层共用一张「纸」：尺寸由 JS 写死，缩放时两者一起居中，不会错开 */
+.rr-pdf-sheet { position: relative; flex: 0 0 auto; }
+/* V3.17 文本层：透明真文字盖在画布上，只为划选 / 复制 / 搜索命中而存在。
+   不写 color:transparent 就会和画布上的字叠出重影；::selection 给淡蓝底，
+   让人看得见自己选了哪一句。 */
+.rr-pdf-text {
+  position: absolute; inset: 0; overflow: hidden; z-index: 2;
+  line-height: 1; text-align: initial; transform-origin: 0 0;
+  user-select: text; -webkit-user-select: text;
+  text-size-adjust: none; -webkit-text-size-adjust: none;
+}
+.rr-pdf-text span {
+  position: absolute; color: transparent; white-space: pre; cursor: text;
+  transform-origin: 0 0; border-radius: 2px;
+}
+.rr-pdf-text ::selection { background: rgba(70, 130, 230, .32); }
+.rr-pdf-text span.rr-pdf-mark { background: rgba(250, 216, 92, .55); }
+.rr-pdf-text span.rr-pdf-mark[data-mark="green"] { background: rgba(142, 218, 152, .55); }
+.rr-pdf-text span.rr-pdf-mark[data-mark="blue"] { background: rgba(142, 194, 240, .55); }
+.rr-pdf-text span.rr-pdf-mark[data-mark="pink"] { background: rgba(244, 168, 198, .55); }
+/* 搜索命中：黄块贴在命中字上；点结果跳过去时再叠一层蓝框闪一下 */
+.rr-pdf-text span.rr-pdf-hit { background: rgba(250, 196, 60, .48); }
+.rr-pdf-text span.rr-pdf-hit-on {
+  outline: 1.5px solid var(--primary, #2f6fed); background: rgba(70, 130, 230, .40);
+}
+.rr-pdf-page-no {
+  position: absolute; bottom: 6px; right: 10px; font-size: 11px; color: var(--muted);
+  background: rgba(255,255,255,.88); padding: 1px 6px; border-radius: 8px;
+}
+.rr-pdf-page-wait { font-size: 11px; color: var(--muted); }
+
+/* 全屏：三栏、顶栏、工具栏、搜索、底栏全部收起，正文铺满整个窗口 */
+.rr-app[data-full="1"] { grid-template-columns: 0 0 1fr 0 0; }
+.rr-app[data-full="1"] .rr-top,
+.rr-app[data-full="1"] .rr-left,
+.rr-app[data-full="1"] .rr-right,
+.rr-app[data-full="1"] .rr-divider,
+.rr-app[data-full="1"] .rr-toolbar,
+.rr-app[data-full="1"] .rr-search,
+.rr-app[data-full="1"] .rr-modes,
+.rr-app[data-full="1"] .rr-status { display: none !important; }
+.rr-app[data-full="1"] .rr-main { grid-column: 1 / -1; grid-row: 1 / -1; padding: 0; }
+.rr-app[data-full="1"] .rr-page { border: 0; border-radius: 0; box-shadow: none; }
+.rr-app[data-full="1"] .rr-pdf { border: 0; border-radius: 0; }
+/* 伴读浮窗 / 章末卡挂在 rr-app 之外，全屏时一并收起，别压在正文中间 */
+body[data-full="1"] .rr-ask,
+body[data-full="1"] .rr-ask-open,
+body[data-full="1"] .rr-endcard { display: none !important; }
+.rr-full-exit {
+  position: fixed; top: 10px; right: 14px; z-index: 60;
+  font-size: 11.5px; padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: rgba(255,253,248,.92); color: var(--text);
+  box-shadow: 0 2px 8px var(--shadow); opacity: .6;
+}
+.rr-full-exit:hover { opacity: 1; }
+.rr-full-exit[hidden] { display: none !important; }

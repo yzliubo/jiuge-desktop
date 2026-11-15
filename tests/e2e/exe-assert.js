@@ -31,7 +31,9 @@ fs.mkdirSync(userData, { recursive: true });
 function resolveAsar() {
   const list = [
     path.join(root, 'build-v2', 'win-unpacked', 'resources', 'app.asar'),
-    path.join(root, 'build-v2b', 'win-unpacked', 'resources', 'app.asar')
+    path.join(root, 'build-v2b', 'win-unpacked', 'resources', 'app.asar'),
+    path.join(root, 'build-v2c', 'win-unpacked', 'resources', 'app.asar'),
+    path.join(root, 'build-v2d', 'win-unpacked', 'resources', 'app.asar')
   ].filter(function (p) { return fs.existsSync(p); });
   if (!list.length) return path.join(root, 'build-v2', 'win-unpacked', 'resources', 'app.asar');
   list.sort(function (a, b) { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; });

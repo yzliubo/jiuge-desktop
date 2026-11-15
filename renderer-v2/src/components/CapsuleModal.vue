@@ -5,6 +5,7 @@
 import { ref, watch, onMounted } from 'vue';
 import CapsuleView from './CapsuleView.vue';
 import { callDomain, callDomainRaw } from '../composables/useDomain';
+import { useDialogFocus } from '../composables/useDialogFocus';
 
 type TabKey = 'write' | 'due';
 interface DueCapsule {
@@ -18,6 +19,10 @@ const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'due-changed'): void;
 }>();
+
+// T15：Esc 关闭 + 焦点进入 / 归还，与速记浮窗共用同一份行为。
+const boxEl = ref<HTMLElement | null>(null);
+useDialogFocus(boxEl, () => emit('close'));
 
 const active = ref<TabKey>(props.tab);
 const dues = ref<DueCapsule[]>([]);
@@ -51,7 +56,7 @@ async function openOne(c: DueCapsule): Promise<void> {
 
 <template>
   <div class="cm-mask" @click.self="emit('close')">
-    <div class="cm-box" role="dialog" aria-label="胶囊" aria-modal="true">
+    <div ref="boxEl" class="cm-box" role="dialog" aria-label="胶囊" aria-modal="true">
       <header class="cm-head">
         <strong>胶囊 · 给未来的信</strong>
         <span class="cm-sub">顶栏小功能 · 书写与到期都在弹窗里</span>
@@ -94,7 +99,7 @@ async function openOne(c: DueCapsule): Promise<void> {
 
 <style scoped>
 .cm-mask {
-  position: fixed; inset: 0; z-index: 60;
+  position: fixed; inset: 0; z-index: var(--z-drawer);
   background: rgba(35, 45, 40, .30);
   display: flex; align-items: flex-start; justify-content: center;
   padding-top: 76px;
@@ -107,27 +112,27 @@ async function openOne(c: DueCapsule): Promise<void> {
   overflow: hidden;
 }
 .cm-head { display: flex; align-items: center; gap: 10px; padding: 11px 16px; background: var(--surface-raised); border-bottom: 1px solid var(--surface-border); }
-.cm-head strong { font-size: 14px; color: var(--palette-primary); }
-.cm-sub { font-size: 11px; color: var(--surface-muted); }
-.cm-x { margin-left: auto; border: 0; background: transparent; color: var(--surface-muted); font-size: 12px; cursor: pointer; }
+.cm-head strong { font-size: var(--text-h2); color: var(--palette-primary); }
+.cm-sub { font-size: var(--text-xs); color: var(--surface-muted); }
+.cm-x { margin-left: auto; border: 0; background: transparent; color: var(--surface-muted); font-size: var(--text-sm); cursor: pointer; }
 .cm-tabs { display: flex; gap: 4px; padding: 10px 16px 0; }
 .cm-tab {
-  font-size: 12px; padding: 7px 14px; border: 1px solid var(--surface-border); border-bottom: 0;
+  font-size: var(--text-sm); padding: 7px 14px; border: 1px solid var(--surface-border); border-bottom: 0;
   border-radius: 6px 6px 0 0; background: var(--surface-raised); color: var(--surface-muted); cursor: pointer;
 }
 .cm-tab.cm-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.cm-badge { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 6px; border-radius: 9px; background: var(--palette-accent); color: var(--palette-on); font-size: 10px; }
+.cm-badge { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 6px; border-radius: 9px; background: var(--palette-accent); color: var(--palette-on); font-size: var(--text-xs); }
 .cm-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; border-top: 1px solid var(--surface-border); }
 .cm-body :deep(.capsule) { gap: 10px; }
-.cm-due { font-size: 12px; }
-.cm-tip, .cm-empty, .cm-msg { font-size: 11.5px; color: var(--surface-muted); line-height: 1.7; }
+.cm-due { font-size: var(--text-sm); }
+.cm-tip, .cm-empty, .cm-msg { font-size: var(--text-sm); color: var(--surface-muted); line-height: 1.7; }
 .cm-item { display: flex; align-items: center; gap: 10px; padding: 9px 11px; margin: 8px 0; border: 1px solid var(--palette-border); border-radius: var(--radius-md); background: var(--palette-soft); }
 .cm-item-body { flex: 1; min-width: 0; }
-.cm-item-body p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.7; }
-.cm-meta { font-size: 11px; color: var(--surface-muted); }
-.cm-btn { padding: 4px 10px; font-size: 12px; border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; }
+.cm-item-body p { margin: 4px 0 0; font-size: var(--text-body); line-height: 1.7; }
+.cm-meta { font-size: var(--text-xs); color: var(--surface-muted); }
+.cm-btn { padding: 4px 10px; font-size: var(--text-sm); border: 1px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); cursor: pointer; }
 .cm-opened { margin-top: 10px; padding: 12px; border: 1px solid var(--palette-border); border-radius: var(--radius-md); background: var(--palette-soft); }
-.cm-opened strong { font-size: 12px; }
-.cm-opened p { margin: 8px 0; font-size: 13px; line-height: 1.9; white-space: pre-wrap; }
-.cm-link { border: 0; background: transparent; color: var(--palette-primary); font-size: 12px; cursor: pointer; }
+.cm-opened strong { font-size: var(--text-sm); }
+.cm-opened p { margin: 8px 0; font-size: var(--text-body); line-height: 1.9; white-space: pre-wrap; }
+.cm-link { border: 0; background: transparent; color: var(--palette-primary); font-size: var(--text-sm); cursor: pointer; }
 </style>

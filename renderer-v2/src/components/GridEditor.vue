@@ -15,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'save', record: DiaryRecord): void;
   (e: 'open-cell', key: string): void;
+  (e: 'draft-change', dirty: boolean): void;
 }>();
 
 function clone(r: DiaryRecord): DiaryRecord {
@@ -38,6 +39,8 @@ watch(() => props.record, (value) => { draft.value = clone(value); });
 const focused = ref<string>('');
 const drawerOpen = ref(false);
 const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(props.record));
+// 外壳据此在切日期 / 切页前拦一次确认（P0-1），避免静默丢字
+watch(dirty, (v) => emit('draft-change', v));
 const filledCount = computed(() => GRID_KEYS.filter((k) => !!draft.value.cells[k]).length);
 
 // ---------- 九格引导语（替代原来九格共用的「随手一句，可写多行」）----------
@@ -45,8 +48,8 @@ const filledCount = computed(() => GRID_KEYS.filter((k) => !!draft.value.cells[k
 // 领域层 diary-store.promptFor 仍是「自建 / 未知模板」与旧数据键的兜底，保持小程序同源行为；
 // utils 是逐字节对拍基线，一律不改。休闲娱乐（leisure）此前在领域层无对应键，
 // 单格工作台会显示「本格暂无引导词」，本轮由新库统一补齐。
-const LEISURE_PROMPTS = GRID_LIBRARY.standard.leisure;
-const LEISURE_EASY = FIRST_WEEK_EASY.leisure;
+const LEISURE_PROMPTS = GRID_LIBRARY.standard.dream;
+const LEISURE_EASY = FIRST_WEEK_EASY.dream;
 
 // 领域层取词失败（或浏览器预览的 mock）时，仍按模块给一句，不再退回统一占位语。
 const FALLBACK_PROMPTS: Record<string, string> = (function () {
@@ -86,7 +89,7 @@ async function loadPrompts(): Promise<void> {
     const off = offsetFor(k, date);
     const easy = firstWeek.value && off === 0;
     const local = gridPrompt(k, tplId, date, off, easy);
-    if (k === 'leisure') {
+    if (k === 'dream') {
       // 领域层没有 leisure 键，这一格始终由本地语料库供题（四套模板各有专属题）。
       const idx = ((off % LEISURE_PROMPTS.length) + LEISURE_PROMPTS.length) % LEISURE_PROMPTS.length;
       out[k] = local || LEISURE_PROMPTS[idx] || LEISURE_EASY;
@@ -158,6 +161,10 @@ watch(() => props.date || props.record.date, () => { void loadPrompts(); });
 function save(): void {
   emit('save', clone(draft.value));
 }
+function saveIfDirty(): void {
+  if (dirty.value) save();
+}
+defineExpose({ save, saveIfDirty });
 </script>
 
 <template>
@@ -258,31 +265,31 @@ function save(): void {
 .date-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
 .head-tools { display: flex; align-items: center; gap: 8px; }
 .prompt-shuffle {
-  padding: 2px 9px; font-size: 11px; cursor: pointer;
+  padding: 2px 9px; font-size: var(--text-xs); cursor: pointer;
   border: 0.5px solid var(--surface-border); border-radius: 999px;
   background: var(--surface-panel); color: var(--surface-muted);
 }
 .prompt-shuffle:hover { color: var(--palette-primary); border-color: var(--palette-border); }
-.date-title { font-size: 15px; font-weight: 500; margin: 0; }
+.date-title { font-size: var(--text-h2); font-weight: 500; margin: 0; }
 .date-backfill-tag {
   margin-left: 0;
   padding: 0 7px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 400;
   color: var(--state-warn);
   border: 0.5px solid var(--state-warn);
   border-radius: 999px;
 }
-.cell-gap { margin-right: auto; font-size: 10px; color: var(--surface-muted); opacity: 0.9; }
+.cell-gap { margin-right: auto; font-size: var(--text-xs); color: var(--surface-muted); opacity: 0.9; }
 /* 「今日六条」格的进度徽标：这一格的入口在格子里，得看得出有没有在用 */
 .cell-focus {
-  padding: 0 6px; border-radius: 999px; font-size: 10px;
+  padding: 0 6px; border-radius: 999px; font-size: var(--text-xs);
   color: var(--palette-primary); background: var(--palette-soft);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .cell-focus-on { background: var(--palette-primary); color: var(--palette-on); }
-.date-sub { font-size: 12px; color: var(--surface-muted); margin: 4px 0 0; }
-.badge { padding: 2px 10px; border-radius: 999px; background: var(--surface-panel); color: var(--surface-muted); font-size: 12px; }
+.date-sub { font-size: var(--text-sm); color: var(--surface-muted); margin: 4px 0 0; }
+.badge { padding: 2px 10px; border-radius: 999px; background: var(--surface-panel); color: var(--surface-muted); font-size: var(--text-sm); }
 .badge-on { background: var(--palette-soft); color: var(--palette-primary); }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
 .cell {
@@ -300,7 +307,7 @@ function save(): void {
 .cell-open {
   opacity: 0;
   padding: 1px 7px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border);
   border-radius: 999px;
   background: var(--surface-panel);
@@ -313,7 +320,7 @@ function save(): void {
 .cell-label {
   appearance: none; -webkit-appearance: none;
   margin: 0; padding: 0; border: 0; background: transparent;
-  font: inherit; font-size: 12px; color: var(--palette-primary);
+  font: inherit; font-size: var(--text-sm); color: var(--palette-primary);
   text-align: left; cursor: pointer; white-space: nowrap;
 }
 .cell-label:hover { color: var(--palette-accent); text-decoration: underline; }
@@ -324,7 +331,7 @@ function save(): void {
 .cell-input { width: 100%; resize: vertical; border: 0; outline: none; background: transparent; line-height: 1.6; }
 /* 九格里的富文本：去掉外框，让编辑区直接铺在格子里 */
 .cell :deep(.rt) { border: 0; background: transparent; }
-.cell :deep(.rt-body) { padding: 0; font-size: 12px; max-height: none; }
+.cell :deep(.rt-body) { padding: 0; font-size: var(--text-sm); max-height: none; }
 .drawer-toggle { align-self: flex-start; padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); }
 .drawer-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .drawer { display: flex; gap: var(--space-2); padding: var(--space-2); border: 0.5px dashed var(--surface-border); border-radius: var(--radius-md); }
@@ -332,10 +339,20 @@ function save(): void {
 .drawer-tab { padding: 4px 10px; background: var(--surface-panel); border-radius: var(--radius-sm); }
 .drawer-link { border: 0.5px solid var(--surface-border); }
 .drawer-link:hover { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
-.actions { display: flex; align-items: center; gap: var(--space-2); }
+.actions {
+  position: sticky; bottom: 0; z-index: var(--z-sticky);
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 6px 0 4px; background: var(--surface-bg);
+}
 .save-btn { padding: 8px 16px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); }
 .save-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .save-btn:disabled { opacity: 0.5; cursor: default; }
-.hint { font-size: 12px; color: var(--surface-muted); }
-@media (max-width: 1280px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.hint { font-size: var(--text-sm); color: var(--surface-muted); }
+/* D1：三栏下 1361 之前都排 2 列；<=1120 右栏折成抽屉，省下的宽还给九格，保持 3 列 */
+@media (min-width: 1121px) and (max-width: 1360px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* 格子标题右侧的「展开」是入口，不是正文：弱显但保证可见（P1-16） */
+.cell-open { opacity: 0.6; }
+.cell-open:hover, .cell-open:focus-visible { opacity: 1; }
 </style>

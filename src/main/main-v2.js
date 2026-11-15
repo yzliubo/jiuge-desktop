@@ -18,6 +18,10 @@ const persistence = require('../core/persistence.js');
 const { createMetrics } = require('../core/metrics.js');
 // 本地电子书正文 / 目录解析：EPUB 走 ZIP，TXT/MD 分章，零第三方依赖
 const readerSource = require('../reading/reader-source.js');
+// 本机字体名：直接读字体文件 name 表，不走 PowerShell（控制台代码页会把中文族名变问号）
+const readingFonts = require('../reading/fonts.js');
+// 豆瓣封面检索（V3.13）：唯一会把「正在读什么」发到本机之外的通道，只在用户点名时调用
+const coverNet = require('../reading/cover-net.js');
 // 本机时间源：只读订阅 ActivityWatch（127.0.0.1:5600），不采集、不写回、不落窗口标题
 const worktimeMod = require('../worktime/board.js');
 const worktimeClient = require('../worktime/client.js');
@@ -32,6 +36,9 @@ const READER_HTML = path.resolve(__dirname, '../../renderer-v2/reader/index.html
 // 独立账本窗口：Vite 第二入口，左（导航+净值）/ 中（模块）/ 右（洞察）三栏。
 // 与主窗共用同一个 v2-preload，所以 finance.* 仍走 v1/domain:call 白名单。
 const FINANCE_HTML = path.resolve(__dirname, '../../renderer-v2/dist/finance.html');
+// 独立图书馆窗口：Vite 第三入口，左（文件夹树）/ 中（书架）/ 右（选中详情）三栏。
+// 搬出主窗的理由很实际：书架本身就要「按文件夹看书」，主窗中栏再挂一棵树就什么都不剩。
+const LIBRARY_HTML = path.resolve(__dirname, '../../renderer-v2/dist/library.html');
 const PROBE = process.env.JIUGE_V2_PROBE === '1';
 // 全局速记热键（R-09）：选 Ctrl+Alt+J 是因为它与「九格 / Jiuge」同字母，
 // 且不与 Windows 的 Win+Shift+S、Ctrl+Alt+Del 等系统级组合冲突。
@@ -43,6 +50,8 @@ let mainWindow = null;
 const readerWindows = new Map();
 // 账本全局只有一个窗口：重复点顶栏「账本」只聚焦，不叠窗
 let financeWindow = null;
+// 图书馆同样只有一个窗口：重复点「图书馆」只聚焦，不叠窗
+let libraryWindow = null;
 let journal = null;
 let repo = null;
 let lifecycle = null;
@@ -164,6 +173,8 @@ function bootCore() {
   const recurMod = require('../recur/board.js');
   const relationMod = require('../relation/board.js');
   const termMod = require('../review/term.js');
+  // V3.10 跨期对照：周 / 月复盘的「上期那句 → 后来怎么样了」，纯派生、不建键。
+  const reviewCross = require('../review/cross.js');
   const traceMod = require('../trace/board.js');
   const secureMod = require('../secure/vault.js');
   const attachMod = require('../attach/links.js');
@@ -176,6 +187,19 @@ function bootCore() {
   const readingMod = require('../reading/board.js');
   // 本地电子书：只用 Node 内置 fs + zlib 读 EPUB 元数据 / 封面，零第三方依赖
   const readingEpub = require('../reading/epub.js');
+  // 封面文件 → dataURL（CSP 只允许 img-src 'self' data:，只能主进程读盘转一次）
+  function coverDataUrl(coverId) {
+    if (!coverId || path.basename(coverId) !== coverId) return '';
+    try {
+      const buf = fs.readFileSync(path.join(coverDir, coverId));
+      const ext = readingEpub.extOf(coverId);
+      const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
+        : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      return 'data:' + mime + ';base64,' + buf.toString('base64');
+    } catch (_) { return ''; }
+  }
+  // 「这本书真的没有封面」也值得记一下：否则每次刷新书架都要把 EPUB 解一遍
+  const coverMiss = new Map();
   // 家庭账本（md_finance）：信封预算 + 条件→动作自动分类 + CSV 导入，金额全程整数分。
   const financeMod = require('../finance/board.js');
   // 自由记录（md_freewrite）：闪念 / 长文 / 偏好；胶囊只读派生，绝不复制正文。
@@ -549,8 +573,12 @@ function bootCore() {
     'growth.removeSubject': function (examId, subId) {
       return growthStore.mutate(function (s) { return growth.removeSubject(s, examId, subId); });
     },
-    'growth.setExamResult': function (id, score, passLine) {
-      return growthStore.mutate(function (s) { return growth.setExamResult(s, id, score, passLine); });
+    'growth.setExamResult': function (id, score, passLine, causes) {
+      return growthStore.mutate(function (s) { return growth.setExamResult(s, id, score, passLine, causes); });
+    },
+    // 事后补记 / 更正错因：只改最近一次作答，不重填分数
+    'growth.setExamCauses': function (id, causes) {
+      return growthStore.mutate(function (s) { return growth.setExamCauses(s, id, causes); });
     },
     'growth.retakeExam': function (id) {
       return growthStore.mutate(function (s) { return growth.retakeExam(s, id); });
@@ -579,6 +607,16 @@ function bootCore() {
     },
     'growth.removePractice': function (skillId, practiceId) {
       return growthStore.mutate(function (s) { return growth.removePractice(s, skillId, practiceId); });
+    },
+    // V3.9 练习反馈：卡点（带开始日，能算挂了多久）与「下次提高一点什么」
+    'growth.setSkillBlocker': function (id, text, today) {
+      return growthStore.mutate(function (s) { return growth.setSkillBlocker(s, id, text, today); });
+    },
+    'growth.clearSkillBlocker': function (id, today) {
+      return growthStore.mutate(function (s) { return growth.clearSkillBlocker(s, id, today); });
+    },
+    'growth.setSkillNextUp': function (id, text) {
+      return growthStore.mutate(function (s) { return growth.setSkillNextUp(s, id, text); });
     },
     'growth.addTheme': function (patch) {
       return growthStore.mutate(function (s) { return growth.addTheme(s, patch || {}); });
@@ -687,7 +725,7 @@ function bootCore() {
       } catch (e) { quote = ''; }
       const labels = {
         work: '工作推进', money: '金钱收支', health: '身心健康', relation: '关系经营',
-        future: '今日六条', emotion: '情绪觉察', leisure: '休闲娱乐', growth: '学习成长', free: '自由记录'
+        future: '今日六条', emotion: '情绪觉察', dream: '休闲娱乐', leisure: '休闲娱乐', growth: '学习成长', free: '自由记录'
       };
       return v13.cardData(rec, labels, { quote: quote, brand: !!(opts && opts.brand) });
     },
@@ -816,6 +854,27 @@ function bootCore() {
     'term.save': function (key, answers) {
       return termStore.mutate(function (s) { return termMod.saveReview(s, key, answers || {}); });
     },
+    // V3.10 跨期对照：一次读回最近 6 期 + GTD 任务，交给纯函数并排摆出来。
+    // 只读：不写复盘、不写任务、不改任何键；「做到没有」永远由第 1、2 问的人回答。
+    'review.cross': function (period, key, current) {
+      const p = period === 'month' ? 'month' : 'week';
+      const cur = String(key || '');
+      if (!cur) return null;
+      const keys = reviewCross.keysBack(p, cur, reviewCross.MAX_LOOKBACK);
+      const slots = keys.map(function (k) {
+        // loadReview 是冻结 utils 的只读函数：键由调用方给，读上期不需要新增存储
+        const res = domain.loadReview(p, k);
+        const arr = (res && Array.isArray(res.data)) ? res.data : (Array.isArray(res) ? res : []);
+        return { key: k, answers: arr };
+      });
+      return reviewCross.compare({
+        period: p,
+        key: cur,
+        current: current,
+        slots: slots,
+        tasks: (gtdStore.read() || {}).tasks || []
+      });
+    },
     'trace.all': function () { return traceMod.all(traceStore.read()); },
     'trace.for': function (target) { return traceMod.listFor(traceStore.read(), target); },
     'trace.missing': function (ids) { return traceMod.markMissing(traceStore.read(), ids || []); },
@@ -898,17 +957,29 @@ function bootCore() {
       });
       return { added: added, skipped: skipped, errors: errors };
     },
-    // 封面：CSP 只允许 img-src 'self' data:，故由主进程读文件转 dataURL 回传
+    // 封面：优先用书里自带的那张图；没有才让渲染层回落到首字 / 渐变色。
+    // 老书在旧版解析下可能没抽出封面（500KB 上限 / 只认 meta），这里按需补抽一次并落盘，
+    // 下次直接走 coverId，不再重复解包。
     'reading.cover': function (id) {
       const s = readingStore.read();
       const b = s.books.filter(function (x) { return x.id === String(id || ''); })[0];
-      if (!b || !b.coverId || path.basename(b.coverId) !== b.coverId) return '';
+      if (!b) return '';
+      const hit = coverDataUrl(b.coverId);
+      if (hit) return hit;
+      if (!b.filePath || String(b.fileExt || '').toLowerCase() !== 'epub') return '';
+      if (!fs.existsSync(b.filePath)) return '';
+      let sig = '';
+      try { const st = fs.statSync(b.filePath); sig = st.mtimeMs + ':' + st.size; } catch (_) { return ''; }
+      if (coverMiss.get(b.id) === sig) return '';
+      let meta = null;
+      try { meta = readingEpub.inspect(b.filePath); } catch (_) { meta = null; }
+      if (!meta || !meta.cover || !meta.cover.data) { coverMiss.set(b.id, sig); return ''; }
       try {
-        const buf = fs.readFileSync(path.join(coverDir, b.coverId));
-        const ext = readingEpub.extOf(b.coverId);
-        const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
-          : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-        return 'data:' + mime + ';base64,' + buf.toString('base64');
+        if (!fs.existsSync(coverDir)) fs.mkdirSync(coverDir, { recursive: true });
+        const cid = b.id + '.' + meta.cover.ext;
+        fs.writeFileSync(path.join(coverDir, cid), meta.cover.data);
+        readingStore.mutate(function (st) { return readingMod.updateBook(st, b.id, { coverId: cid }); });
+        return coverDataUrl(cid);
       } catch (_) { return ''; }
     },
     'reading.revealBook': function (id) {
@@ -945,18 +1016,7 @@ function bootCore() {
         status: theme.status, cover: '', mode: 'theme', themeId: theme.themeId, bookTitle: theme.title
       };
       // 封面同样由主进程读成 dataURL：阅读窗口的 CSP 也不允许 file:
-      if (b && b.coverId && path.basename(b.coverId) === b.coverId) {
-        try {
-          const cp = path.join(coverDir, b.coverId);
-          if (fs.existsSync(cp)) {
-            const buf = fs.readFileSync(cp);
-            const ext = readingEpub.extOf(b.coverId);
-            const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif'
-              : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-            book.cover = 'data:' + mime + ';base64,' + buf.toString('base64');
-          }
-        } catch (_) { book.cover = ''; }
-      }
+      if (b) book.cover = coverDataUrl(b.coverId);
       let source;
       if (!book.filePath) {
         source = { supported: false, reason: '这本没有关联本机电子书文件，只能在右侧记笔记', kind: '', toc: [], chapterCount: 0 };
@@ -1004,20 +1064,25 @@ function bootCore() {
       const total = Math.max(1, Number(chapterCount) || 1);
       const at = Math.min(Math.max(Number(index) || 0, 0), total - 1);
       const target = Math.round(((at + 1) / total) * (b.total || 100));
+      // 无论进度有没有往前走，这一下都算「刚读过」：先打点再判进退，
+      // 否则往回翻一章（进度不前进）就不会被记成最近在读，书架顺序看着像没动。
+      readingStore.write(readingMod.touchBook(s, bookId, Date.now()));
       if (target <= (b.done || 0)) return { ok: true, done: b.done, total: b.total, status: b.status };
       const now = new Date();
       const pad = function (n) { return (n < 10 ? '0' : '') + n; };
       const date = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
-      readingStore.write(readingMod.advanceBook(s, bookId, target - (b.done || 0), date));
+      const cur = readingStore.read();
+      readingStore.write(readingMod.advanceBook(cur, bookId, target - (b.done || 0), date));
       const after = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
       return { ok: true, done: after ? after.done : target, total: after ? after.total : b.total, status: after ? after.status : b.status };
     },
     'reading.read': function () { return readingStore.read(); },
     'reading.board': function () {
       const b = readingMod.board(readingStore.read(), themeBooksFlat());
-      b.themeGroups = themeGroupsFromReading();
-      // 文件失效 / 大小是派生值，不落库：每次读 board 现算，文件移走立刻标灰
-      b.books = b.books.map(function (x) {
+      // 文件失效 / 大小是派生值，不落库：每次读 board 现算，文件移走立刻标灰。
+      // V3.13：主题分组改由领域层派生（与书架同一口径：进度 / 状态 / 笔记数都齐），
+      // 这里只补文件侧的两个派生值，三处（全部 / 书架 / 主题行）一视同仁。
+      const withFile = function (x) {
         return Object.assign({}, x, {
           fileMissing: !!(x.filePath && !fs.existsSync(x.filePath)),
           fileSizeText: x.fileSize
@@ -1025,6 +1090,11 @@ function bootCore() {
               : Math.max(1, Math.round(x.fileSize / 1024)) + ' KB')
             : ''
         });
+      };
+      b.books = b.books.map(withFile);
+      b.leisureBooks = (b.leisureBooks || []).map(withFile);
+      b.themeGroups = (b.themeGroups || []).map(function (g) {
+        return Object.assign({}, g, { rows: (g.rows || []).map(withFile) });
       });
       return b;
     },
@@ -1047,6 +1117,125 @@ function bootCore() {
     'reading.setBookStatus': function (id, status, date) {
       return readingStore.mutate(function (s) { return readingMod.setBookStatus(s, id, status, date || ''); });
     },
+    // ---- 书架整理（2026-11-14）：拖动排序 / 再读一遍 / 最近在读打点 ----
+    // 三条都是纯状态改写：不碰文件、不开新通道，仍走同一条 domain 白名单。
+    'reading.reorder': function (ids) {
+      return readingStore.mutate(function (s) { return readingMod.reorderBooks(s, ids || []); });
+    },
+    'reading.reread': function (id, at) {
+      return readingStore.mutate(function (s) { return readingMod.rereadBook(s, id, Number(at) || 0); });
+    },
+    'reading.touch': function (id, at) {
+      return readingStore.mutate(function (s) { return readingMod.touchBook(s, id, Number(at) || 0); });
+    },
+    // V3.5 书架分组 / 收藏：分组只是书上的一个名字，重命名与删除都是领域层一次批量改字段
+    'reading.setBookGroup': function (id, group) {
+      return readingStore.mutate(function (s) { return readingMod.setBookGroup(s, id, group); });
+    },
+    'reading.setBookFavorite': function (id, on) {
+      return readingStore.mutate(function (s) { return readingMod.setBookFavorite(s, id, on); });
+    },
+    'reading.renameGroup': function (from, to) {
+      return readingStore.mutate(function (s) { return readingMod.renameGroup(s, from, to); });
+    },
+    'reading.removeGroup': function (name) {
+      return readingStore.mutate(function (s) { return readingMod.removeGroup(s, name); });
+    },
+    // PDF 正文：主进程只给字节，解码与渲染全在阅读窗的本地 pdf.js 里做。
+    // Buffer 经结构化克隆到渲染层就是 Uint8Array；不落临时文件、不联网、不改 CSP。
+    'reading.readerPdfData': function (id) {
+      const bookId = String(id || '');
+      const b = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
+      if (!b || !b.filePath) return { ok: false, reason: '这本书没有关联本机文件' };
+      if (String(path.extname(b.filePath)).toLowerCase() !== '.pdf') return { ok: false, reason: '不是 PDF 文件' };
+      if (!fs.existsSync(b.filePath)) return { ok: false, reason: '原文件已不在原处' };
+      try {
+        const st = fs.statSync(b.filePath);
+        if (st.size > readerSource.MAX_PDF_BYTES) {
+          return { ok: false, reason: 'PDF 超过 ' + Math.round(readerSource.MAX_PDF_BYTES / 1048576) + 'MB，暂不打开' };
+        }
+        return { ok: true, data: fs.readFileSync(b.filePath) };
+      } catch (e) {
+        return { ok: false, reason: '读取失败：' + ((e && e.message) || String(e)) };
+      }
+    },
+    // 换封面：渲染层只给「选中的图片路径」，复制进 covers/ 与写库都在主进程。
+    // 这一点与「电子书只登记路径」不冲突——封面是展示用小图，不复制走一挪就断。
+    'reading.setCover': function (id, srcPath) {
+      const bookId = String(id || '');
+      const from = String(srcPath || '');
+      const found = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
+      if (!found) return { ok: false, reason: '书架上找不到这本书' };
+      // 空路径 = 恢复默认封面（清掉 coverId，渲染层回落到首字/渐变色）
+      if (!from) {
+        readingStore.mutate(function (s) { return readingMod.updateBook(s, bookId, { coverId: '' }); });
+        return { ok: true, reset: true };
+      }
+      let st;
+      try { st = fs.statSync(from); } catch (_) { return { ok: false, reason: '图片打不开' }; }
+      if (!st.isFile()) return { ok: false, reason: '不是图片文件' };
+      if (st.size > 8 * 1024 * 1024) return { ok: false, reason: '图片超过 8MB' };
+      const ext = readingEpub.extOf(from);
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp'].indexOf(ext) < 0) {
+        return { ok: false, reason: '只支持 PNG / JPG / GIF / WEBP' };
+      }
+      const coverId = bookId + '.' + ext;
+      try {
+        if (!fs.existsSync(coverDir)) fs.mkdirSync(coverDir, { recursive: true });
+        fs.copyFileSync(from, path.join(coverDir, coverId));
+      } catch (e) {
+        return { ok: false, reason: '封面写入失败' };
+      }
+      readingStore.mutate(function (s) { return readingMod.updateBook(s, bookId, { coverId: coverId }); });
+      return { ok: true };
+    },
+    // 豆瓣封面（V3.13）：先搜、再由用户点选，**绝不自动套用**。
+    // 同名书太多（同一个书名能有十几个版本），自动挑一张等于替人认书；套错比没有更糟。
+    // 发出去的只有书名（必要时加作者）——不带路径、不带笔记、不带任何日记字段。
+    'reading.doubanCovers': function (id) {
+      const bookId = String(id || '');
+      const b = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
+      if (!b) return Promise.resolve({ ok: false, reason: '书架上找不到这本书', items: [] });
+      return coverNet.suggest(b.title, b.author).then(function (r) {
+        const list = (r && r.items) || [];
+        if (!list.length) return { ok: true, items: [], keyword: '', empty: true };
+        // 缩略图逐张取，一张失败不影响其他张：那一张在界面上就只有书名没有图
+        return Promise.all(list.map(function (it) {
+          if (!it.picHost || !it.picPath) return Object.assign({}, it, { thumb: '' });
+          return coverNet.fetchCover(it.picHost, it.picPath).then(function (img) {
+            return Object.assign({}, it, {
+              thumb: 'data:image/' + (img.ext === 'jpg' ? 'jpeg' : img.ext) + ';base64,' + img.buf.toString('base64')
+            });
+          }).catch(function () { return Object.assign({}, it, { thumb: '' }); });
+        })).then(function (items) { return { ok: true, items: items, keyword: r.keyword || '' }; });
+      }).catch(function (e) {
+        return { ok: false, reason: (e && e.message) || '豆瓣没搜到', items: [] };
+      });
+    },
+    // 用户点中哪一张，就把那张落进 covers/ 并写 coverId；旧的那张顺手删掉，不留孤儿文件
+    'reading.doubanApply': function (id, picHost, picPath) {
+      const bookId = String(id || '');
+      const found = readingStore.read().books.filter(function (x) { return x.id === bookId; })[0];
+      if (!found) return Promise.resolve({ ok: false, reason: '书架上找不到这本书' });
+      return coverNet.fetchCover(String(picHost || ''), String(picPath || '')).then(function (img) {
+        const coverId = bookId + '.' + img.ext;
+        try {
+          if (!fs.existsSync(coverDir)) fs.mkdirSync(coverDir, { recursive: true });
+          fs.writeFileSync(path.join(coverDir, coverId), img.buf);
+        } catch (_) {
+          return { ok: false, reason: '封面写入失败' };
+        }
+        if (found.coverId && found.coverId !== coverId) {
+          try { fs.unlinkSync(path.join(coverDir, found.coverId)); } catch (_) { /* 旧文件可能已经不在 */ }
+        }
+        readingStore.mutate(function (s) { return readingMod.updateBook(s, bookId, { coverId: coverId }); });
+        return { ok: true, bytes: img.buf.length };
+      }).catch(function (e) {
+        return { ok: false, reason: (e && e.message) || '封面没取到' };
+      });
+    },
+    // 本机字体：只读字体目录 + 解析 name 表，零子进程、零依赖（见 src/reading/fonts.js）
+    'reading.systemFonts': function () { return readingFonts.list(); },
     'reading.addChapter': function (bookId, patch) {
       return readingStore.mutate(function (s) { return readingMod.addChapter(s, bookId, patch || {}); });
     },
@@ -1157,8 +1346,8 @@ function bootCore() {
       }
     },
     'reading.diaryLine': function (note) { return readingMod.noteToDiaryLine(note || {}); },
-    'reading.exportMd': function () {
-      return readingMod.exportMarkdown(readingStore.read(), themeBooksFlat());
+    'reading.exportMd': function (bookId) {
+      return readingMod.exportMarkdown(readingStore.read(), themeBooksFlat(), bookId || '');
     },
 
     // ---- 家庭账本（md_finance）：预算信封 + 条件→动作规则 + CSV 导入 ----
@@ -2015,6 +2204,15 @@ function bootCore() {
     });
     win.setMenuBarVisibility(false);
     win.loadFile(READER_HTML, { query: { bookId: bookId, mode: b ? (b.themeId ? 'theme' : 'leisure') : 'theme' } });
+    // 翻开即「最近在读」：进度同步是手动按钮，只靠它打点的话，
+    // 一本刚翻开的书在「最近在读」排序里排不上去，看着像功能没生效。
+    // 只写本机 md_reading，不动进度——写失败也不该拦住开窗。
+    try {
+      const cur = readingStore.read();
+      if (cur.books.some(function (x) { return x.id === bookId; })) {
+        readingStore.write(readingMod.touchBook(cur, bookId, Date.now()));
+      }
+    } catch (_) { /* 打点失败不影响阅读 */ }
     win.on('closed', function () { readerWindows.delete(bookId); });
     readerWindows.set(bookId, win);
     return { ok: true, reused: false };
@@ -2051,6 +2249,36 @@ function bootCore() {
     return { ok: true, reused: false };
   }
 
+  // 图书馆：与账本同一套规格（1440×900 / 最小 1024×680），左 252 / 右 300 三栏可拖、中栏 ≥420。
+  // 选文件、翻书、写笔记仍然只有一条出境口：同一个 preload，渲染层不碰窗口句柄。
+  function openLibraryWindow() {
+    if (libraryWindow && !libraryWindow.isDestroyed()) {
+      if (libraryWindow.isMinimized()) libraryWindow.restore();
+      libraryWindow.focus();
+      return { ok: true, reused: true };
+    }
+    const win = new BrowserWindow({
+      width: 1440,
+      height: 900,
+      minWidth: 1024,
+      minHeight: 680,
+      title: '九格手记 · 图书馆',
+      backgroundColor: '#faf7f1',
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/v2-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        spellcheck: false
+      }
+    });
+    win.setMenuBarVisibility(false);
+    win.loadFile(LIBRARY_HTML);
+    win.on('closed', function () { libraryWindow = null; });
+    libraryWindow = win;
+    return { ok: true, reused: false };
+  }
+
   const api = createApiLayer({
     repository: repo,
     lifecycle: lifecycle,
@@ -2070,6 +2298,8 @@ function bootCore() {
     readerOpener: openReaderWindow,
     // 独立账本窗口（导航 / 模块 / 洞察三栏）：渲染层只说「开账本」，不碰窗口句柄
     financeOpener: openFinanceWindow,
+    // 独立图书馆窗口（文件夹树 / 书架 / 详情三栏）：同上，渲染层只说「开图书馆」
+    libraryOpener: openLibraryWindow,
     // 原生文件选择：电子书（图书馆）与图片（梦想具象化）共用一条通道，
     // 靠 payload.kind 切过滤器——新通道等于新失败面，不为一个滤镜再开一条 IPC
     filePicker: function (p) {
@@ -2179,9 +2409,24 @@ function bootCore() {
 }
 
 function createWindow() {
+  // 窗口尺寸 / 位置记忆。全新 userData（含 E2E）没有 state 文件，仍走默认 1440×900。
+  const stateFile = path.join(app.getPath('userData'), 'window-state.json');
+  let bounds = { width: 1440, height: 900, x: undefined, y: undefined };
+  try {
+    const s = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    if (s && Number.isFinite(s.width) && Number.isFinite(s.height)) {
+      bounds = {
+        width: Math.max(1024, Math.min(Math.round(s.width), 3840)),
+        height: Math.max(680, Math.min(Math.round(s.height), 2160)),
+        x: Number.isFinite(s.x) ? s.x : undefined,
+        y: Number.isFinite(s.y) ? s.y : undefined
+      };
+    }
+  } catch (e) { /* 首次启动 / 坏文件：用默认 */ }
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: bounds.width,
+    height: bounds.height,
+    ...(bounds.x === undefined ? {} : { x: bounds.x, y: bounds.y }),
     minWidth: 1024,
     minHeight: 680,
     title: '九格手记 · 个人记录工作台',
@@ -2194,6 +2439,13 @@ function createWindow() {
     }
   });
   mainWindow.loadFile(DIST);
+  mainWindow.on('close', function () {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        fs.writeFileSync(stateFile, JSON.stringify(mainWindow.getBounds()));
+      }
+    } catch (e) { /* 存不住也不影响退出 */ }
+  });
   // 热键在窗口加载完成前按下时，排队的速记请求在这里补发（R-09 第②条）
   mainWindow.webContents.on('did-finish-load', flushQuickCapture);
   mainWindow.webContents.on('did-finish-load', function () {

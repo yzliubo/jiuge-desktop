@@ -63,7 +63,7 @@ const tab = ref<'base' | 'quick'>('base');
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-md);
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .opt-tab-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 </style>

@@ -25,6 +25,10 @@ const MAX_CHAPTERS = 300;
 // 书签独立成表：书签是「我的位置」，不是「读书笔记」，混进 notes 会污染笔记库语义
 const MAX_BOOKMARKS = 200;
 const MAX_TAGS = 8;
+// 书架分组：分组不是独立实体，就是书上的一个名字。分组清单由 board() 从 books 派生，
+// 这样「重命名 / 删除分组」只是一次批量改字段，不用给 state 添一张表、也不用改 rebuild 的所有调用点。
+const MAX_GROUPS = 20;
+const GROUP_MAX = 24;
 
 const TITLE_MAX = 60;
 const THEME_TITLE_MAX = 60;
@@ -207,7 +211,15 @@ function normBook(b, seen, fallbackId) {
         source: str(o.source) === 'file' ? 'file' : 'manual',
         startedAt: validDate(o.startedAt),
         finishedAt: status === 'done' ? validDate(o.finishedAt) : '',
-        createdAt: num(o.createdAt, 0, TS_MAX, 0)
+        createdAt: num(o.createdAt, 0, TS_MAX, 0),
+        // 书架顺序：拖动排序写这里，越小越靠前。老数据全为 0，回落到 createdAt 次序。
+        order: num(o.order, -99999, 99999, 0),
+        // 最近在读：翻开阅读窗 / 同步进度时刷新。**毫秒时间戳**而非日期串——
+        // 同一天里先后翻过几本，只有时间戳才排得出「刚才那本」。
+        lastReadAt: num(o.lastReadAt, 0, TS_MAX, 0),
+        // 书架分组与收藏：空串 = 未分组；收藏只是个布尔视图，不另建「收藏夹」表
+        group: clean(o.group, GROUP_MAX),
+        favorite: o.favorite === true
     };
 }
 
@@ -405,6 +417,12 @@ function addBook(state, patch) {
     if (s.books.length >= MAX_BOOKS) return s;
     const p = isObj(patch) ? patch : {};
     const at = tsOf(p.createdAt) || Date.now();
+    // 新书排最前：取现有最小 order 再减一，不动别人，只给自己一个更小的位。
+    // 刚拖进来的那本立刻在第一屏，不用滚到底去找（对齐 mybook 1.2.13「读完的书自动排第一」）。
+    const minOrder = s.books.reduce(function (m, b) { return Math.min(m, b.order); }, 0);
+    const order = (typeof p.order === 'number' && isFinite(p.order))
+        ? num(p.order, -99999, 99999, 0)
+        : Math.max(-99999, minOrder - 1);
     const raw = {
         id: str(p.id) || newId('bk'),
         themeId: p.themeId,
@@ -424,6 +442,10 @@ function addBook(state, patch) {
         source: p.source,
         startedAt: p.startedAt,
         finishedAt: p.finishedAt,
+        lastReadAt: p.lastReadAt,
+        order: order,
+        group: p.group,
+        favorite: p.favorite,
         createdAt: at
     };
     return rebuild(s.books.concat([raw]), s.chapters, s.notes, at, s.bookmarks, s.themes);
@@ -500,6 +522,117 @@ function setBookStatus(state, id, status, date) {
     });
     return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
 }
+
+// 拖动排序：ids 是按新顺序排好的书 id。
+// 只认书架上真有的 id；未出现在 ids 里的书保持原相对次序接在后面——
+// 渲染层只传了「当前筛选后看得见的那些」时，被筛掉的不会因此被挤没。
+function reorderBooks(state, ids) {
+    const s = normalize(state);
+    const list = Array.isArray(ids) ? ids.map(str) : [];
+    const pos = {};
+    let n = 0;
+    list.forEach(function (id) {
+        if (id && !(id in pos)) pos[id] = n;
+        n += 1;
+    });
+    if (!n) return s;
+    const head = [];
+    const tail = [];
+    s.books.forEach(function (b) {
+        if (b.id in pos) head.push(Object.assign({}, b, { order: pos[b.id] }));
+        else tail.push(b);
+    });
+    if (!head.length) return s;
+    let maxOrder = head.reduce(function (m, b) { return Math.max(m, b.order); }, -1);
+    const rest = tail.map(function (b) {
+        maxOrder += 1;
+        return Object.assign({}, b, { order: maxOrder });
+    });
+    return rebuild(head.concat(rest), s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+// 再读一遍：只重置进度与「读完」状态，书签 / 标注 / 章节 / 笔记一条不动。
+// 与 removeBook 的分界很清楚——这本还在书架上，只是从头再读一遍。
+function rereadBook(state, id, at) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const ts = tsOf(at) || Date.now();
+    const books = s.books.map(function (b) {
+        if (b.id !== key) return b;
+        return Object.assign({}, b, {
+            done: 0, status: 'reading', finishedAt: '', startedAt: b.startedAt || '', lastReadAt: ts
+        });
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+// 最近在读打点：翻开阅读窗 / 同步进度时调用。只改时间，不碰进度与状态。
+function touchBook(state, id, at) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const ts = tsOf(at) || Date.now();
+    const books = s.books.map(function (b) {
+        return b.id === key ? Object.assign({}, b, { lastReadAt: ts }) : b;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+// ---------- 书架分组 / 收藏（V3.5）----------
+// 分组不是独立实体：书上一个 group 名字而已，清单由 board() 从 books 派生。
+// 好处是「重命名 / 删除分组」只是一次批量改字段，不用往 state 里添表、不用改 rebuild 的所有调用点，
+// 也不会出现「分组还在、书没了」或反过来「书的 groupId 指向一个不存在的 id」这类脏数据。
+function groupNames(s) {
+    const seen = {};
+    const out = [];
+    s.books.forEach(function (b) {
+        if (b.group && !seen[b.group]) { seen[b.group] = true; out.push(b.group); }
+    });
+    return out;
+}
+
+function setBookGroup(state, id, group) {
+    const s = normalize(state);
+    const key = str(id);
+    const name = clean(group, GROUP_MAX);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const names = groupNames(s);
+    // 新分组要占一个名额；已有分组、清空分组都不占
+    if (name && names.indexOf(name) < 0 && names.length >= MAX_GROUPS) return s;
+    const books = s.books.map(function (b) {
+        return b.id === key ? Object.assign({}, b, { group: name }) : b;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+function setBookFavorite(state, id, on) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const yes = on === true || on === 1 || on === '1' || on === 'true';
+    const books = s.books.map(function (b) {
+        return b.id === key ? Object.assign({}, b, { favorite: yes }) : b;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+// 重命名 / 合并 / 清空：目标名已存在就是合并，目标为空就是清空（等于 removeGroup）。
+// 无论哪一种都只改标签，一本书都不会被删掉。
+function renameGroup(state, from, to) {
+    const s = normalize(state);
+    const a = clean(from, GROUP_MAX);
+    const b = clean(to, GROUP_MAX);
+    if (!a || a === b) return s;
+    if (!s.books.some(function (x) { return x.group === a; })) return s;
+    if (b && groupNames(s).indexOf(b) >= 0 && groupNames(s).length - 1 >= MAX_GROUPS) return s;
+    const books = s.books.map(function (x) {
+        return x.group === a ? Object.assign({}, x, { group: b }) : x;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+}
+
+function removeGroup(state, name) { return renameGroup(state, name, ''); }
 
 // ---------- 主题（V2.14：书单权威源迁到 md_reading）----------
 function addTheme(state, patch) {
@@ -777,6 +910,19 @@ function bookmarksOf(state, bookId) {
         });
 }
 
+// 一行书的派生字段：休闲书架、主题书行、阅读窗口三处共用同一口径，
+// 免得「同一本书在列表里有进度、在主题下没有」。只在渲染时派生，绝不写回 state。
+function decorateRow(b, noteCount) {
+    return Object.assign({}, b, {
+        pct: pctOf(b.done, b.total),
+        progressText: b.done + '/' + b.total + ' ' + b.unit,
+        statusLabel: BOOK_STATUS_LABEL[b.status] || '待读',
+        noteCount: noteCount || 0,
+        hasFile: !!b.filePath,
+        orphan: false
+    });
+}
+
 function board(state, themeBooks) {
     const s = normalize(state);
     const tb = Array.isArray(themeBooks) ? themeBooks : []; // 原样带上，不复制进 state
@@ -794,16 +940,23 @@ function board(state, themeBooks) {
         if (n.pushedAt > 0) pushed += 1;
         if (n.mode === 'leisure') {
             leisureNotes += 1;
-            noteCountByBook[n.bookId] = (noteCountByBook[n.bookId] || 0) + 1;
         } else {
             themeNotes += 1;
         }
+        // V3.13：主题书的笔记也要计数——主题行同样要显示「N 条笔记」，
+        // 之前只数 leisure，主题下的书永远显示 0 条，看着像笔记没存上。
+        noteCountByBook[n.bookId] = (noteCountByBook[n.bookId] || 0) + 1;
         n.tags.forEach(function (t) { tagCount[t] = (tagCount[t] || 0) + 1; });
         const d = new Date(n.createdAt);
         if (!isNaN(d.getTime()) && d.getFullYear() === yy && d.getMonth() + 1 === mm) thisMonth += 1;
     });
+    // V3.13：一本算一类。主题阅读常常一次导入十几份同主题文件，
+    // 混进「休闲娱乐阅读」的书架会把随手翻的书整片顶走，统计头也会虚高。
+    let leisureCount = 0;
+    s.books.forEach(function (b) { if (!b.themeId) leisureCount += 1; });
     const stats = {
-        books: s.books.length,
+        books: leisureCount,
+        themeBooks: s.books.length - leisureCount,
         notes: notes.length,
         highlights: highlights,
         ideas: ideas,
@@ -814,21 +967,59 @@ function board(state, themeBooks) {
         bookmarks: s.bookmarks.length,
         thisMonth: thisMonth
     };
-    const books = s.books.map(function (b) {
-        return Object.assign({}, b, {
-            pct: pctOf(b.done, b.total),
-            progressText: b.done + '/' + b.total + ' ' + b.unit,
-            statusLabel: BOOK_STATUS_LABEL[b.status] || '待读',
-            noteCount: noteCountByBook[b.id] || 0,
-            hasFile: !!b.filePath,
-            orphan: false
-        });
+    // 书架次序：order 升序 → 同 order 按 createdAt 升序。
+    // order 是本轮新字段，老数据全是 0，于是自然回落到「先加的在前」，与加这个字段之前的观感一致。
+    const ordered = s.books.slice().sort(function (a, b) {
+        return (a.order - b.order) || (a.createdAt - b.createdAt);
+    });
+    const rowsById = {};
+    const books = ordered.map(function (b) {
+        const row = decorateRow(b, noteCountByBook[b.id] || 0);
+        rowsById[b.id] = row;
+        return row;
+    });
+    // 书架（休闲）与主题书分开给：books 保持「全部」不破坏既有消费方，
+    // 书架渲染只取 leisureBooks —— 用户看到的书架里不再混主题书。
+    const leisureBooks = books.filter(function (b) { return !b.themeId; });
+    // 主题分组：按 themes 顺序，未登记的主题排在最后（书上的 themeId 是权威，不是主题表）
+    const groupsById = {};
+    const themeGroups = [];
+    s.themes.forEach(function (t) {
+        const g = { themeId: t.id, themeTitle: t.title || '', note: t.note || '', rows: [] };
+        groupsById[t.id] = g;
+        themeGroups.push(g);
+    });
+    ordered.forEach(function (b) {
+        const tid = String(b.themeId || '');
+        if (!tid) return;
+        let g = groupsById[tid];
+        if (!g) {
+            g = { themeId: tid, themeTitle: '未命名主题', note: '', rows: [] };
+            groupsById[tid] = g;
+            themeGroups.push(g);
+        }
+        g.rows.push(rowsById[b.id]);
     });
     const recent = notes.slice().sort(byCreatedDesc).slice(0, 8);
     const tagTop = Object.keys(tagCount).map(function (t) { return { tag: t, count: tagCount[t] }; })
         .sort(function (a, b) { return b.count - a.count || (a.tag < b.tag ? -1 : (a.tag > b.tag ? 1 : 0)); })
         .slice(0, 12);
-    return { stats: stats, books: books, themes: s.themes, themeBooks: tb, recent: recent, tagTop: tagTop };
+    // 书架分组 / 收藏夹：只给标签条用的派生清单，不改 books 顺序。
+    // 只数休闲书：分组与收藏是「书架」的功能，主题书身上即便残留旧标签也不该出现在这里。
+    const gCount = {};
+    let favoriteCount = 0;
+    leisureBooks.forEach(function (b) {
+        if (b.group) gCount[b.group] = (gCount[b.group] || 0) + 1;
+        if (b.favorite) favoriteCount += 1;
+    });
+    const groups = Object.keys(gCount).map(function (name) {
+        return { name: name, count: gCount[name] };
+    }).sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)); });
+    return {
+        stats: stats, books: books, leisureBooks: leisureBooks, themeGroups: themeGroups,
+        themes: s.themes, themeBooks: tb,
+        groups: groups, favoriteCount: favoriteCount, recent: recent, tagTop: tagTop
+    };
 }
 
 // ---------- 查询 ----------
@@ -917,11 +1108,16 @@ function noteToDiaryLine(note) {
 }
 
 // ---------- 导出 Markdown ----------
-function exportMarkdown(state, themeBooks) {
+function exportMarkdown(state, themeBooks, bookId) {
     const s = normalize(state);
-    const lines = ['# 读书笔记', ''];
-    if (!s.notes.length) {
-        lines.push('还没有笔记');
+    // bookId 非空时只导出这一本（对齐 mybook「标注统一导出」的按书口径）；
+    // 空则导出全库汇总。两条路共用同一套排版，不维护第二份格式。
+    const only = str(bookId);
+    const pool = only ? s.notes.filter(function (n) { return n.bookId === only; }) : s.notes;
+    const scopeBook = only ? s.books.filter(function (b) { return b.id === only; })[0] : null;
+    const lines = [scopeBook ? ('# 《' + scopeBook.title + '》读书笔记') : '# 读书笔记', ''];
+    if (!pool.length) {
+        lines.push(only ? '这本书还没有笔记' : '还没有笔记');
         return lines.join('\n') + '\n';
     }
     const tb = Array.isArray(themeBooks) ? themeBooks : [];
@@ -943,7 +1139,7 @@ function exportMarkdown(state, themeBooks) {
     }
 
     MODES.forEach(function (mode) {
-        const inMode = s.notes.filter(function (n) { return n.mode === mode; }).sort(byCreatedDesc);
+        const inMode = pool.filter(function (n) { return n.mode === mode; }).sort(byCreatedDesc);
         if (!inMode.length) return;
         lines.push('## ' + MODE_LABEL[mode], '');
         const groups = [];
@@ -961,7 +1157,7 @@ function exportMarkdown(state, themeBooks) {
     });
 
     const tagCount = {};
-    s.notes.forEach(function (n) { n.tags.forEach(function (t) { tagCount[t] = (tagCount[t] || 0) + 1; }); });
+    pool.forEach(function (n) { n.tags.forEach(function (t) { tagCount[t] = (tagCount[t] || 0) + 1; }); });
     const tags = Object.keys(tagCount).sort(function (a, b) {
         return tagCount[b] - tagCount[a] || (a < b ? -1 : (a > b ? 1 : 0));
     });
@@ -1021,6 +1217,16 @@ module.exports = {
     removeBook: removeBook,
     advanceBook: advanceBook,
     setBookStatus: setBookStatus,
+    // 书架整理三件套（2026-11-14）：拖动排序 / 再读一遍 / 最近在读打点
+    reorderBooks: reorderBooks,
+    rereadBook: rereadBook,
+    touchBook: touchBook,
+    // 书架分组 / 收藏（V3.5）
+    setBookGroup: setBookGroup,
+    setBookFavorite: setBookFavorite,
+    renameGroup: renameGroup,
+    removeGroup: removeGroup,
+    MAX_GROUPS: MAX_GROUPS,
     addChapter: addChapter,
     updateChapter: updateChapter,
     removeChapter: removeChapter,

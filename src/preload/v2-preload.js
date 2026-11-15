@@ -19,11 +19,17 @@ const CHANNELS = [
   'v1/reader:open',
   // 独立账本窗口：与阅读窗同一 preload，开窗只是一条白名单通道
   'v1/finance:open',
+  // 独立图书馆窗口（V3.14）：书架搬出主窗后，「图书馆」按钮只剩这一条通道
+  'v1/library:open',
   'v1/worktime:sync',
   // 首页天气：两条会发远程 HTTP 的通道（取天气 / 手填城市检索）。
   // 渲染层只说「取今天的天气」，域名、超时、body 上限全在主进程的 weather/client.js。
   'v1/weather:sync',
   'v1/weather:geocode',
+  // 豆瓣封面（V3.13）：同样是会发远程 HTTP 的两条通道，单独开而不是挤进 domain:call。
+  // 域名白名单、超时、图片大小上限全在主进程的 reading/cover-net.js。
+  'v1/reading:doubanCovers',
+  'v1/reading:doubanApply',
   // 可回滚版本（R-10）：渲染层只说「回到这一份」，文件读写与合法性校验全在主进程
   'v1/snapshot:list',
   'v1/snapshot:restore',

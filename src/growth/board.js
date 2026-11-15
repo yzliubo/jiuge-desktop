@@ -24,6 +24,8 @@ const MAX_MILESTONES = 30;
 const MAX_PRACTICES = 90;
 const MAX_BOOKS = 60;
 const MAX_QUOTES = 40;
+const MAX_ATTEMPTS = 12;
+const MAX_CLEARED = 10;
 
 const TITLE_MAX = 40;
 const ORG_MAX = 20;
@@ -34,6 +36,7 @@ const MILESTONE_MAX = 30;
 const BOOK_TITLE_MAX = 50;
 const QUOTE_MAX = 200;
 const UNIT_MAX = 4;
+const BLOCKER_MAX = 60;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -67,6 +70,24 @@ const BOOK_STATUS = [
 ];
 const BOOK_STATUS_LABEL = {};
 BOOK_STATUS.forEach(function (b) { BOOK_STATUS_LABEL[b.key] = b.label; });
+
+// 考试错因（V3.9）：**固定枚举，不是自由文本**。
+// 自由文本写三次也不会重样，统计不出「你总是栽在哪」；只有归类才能跨次比较——
+// 两次都栽在「计算失误」，说明该练手算，而不是再刷一遍题。
+const EXAM_CAUSES = [
+    { key: 'concept', label: '概念没懂' },
+    { key: 'calc', label: '计算失误' },
+    { key: 'misread', label: '审题偏差' },
+    { key: 'time', label: '时间不够' },
+    { key: 'material', label: '资料不对' },
+    { key: 'practice', label: '练得不够' },
+    { key: 'state', label: '状态不好' }
+];
+const EXAM_CAUSE_LABEL = {};
+EXAM_CAUSES.forEach(function (c) { EXAM_CAUSE_LABEL[c.key] = c.label; });
+
+// 卡点挂多久算「不是练得少，是方法不对」：两周。少于两周就催人换方法，只会打断刚起效的节奏
+const BLOCKER_STALE_DAYS = 14;
 
 function str(v) { return typeof v === 'string' ? v : (v === 0 || v ? String(v) : ''); }
 function clean(v, max) {
@@ -147,6 +168,40 @@ function normSubjects(raw) {
     }).filter(function (x) { return !!x; });
 }
 
+// 一次考完的记录（V3.9）。**这部分是只增不改的历史**：重考只清当前分数，
+// 不清 attempts——否则「上次为什么没过」这条唯一有价值的复盘线索，会在重置那一刻消失。
+function normCauses(raw) {
+    const seen = {};
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach(function (k) {
+        const key = str(k);
+        if (!EXAM_CAUSE_LABEL[key] || seen[key]) return;
+        seen[key] = true;
+        out.push(key);
+    });
+    return out.slice(0, 4);
+}
+
+function normAttempts(raw) {
+    const seen = {};
+    return (Array.isArray(raw) ? raw : []).slice(-MAX_ATTEMPTS).map(function (a) {
+        const score = num(a && a.score, 0, 1000, 0);
+        const passLine = num(a && a.passLine, 0, 1000, 0);
+        if (!score && !passLine) return null;
+        let id = str(a && a.id);
+        if (!id || seen[id]) id = newId('at');
+        seen[id] = true;
+        return {
+            id: id,
+            date: validDate(a && a.date),
+            score: score,
+            passLine: passLine,
+            passed: score > 0 && passLine > 0 ? score >= passLine : false,
+            causes: normCauses(a && a.causes)
+        };
+    }).filter(function (x) { return !!x; });
+}
+
 function normalizeExam(raw) {
     const e = raw || {};
     const title = clean(e.title, TITLE_MAX);
@@ -169,6 +224,7 @@ function normalizeExam(raw) {
         score: score,
         passLine: passLine,
         subjects: subjects,
+        attempts: normAttempts(e.attempts),
         note: clean(e.note, NOTE_MAX),
         createdAt: Number(e.createdAt) || Date.now(),
         updatedAt: Number(e.updatedAt) || Date.now()
@@ -210,11 +266,31 @@ function normPractices(raw) {
     }).filter(function (x) { return !!x; });
 }
 
+// 已解决的卡点（V3.9）：卡点如果只有一个「当前值」，解决的那一刻就被覆盖，
+// 「上次那个坑是怎么爬出来的」下次还得重走一遍。所以解决时移进这里留档。
+function normCleared(raw) {
+    const seen = {};
+    return (Array.isArray(raw) ? raw : []).slice(-MAX_CLEARED).map(function (c) {
+        const text = clean(c && c.text, BLOCKER_MAX);
+        if (!text) return null;
+        let id = str(c && c.id);
+        if (!id || seen[id]) id = newId('cl');
+        seen[id] = true;
+        return {
+            id: id,
+            text: text,
+            since: validDate(c && c.since),
+            clearedAt: validDate(c && c.clearedAt)
+        };
+    }).filter(function (x) { return !!x; });
+}
+
 function normalizeSkill(raw) {
     const k = raw || {};
     const title = clean(k.title, TITLE_MAX);
     if (!title) return null;
     const level = num(k.level, 1, 5, 1);
+    const blocker = clean(k.blocker, BLOCKER_MAX);
     return {
         id: str(k.id) || newId('sk'),
         title: title,
@@ -222,6 +298,12 @@ function normalizeSkill(raw) {
         targetLevel: Math.max(level, num(k.targetLevel, 1, 5, Math.min(5, level + 1))),
         milestones: normMilestones(k.milestones),
         practices: normPractices(k.practices),
+        // 卡点必须带开始日：只写「卡在哪」而不知道该卡的年龄，就分不清
+        // 「刚遇到」和「卡了一个月」——后者才是该换方法的信号
+        blocker: blocker,
+        blockerSince: blocker ? validDate(k.blockerSince) : '',
+        nextUp: clean(k.nextUp, BLOCKER_MAX),
+        cleared: normCleared(k.cleared),
         note: clean(k.note, NOTE_MAX),
         createdAt: Number(k.createdAt) || Date.now(),
         updatedAt: Number(k.updatedAt) || Date.now()
@@ -313,12 +395,14 @@ function normalize(raw) {
 function meta() {
     return {
         examStatus: EXAM_STATUS,
+        examCauses: EXAM_CAUSES,
         levels: LEVELS,
         bookStatus: BOOK_STATUS,
+        blockerStaleDays: BLOCKER_STALE_DAYS,
         limits: {
             exams: MAX_EXAMS, skills: MAX_SKILLS, themes: MAX_THEMES,
             subjects: MAX_SUBJECTS, milestones: MAX_MILESTONES, practices: MAX_PRACTICES,
-            books: MAX_BOOKS, quotes: MAX_QUOTES
+            books: MAX_BOOKS, quotes: MAX_QUOTES, attempts: MAX_ATTEMPTS, cleared: MAX_CLEARED
         }
     };
 }
@@ -415,7 +499,10 @@ function removeSubject(state, examId, subId) {
 }
 
 // 记成绩：分数与合格线都填了才判定「通过/未通过」，只有一个数不作数
-function setExamResult(state, id, score, passLine) {
+// 记成绩（V3.9：可带错因）。每次记都进 attempts，等于给这场考试攒一份「历次成绩」；
+// 同一天同一组分数重复点保存，只更新那一条的错因，不新增——手滑点两下不该变成考了两次。
+// date 是给测试与补记用的（与 board(state, today) 同口径），不传就用今天。
+function setExamResult(state, id, score, passLine, causes, date) {
     const s = normalize(state);
     const e = findExam(s, id);
     if (!e) return s;
@@ -426,11 +513,44 @@ function setExamResult(state, id, score, passLine) {
     } else if (e.score === 0 && e.passLine === 0) {
         e.status = 'registered';
     }
+    if (e.score || e.passLine) {
+        const day = validDate(date) || todayOf(new Date());
+        const last = e.attempts[e.attempts.length - 1];
+        const same = last && last.date === day && last.score === e.score && last.passLine === e.passLine;
+        if (same) {
+            if (causes !== undefined) last.causes = normCauses(causes);
+        } else {
+            if (e.attempts.length >= MAX_ATTEMPTS) e.attempts.shift();
+            e.attempts.push({
+                id: newId('at'),
+                date: day,
+                score: e.score,
+                passLine: e.passLine,
+                passed: e.score > 0 && e.passLine > 0 ? e.score >= e.passLine : false,
+                causes: normCauses(causes)
+            });
+        }
+    }
     e.updatedAt = Date.now();
     return s;
 }
 
-// 没通过就再来一次：科目进度归零，日期清空，其余（科目结构、机构）保留
+// 事后补记 / 更正错因：只作用于**最近一次**作答。
+// 单独开一条路由而不是揉进 setExamResult，是为了让「改错因」不必重填分数——
+// 重填分数会走「同日同分才更新」的判定，隔天补记就凭空多出一次考试。
+function setExamCauses(state, id, causes) {
+    const s = normalize(state);
+    const e = findExam(s, id);
+    if (!e) return s;
+    const last = e.attempts[e.attempts.length - 1];
+    if (!last) return s;
+    last.causes = normCauses(causes);
+    e.updatedAt = Date.now();
+    return s;
+}
+
+// 没通过就再来一次：科目进度归零，日期清空，其余（科目结构、机构）保留。
+// **attempts 不清**——「上次 58 分、差 2 分、死在计算」是重考唯一的方向感来源。
 function retakeExam(state, id) {
     const s = normalize(state);
     const e = findExam(s, id);
@@ -479,6 +599,7 @@ function updateSkill(state, id, patch) {
     }
     if (p.level !== undefined) k.level = num(p.level, 1, 5, k.level);
     if (p.targetLevel !== undefined) k.targetLevel = Math.max(k.level, num(p.targetLevel, 1, 5, k.targetLevel));
+    if (p.nextUp !== undefined) k.nextUp = clean(p.nextUp, BLOCKER_MAX);
     if (p.note !== undefined) k.note = clean(p.note, NOTE_MAX);
     k.updatedAt = Date.now();
     return s;
@@ -549,6 +670,57 @@ function removePractice(state, skillId, practiceId) {
     const k = findSkill(s, skillId);
     if (!k) return s;
     k.practices = k.practices.filter(function (x) { return x.id !== str(practiceId); });
+    k.updatedAt = Date.now();
+    return s;
+}
+
+// ---------- 练习反馈（V3.9）----------
+// 卡点：一句话说明「现在卡在哪」。**只在文本真变了的时候才重置开始日**——
+// 每次打开都重存一遍，卡点就永远显示「今天才开始卡」，年龄这个信号就废了。
+function setSkillBlocker(state, id, text, today) {
+    const s = normalize(state);
+    const k = findSkill(s, id);
+    if (!k) return s;
+    const next = clean(text, BLOCKER_MAX);
+    if (!next) return clearSkillBlocker(s, id, today);
+    if (next !== k.blocker) {
+        k.blocker = next;
+        k.blockerSince = validDate(today) || todayOf(new Date());
+    } else if (!k.blockerSince) {
+        k.blockerSince = validDate(today) || todayOf(new Date());
+    }
+    k.updatedAt = Date.now();
+    return s;
+}
+
+// 清掉卡点 = 这条已经过去了。移进 cleared 留档，而不是直接抹掉：
+// 「上次那个坑怎么爬出来的」比「现在不卡了」值钱得多。
+function clearSkillBlocker(state, id, today) {
+    const s = normalize(state);
+    const k = findSkill(s, id);
+    if (!k) return s;
+    if (k.blocker) {
+        const day = validDate(today) || todayOf(new Date());
+        if (k.cleared.length >= MAX_CLEARED) k.cleared.shift();
+        k.cleared.push({
+            id: newId('cl'),
+            text: k.blocker,
+            since: k.blockerSince || day,
+            clearedAt: day
+        });
+    }
+    k.blocker = '';
+    k.blockerSince = '';
+    k.updatedAt = Date.now();
+    return s;
+}
+
+// 下次练之前先看一眼的那一句：不存历史，存的是「这一轮的靶子」
+function setSkillNextUp(state, id, text) {
+    const s = normalize(state);
+    const k = findSkill(s, id);
+    if (!k) return s;
+    k.nextUp = clean(text, BLOCKER_MAX);
     k.updatedAt = Date.now();
     return s;
 }
@@ -770,6 +942,25 @@ function examRow(e, today) {
     const enrollMissed = !!e.enrollDate && e.status === 'plan' && diffDays(today, e.enrollDate) < 0;
     const soon = !!e.examDate && daysLeft >= 0 && daysLeft <= 7;
 
+    // 历次作答：错因在这里翻译成人话，并跨次统计「最常栽在哪」
+    const attempts = e.attempts.map(function (a) {
+        return Object.assign({}, a, {
+            causesLabel: a.causes.map(function (k) { return EXAM_CAUSE_LABEL[k]; }).filter(function (x) { return !!x; }),
+            gap: (a.score && a.passLine) ? a.score - a.passLine : 0
+        });
+    });
+    const fails = attempts.filter(function (a) { return !a.passed; });
+    const lastFail = fails.length ? fails[fails.length - 1] : null;
+    const causeCount = {};
+    attempts.forEach(function (a) {
+        a.causes.forEach(function (k) { causeCount[k] = (causeCount[k] || 0) + 1; });
+    });
+    const causeTop = Object.keys(causeCount).map(function (k) {
+        return { key: k, label: EXAM_CAUSE_LABEL[k] || k, count: causeCount[k] };
+    }).sort(function (a, b) {
+        return b.count - a.count || (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0));
+    });
+
     return Object.assign({}, e, {
         subjects: subjects,
         pct: e.status === 'passed' ? 100 : pct,
@@ -781,7 +972,12 @@ function examRow(e, today) {
         countdown: countdown,
         resultText: resultText,
         enrollMissed: enrollMissed,
-        soon: soon
+        soon: soon,
+        attempts: attempts,
+        attemptCount: attempts.length,
+        failCount: fails.length,
+        lastFail: lastFail,
+        causeTop: causeTop
     });
 }
 
@@ -795,6 +991,11 @@ function skillRow(k, today) {
     }, 0);
     const next = k.milestones.filter(function (m) { return !m.done; })[0];
     const ready = total > 0 && done === total && k.level < k.targetLevel;
+    // 卡点年龄：从「开始卡」算到「今天」。当天记的算第 1 天，不写 0 天——
+    // 「0 天」看着像没记上。
+    const blockerDays = k.blocker
+        ? Math.max(1, diffDays(k.blockerSince || today, today) + 1)
+        : 0;
     return Object.assign({}, k, {
         milestones: k.milestones.map(function (m) {
             return Object.assign({}, m, { doneText: m.done ? '已达成' : '待达成' });
@@ -812,7 +1013,14 @@ function skillRow(k, today) {
         weekText: weekMinutes >= 60 ? (weekMinutes / 60).toFixed(1) + ' 小时' : weekMinutes + ' 分钟',
         lastPractice: k.practices.length ? k.practices[k.practices.length - 1].date : '',
         nextTitle: next ? next.title : '',
-        ready: ready
+        ready: ready,
+        // V3.9 练习反馈：卡点年龄比练习时长更能说明问题——练了 40 小时、卡点挂了 30 天，
+        // 缺的不是时间，是方法
+        blockerDays: blockerDays,
+        blockerText: k.blocker ? '已卡 ' + blockerDays + ' 天' : '',
+        stuck: blockerDays >= BLOCKER_STALE_DAYS,
+        clearedCount: k.cleared.length,
+        clearedRecent: k.cleared.slice(-3).reverse()
     });
 }
 
@@ -870,6 +1078,21 @@ function board(state, today) {
     const bookDone = themes.reduce(function (n, t) { return n + t.bookDone; }, 0);
     const quoteTotal = themes.reduce(function (n, t) { return n + t.quoteTotal; }, 0);
 
+    // 错因汇总（V3.9）：单场考试看不出规律，几次并起来才看得出「你总是栽在哪」
+    const examCauseCount = {};
+    let examAttempts = 0;
+    let examFails = 0;
+    exams.forEach(function (e) {
+        examAttempts += e.attemptCount;
+        examFails += e.failCount;
+        e.causeTop.forEach(function (c) { examCauseCount[c.key] = (examCauseCount[c.key] || 0) + c.count; });
+    });
+    const causeTop = Object.keys(examCauseCount).map(function (k) {
+        return { key: k, label: EXAM_CAUSE_LABEL[k] || k, count: examCauseCount[k] };
+    }).sort(function (a, b) {
+        return b.count - a.count || (a.key < b.key ? -1 : (a.key > b.key ? 1 : 0));
+    });
+
     const stats = {
         examTotal: exams.length,
         examOpen: exams.filter(function (e) { return e.status === 'plan' || e.status === 'registered'; }).length,
@@ -877,11 +1100,15 @@ function board(state, today) {
         examPast: examPast,
         examPassed: exams.filter(function (e) { return e.status === 'passed'; }).length,
         examEnrollMissed: exams.filter(function (e) { return e.enrollMissed; }).length,
+        examAttempts: examAttempts,
+        examFails: examFails,
         skillTotal: skills.length,
         skillMinutes: skillMinutes,
         skillHours: Number((skillMinutes / 60).toFixed(1)),
         skillWeek: skillWeek,
         skillReady: skillReady,
+        skillBlocked: skills.filter(function (k) { return !!k.blocker; }).length,
+        skillStuck: skills.filter(function (k) { return k.stuck; }).length,
         themeTotal: themes.length,
         bookTotal: bookTotal,
         bookDone: bookDone,
@@ -898,10 +1125,21 @@ function board(state, today) {
             alerts.push({ kind: 'exam', id: e.id, title: e.title, level: 'warn', text: e.daysLeft === 0 ? '今天考试' : '距考试 ' + e.daysLeft + ' 天' });
         } else if (e.stage === 'past' && e.status !== 'passed' && e.status !== 'failed') {
             alerts.push({ kind: 'exam', id: e.id, title: e.title, level: 'info', text: '考完了，去记成绩' });
+        } else if (e.status === 'failed' && e.lastFail && e.lastFail.causesLabel.length) {
+            // 记了错因就别浪费：下次动手前先看一眼「上次死在哪」
+            alerts.push({ kind: 'exam', id: e.id, title: e.title, level: 'info', text: '上次错在：' + e.lastFail.causesLabel.join('、') });
         }
     });
+    // 卡点先看，因为它比「可以升级」更该动：卡着的时候升级只是摆设
     skills.forEach(function (k) {
-        if (k.ready) alerts.push({ kind: 'skill', id: k.id, title: k.title, level: 'info', text: '里程碑全达成，可以升到「' + k.targetLabel + '」' });
+        if (k.stuck) {
+            alerts.push({
+                kind: 'skill', id: k.id, title: k.title, level: 'warn',
+                text: '卡点挂了 ' + k.blockerDays + ' 天 —— 不是练得少，是这个方法不对'
+            });
+        } else if (k.ready) {
+            alerts.push({ kind: 'skill', id: k.id, title: k.title, level: 'info', text: '里程碑全达成，可以升到「' + k.targetLabel + '」' });
+        }
     });
     themes.forEach(function (t) {
         if (t.bookTotal > 0 && t.bookDone === t.bookTotal) {
@@ -916,12 +1154,18 @@ function board(state, today) {
         insight = '有 ' + examSoon + ' 场考试在 7 天内，先把冲刺排上；科目进度是加权值，别只看总进度条。';
     } else if (stats.examEnrollMissed) {
         insight = '有 ' + stats.examEnrollMissed + ' 场考试的报名日已过，但状态还是「备考中」——要么补报名，要么改状态，别让它挂着。';
+    } else if (stats.skillStuck) {
+        insight = '有 ' + stats.skillStuck + ' 项技能的卡点已经挂了 ' + BLOCKER_STALE_DAYS + ' 天以上。'
+            + (causeTop.length ? '上次考试的错因也集中在「' + causeTop[0].label + '」。' : '')
+            + '卡点不下走，只能换方法：拆小一号的题、找人看一次、或者换一份材料。';
     } else if (skillReady) {
         insight = '有 ' + skillReady + ' 项技能的里程碑全达成了，等级该往上调一格——不调，进度条会骗人。';
     } else if (stats.examPast) {
         insight = '有 ' + stats.examPast + ' 场考完还没记成绩。记了才好判断下一步：补考、还是换一个。';
     } else if (stats.bookTotal && stats.bookDone === stats.bookTotal) {
         insight = '书单读完了，趁记忆还在，把摘录补上再开下一个主题。';
+    } else if (stats.skillBlocked) {
+        insight = '有 ' + stats.skillBlocked + ' 项技能写着卡点，还没到该报警的天数——先照着「下次提高一点什么」练一轮。';
     } else {
         insight = '本周练习 ' + (skillWeek >= 60 ? (skillWeek / 60).toFixed(1) + ' 小时' : skillWeek + ' 分钟')
             + '；在读 ' + themes.reduce(function (n, t) { return n + t.readingCount; }, 0) + ' 本。'
@@ -935,6 +1179,8 @@ function board(state, today) {
         themes: themes,
         stats: stats,
         alerts: alerts,
+        causeTop: causeTop,
+        blockerStaleDays: BLOCKER_STALE_DAYS,
         insight: insight,
         note: '口径：考试的进度按科目完成率取平均（不是按章节数加权）；技能不设完成，只看里程碑达成率与累计练习时长；'
             + '阅读按页数推进，读满自动转「读完」。三块各自独立，互不折算成同一个百分比。'
@@ -1044,7 +1290,9 @@ module.exports = {
     MAX_QUOTES: MAX_QUOTES,
     LEVELS: LEVELS,
     EXAM_STATUS: EXAM_STATUS,
+    EXAM_CAUSES: EXAM_CAUSES,
     BOOK_STATUS: BOOK_STATUS,
+    BLOCKER_STALE_DAYS: BLOCKER_STALE_DAYS,
     levelLabel: levelLabel,
     empty: empty,
     normalize: normalize,
@@ -1057,6 +1305,7 @@ module.exports = {
     updateSubject: updateSubject,
     removeSubject: removeSubject,
     setExamResult: setExamResult,
+    setExamCauses: setExamCauses,
     retakeExam: retakeExam,
     addSkill: addSkill,
     updateSkill: updateSkill,
@@ -1066,6 +1315,9 @@ module.exports = {
     removeMilestone: removeMilestone,
     addPractice: addPractice,
     removePractice: removePractice,
+    setSkillBlocker: setSkillBlocker,
+    clearSkillBlocker: clearSkillBlocker,
+    setSkillNextUp: setSkillNextUp,
     addTheme: addTheme,
     updateTheme: updateTheme,
     removeTheme: removeTheme,

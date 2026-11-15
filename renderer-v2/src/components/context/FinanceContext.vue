@@ -47,12 +47,12 @@ watch(() => [props.tick, props.today], () => { void load(); });
 </template>
 
 <style scoped>
-.ctx-fin { font-size: 12px; line-height: 1.7; }
+.ctx-fin { font-size: var(--text-sm); line-height: 1.7; }
 .ctx-fin-month { font-weight: 600; margin: 0 0 8px; }
 .ctx-fin-grid { display: flex; flex-direction: column; gap: 4px; }
 .ctx-fin-grid b { float: right; font-variant-numeric: tabular-nums; }
 .ctx-fin-neg { color: var(--state-warn); }
-.ctx-fin-sub { color: var(--surface-muted); font-size: 11px; margin: 8px 0; }
+.ctx-fin-sub { color: var(--surface-muted); font-size: var(--text-xs); margin: 8px 0; }
 .ctx-fin-line { display: flex; justify-content: space-between; border-top: 1px solid var(--surface-border); padding: 3px 0; }
-.ctx-fin-foot { color: var(--surface-muted); font-size: 10px; margin-top: 12px; }
+.ctx-fin-foot { color: var(--surface-muted); font-size: var(--text-xs); margin-top: 12px; }
 </style>

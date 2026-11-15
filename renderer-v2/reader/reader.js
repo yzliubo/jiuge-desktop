@@ -23,12 +23,31 @@ let pendingRatio = null;
 let scrollTimer = null;
 let iframeReady = false;
 
+// ---- V3.5 阅读方式 ----
+// PDF：pdfDoc 只解码一次，页容器里每页一个 canvas，IntersectionObserver 进视口才画。
+// 连续滚动（流式）：flowChapters 是已接在正文后面的章，只往后追加、不回收；
+// 目录跳到任意章时整篇重建，避免「往前插一章」把滚动位置冲掉。
+let isPdf = false;
+let pdfDoc = null;
+let pdfPages = 0;
+let pdfObserver = null;
+let flowChapters = [];
+let flowLoading = false;
+const FLOW_MAX = 30;
+const PDF_RENDER_AHEAD = 2;
+
 const PREF_KEY = 'jiuge-reader-pref';
 const CHAPTER_KEY = 'jiuge-reader-chapter:';
 let pref = {
   font: 18, line: 1.8, theme: 'paper', zoom: 1,
   leftWidth: 260, rightWidth: 340, typeface: 'mixed',
-  margin: 'mid', para: 'normal', punct: false
+  margin: 'mid', para: 'normal', punct: false,
+  // 本机字体族名：只在 typeface === 'device' 时生效。空串表示还没挑过。
+  family: '',
+  // 阅读方式：连续滚动 / 分页阅读 / 双页并排（分页之上的两页）。全屏不记——
+  // 每次开书都该回到正常窗口，否则用户下次打开会莫名其妙直接进全屏。
+  // paged 与 spread 的关系：spread 是 paged 的「两页一摊」变体，不能单独存在。
+  flow: false, paged: false, spread: false
 };
 
 // 版心三档：窄边＝版心更宽（行更长），宽边＝版心更窄（行更短，长文更省眼）。
@@ -182,6 +201,7 @@ const zoomInBtn = document.getElementById('rrZoomIn');
 const zoomOutBtn = document.getElementById('rrZoomOut');
 const zoomTextEl = document.getElementById('rrZoomText');
 const typefaceSel = document.getElementById('rrTypeface');
+const sysFontGroup = document.getElementById('rrSystemFonts');
 const marginSel = document.getElementById('rrMargin');
 const paraSel = document.getElementById('rrPara');
 const punctBtn = document.getElementById('rrPunct');
@@ -198,6 +218,15 @@ const selBar = document.getElementById('rrSelBar');
 const styleFilterEl = document.getElementById('rrStyleFilter');
 const divLeft = document.getElementById('rrDivLeft');
 const divRight = document.getElementById('rrDivRight');
+// V3.5 阅读方式控件 / PDF 页容器 / 全屏退出
+const flowBtn = document.getElementById('rrFlow');
+const pagedBtn = document.getElementById('rrPaged');
+const spreadBtn = document.getElementById('rrSpread');
+const fullBtn = document.getElementById('rrFull');
+const fullExitBtn = document.getElementById('rrFullExit');
+const modesTip = document.getElementById('rrModesTip');
+const modePagesEl = document.getElementById('rrModePages');
+const pdfStage = document.getElementById('rrPdf');
 
 // ---- 通用小工具 ----
 function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
@@ -290,10 +319,19 @@ function loadPrefs() {
       if (typeof o.zoom === 'number') pref.zoom = clamp(o.zoom, 0.8, 1.5);
       if (typeof o.leftWidth === 'number') pref.leftWidth = clamp(o.leftWidth, 200, 360);
       if (typeof o.rightWidth === 'number') pref.rightWidth = clamp(o.rightWidth, 300, 460);
-      if (['mixed', 'serif', 'sans', 'kai'].indexOf(o.typeface) >= 0) pref.typeface = o.typeface;
+      if (['mixed', 'serif', 'sans', 'kai', 'device'].indexOf(o.typeface) >= 0) pref.typeface = o.typeface;
+      // 族名只接受短字符串：太长或含控制字符的一律丢掉，免得拼进样式表里把规则撑坏
+      if (typeof o.family === 'string' && o.family.length <= 64 && !/[\u0000-\u001f]/.test(o.family)) pref.family = o.family;
       if (MARGIN_PRESET[o.margin]) pref.margin = o.margin;
       if (PARA_GAP[o.para]) pref.para = o.para;
       if (typeof o.punct === 'boolean') pref.punct = o.punct;
+      if (typeof o.flow === 'boolean') pref.flow = o.flow;
+      if (typeof o.paged === 'boolean') pref.paged = o.paged;
+      if (typeof o.spread === 'boolean') pref.spread = o.spread;
+      // 老版本把「双页并排」实现成「整章正文分两栏滚动」，现在双页就是分页的两页：
+      // 旧的 spread=true 一律迁到分页态，不让它落回那个会左右串章的旧行为。
+      if (pref.spread) pref.paged = true;
+      if (pref.flow) { pref.paged = false; pref.spread = false; }
     }
   } catch (e) {}
 }
@@ -335,6 +373,10 @@ function bookPct() {
 
 // 本章百分比：跟着滚动实时算；内容不足一屏时直接算 100%（这一章确实看完了）
 function chapterPct() {
+  // PDF 没有 iframe 正文：本章百分比就是「读到第几页」
+  if (isPdf) return Math.round(((currentIndex + 1) / Math.max(1, chapterCount)) * 100);
+  // 分页态没有滚动位置，章内进度就是「翻到第几页 / 共几页」
+  if (paged.on) return paged.pages <= 1 ? 100 : clamp(Math.round((paged.page + 1) / paged.pages * 100), 0, 100);
   try {
     const d = iframe.contentDocument;
     const w = iframe.contentWindow;
@@ -385,7 +427,8 @@ function startTime() {
 
 function progressLine() {
   const t = Math.max(0, Number(chapterCount) || 0);
-  return '已读 ' + doneChapters() + ' / ' + t + ' 章 · 全书 ' + bookPct() + '% · 本章 ' + chapterPct() + '%';
+  return '已读 ' + doneChapters() + ' / ' + t + (isPdf ? ' 页' : ' 章') +
+    ' · 全书 ' + bookPct() + '% · 本章 ' + chapterPct() + '%';
 }
 
 function setProgressText(done, total) {
@@ -443,6 +486,8 @@ let endCardHideTimer = null;
 // 一屏就到底的章节：scroll 永远不会触发，靠 chapterPct 直接判 100%。
 // 但刚切过来就弹「本章读完」太急，给它一点停留时间再判定。
 function isShortChapter() {
+  // 分页态下 scrollHeight 被锁成一页，「短不短」只能看页数
+  if (paged.on) return paged.pages <= 1;
   try {
     const d = iframe.contentDocument;
     const w = iframe.contentWindow;
@@ -488,6 +533,8 @@ function renderEndCard() {
 function maybeShowEndCard() {
   if (!iframeReady || endCardShown) return;
   if (!SRC || SRC.supported === false) return;
+  // 连续滚动没有「章末」这个边界，PDF 是画布、也没有章内滚动语义：两种情况都不弹轻卡
+  if (pref.flow || isPdf) return;
   // 封面 / 版权页 / 目录：读完一屏也不弹「本章读完」，那不是一章正文
   if (isFrontMatter(currentIndex)) return;
   if (chapterPct() < 95) return;
@@ -1356,12 +1403,20 @@ function applyIframePrefs() {
     if (!doc || !doc.body) return;
     const b = doc.body;
     const m = MARGIN_PRESET[pref.margin] || MARGIN_PRESET.mid;
+    const pagedOn = !!(pref.paged && !isPdf);
     b.style.fontSize = pref.font + 'px';
     b.style.lineHeight = String(pref.line);
-    b.style.maxWidth = m.max + 'px';
+    // 分页态的版心与留白由分页容器（#rr-pg-vp）负责，body 自己必须零边距：
+    // 留一份 padding 的话，每一页左边都会多算一次缩进，越翻越歪。
+    // 「双页并排」不再把整章正文拆成两栏（那会把后半章塞进右栏），
+    // 而是在分页容器里并排两页，见 pagedApply()。
+    b.style.maxWidth = pagedOn ? 'none' : m.max + 'px';
+    b.style.columnCount = pagedOn ? 'auto' : '';
+    b.style.columnGap = '';
+    b.style.columnRule = '';
     b.style.marginLeft = 'auto';
     b.style.marginRight = 'auto';
-    b.style.padding = m.y + 'px ' + m.x + 'px 64px';
+    b.style.padding = pagedOn ? '0' : (m.y + 'px ' + m.x + 'px 64px');
     b.style.setProperty('--rr-para', PARA_GAP[pref.para] || PARA_GAP.normal);
     const t = IFRAME_THEMES[pref.theme] || IFRAME_THEMES.paper;
     b.style.backgroundColor = t.bg;
@@ -1375,6 +1430,9 @@ function applyIframePrefs() {
       ps[i].style.lineHeight = String(pref.line);
       ps[i].style.color = t.fg;
     }
+    // 字号 / 行距 / 版心 / 缩放任何一项变了，页都得重排一次（页码保持住）
+    if (pagedOn && iframeReady) pagedApply(true);
+    else if (paged.on) pagedTeardown();
   } catch (e) {}
 }
 
@@ -1384,22 +1442,1019 @@ function showUnsupported(reason) {
     unsupportedEl.textContent = '暂不支持该格式：' + (reason || '无法解析正文与目录');
   }
   if (iframe) iframe.style.display = 'none';
+  if (pdfStage) pdfStage.hidden = true;
 }
 function hideUnsupported() {
   if (unsupportedEl) unsupportedEl.style.display = 'none';
-  if (iframe) iframe.style.display = 'block';
+  // PDF 走 canvas 画布，不走 iframe；两种正文容器必须互斥，否则画布会被空 iframe 盖住
+  if (iframe) iframe.style.display = isPdf ? 'none' : 'block';
+  if (pdfStage) pdfStage.hidden = !isPdf;
+}
+
+// ==================== V3.5 阅读方式：PDF / 连续滚动 / 双页并排 / 全屏 ====================
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// 文本映射的根：分章 = 整篇 body；连续滚动 = 当前章那个 section。
+// 笔记锚点是「章内偏移」，多篇正文拼在一起还按整篇建表的话，所有标注都会错位。
+function currentFlowSection() {
+  try {
+    const doc = iframe && iframe.contentDocument;
+    return doc ? doc.querySelector('.rr-flow-ch[data-ch="' + currentIndex + '"]') : null;
+  } catch (e) { return null; }
+}
+function mapRoot() {
+  try {
+    const doc = iframe && iframe.contentDocument;
+    if (!doc || !doc.body) return null;
+    if (pref.flow && !isPdf) {
+      const sec = currentFlowSection();
+      if (sec) return sec;
+    }
+    return doc.body;
+  } catch (e) { return null; }
+}
+
+// ==================== V3.12 分页阅读 ====================
+// 做法：正文 DOM 一字不动，整块塞进一个多栏容器，容器高度锁成「一页」，
+// 用 column-fill:auto 让内容按页往右排；翻一页 = 把容器横移一整页。
+//
+// 为什么不自己切片：笔记锚点记的是「章内文本偏移」，自己切会把文本节点拆开，
+// 切一次全书标注就全错位。交给渲染引擎按栏切，DOM 顺序与文本偏移都原样保留。
+//
+// 为什么用 column-width 而不是 column-count：column-count 是上限，设成 1 时
+// 超出的内容只会往下溢出、不会再开新栏；column-width 才会按需一栏一栏往右长。
+const PAGED_GAP = 44;            // 双页时的页间缝（单页不留缝）
+let paged = { on: false, cols: 1, page: 0, pages: 1, cw: 0, gap: 0, pitch: 1, step: 1, colsTotal: 1, vp: null, clip: null, inner: null };
+let pagedTimer = null;
+let wheelAcc = 0;
+let lastFlipAt = 0;
+
+function pagedDoc() {
+  try {
+    const doc = iframe && iframe.contentDocument;
+    return (doc && doc.body) ? doc : null;
+  } catch (e) { return null; }
+}
+
+function pagedReset() {
+  paged.on = false; paged.page = 0; paged.pages = 1; paged.colsTotal = 1;
+  paged.vp = null; paged.clip = null; paged.inner = null;
+}
+
+// 拆掉包装：节点按原顺序搬回 body，正文 DOM 结构与标注锚点都不受影响
+function pagedTeardown() {
+  const doc = pagedDoc();
+  if (doc) {
+    const vp = doc.getElementById('rr-pg-vp');
+    const inner = doc.getElementById('rr-pg-in');
+    if (vp && inner) {
+      while (inner.firstChild) doc.body.appendChild(inner.firstChild);
+      vp.remove();
+    }
+    doc.body.style.height = '';
+    doc.body.style.overflow = '';
+    doc.body.classList.remove('rr-paged');
+    doc.documentElement.style.height = '';
+    doc.documentElement.style.overflow = '';
+  }
+  pagedReset();
+}
+
+function pagedBuild() {
+  const doc = pagedDoc();
+  if (!doc) return false;
+  const body = doc.body;
+  if (doc.getElementById('rr-pg-vp')) pagedTeardown();
+
+  const m = MARGIN_PRESET[pref.margin] || MARGIN_PRESET.mid;
+  const cols = pref.spread ? 2 : 1;
+
+  const vp = doc.createElement('div');
+  vp.id = 'rr-pg-vp';
+  vp.className = 'rr-pg-vp';
+  // 三层：vp 负责整页留白，clip 负责「只露一页宽」，inner 才是多栏正文。
+  // 少了 clip 这一层会露馅：overflow:hidden 只在 padding box 上裁，
+  // 右边那 30px 留白会把下一栏的字一起裁进来（实测就是这样）。
+  const clip = doc.createElement('div');
+  clip.id = 'rr-pg-clip';
+  clip.className = 'rr-pg-clip';
+  const inner = doc.createElement('div');
+  inner.id = 'rr-pg-in';
+  inner.className = 'rr-pg-in';
+
+  while (body.firstChild) inner.appendChild(body.firstChild);
+  clip.appendChild(inner);
+  vp.appendChild(clip);
+  body.appendChild(vp);
+
+  doc.documentElement.style.height = '100%';
+  doc.documentElement.style.overflow = 'hidden';
+  body.style.height = '100%';
+  body.style.overflow = 'hidden';
+  // body 自己不能留 padding / max-width：分页容器是 absolute inset:0，
+  // 会以 body 的 padding box 为基准，留一份就等于每页都多一圈边距
+  body.style.padding = '0';
+  body.style.margin = '0';
+  body.style.maxWidth = 'none';
+  // 书里若自带 body{column-count:2}，那套规则会跟我们分页容器打架：inline 显式压掉
+  body.style.columnCount = 'auto';
+  body.style.columnWidth = 'auto';
+  body.classList.add('rr-paged');
+
+  vp.style.cssText = 'position:absolute;inset:0;box-sizing:border-box;overflow:hidden;' +
+    'padding:' + m.y + 'px ' + m.x + 'px;';
+  clip.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;margin:0 auto;' +
+    'max-width:' + Math.round(m.max * (cols === 2 ? 1.7 : 1)) + 'px;';
+  inner.style.cssText = 'width:100%;height:100%;box-sizing:border-box;' +
+    'column-fill:auto;will-change:transform;transition:transform .16s ease-out;';
+  inner.style.columnGap = (cols === 2 ? PAGED_GAP : 0) + 'px';
+  inner.style.columnRule = cols === 2 ? '1px solid rgba(120,100,70,.16)' : '';
+
+  // 图 / 引文尽量整块留在同一页；表格与代码允许跨页（它们本来就可能比一页长，
+  // 硬压成一块只会整块溢出被裁掉）。标题不做孤行。
+  if (!doc.getElementById('rr-pg-css')) {
+    const st = doc.createElement('style');
+    st.id = 'rr-pg-css';
+    st.textContent = '.rr-pg-in img,.rr-pg-in figure{' +
+      'break-inside:avoid;-webkit-column-break-inside:avoid;}' +
+      // 整页插图 / 封面常常比一页还高：不压住它，图片就会顶破栏，整章只剩一栏
+      '.rr-pg-in img,.rr-pg-in svg,.rr-pg-in video{max-height:var(--rr-pg-h,100%);' +
+      'max-width:100%;width:auto;height:auto;object-fit:contain;}' +
+      '.rr-pg-in h1,.rr-pg-in h2,.rr-pg-in h3{break-after:avoid;}' +
+      '.rr-pg-in p{orphans:2;widows:2;}';
+    doc.head.appendChild(st);
+  }
+
+  paged.vp = vp;
+  paged.clip = clip;
+  paged.inner = inner;
+  paged.cols = cols;
+  paged.on = true;
+  return true;
+}
+
+// 量页：列宽必须读回浏览器实际用的值。column-width 会被「撑满」成略大的宽度，
+// 拿我们自己算的数字当页距，翻上十几页就会累积出十几像素的错位。
+function pagedMeasure() {
+  const inner = paged.inner;
+  if (!inner) return;
+  const z = pref.zoom || 1;
+  const cols = paged.cols;
+  const gap = cols === 2 ? PAGED_GAP : 0;
+  inner.style.transform = 'none';
+  // 一页的高度也是图片的上限：封面 / 整页插图不能比一页还高
+  inner.style.setProperty('--rr-pg-h', inner.clientHeight + 'px');
+
+  const w = inner.clientWidth;
+  const want = cols === 2 ? Math.max(160, Math.floor((w - gap) / 2) - 2) : Math.max(160, w);
+  inner.style.columnWidth = want + 'px';
+
+  const probe = inner.ownerDocument.createElement('div');
+  probe.style.cssText = 'height:0;margin:0;padding:0;border:0;';
+  inner.insertBefore(probe, inner.firstChild);
+  const cw = probe.offsetWidth || want;      // 一列的实际宽度（布局 px）
+  probe.remove();
+
+  const innerLeft = inner.getBoundingClientRect().left;
+  let maxRight = 0;
+  const kids = inner.children;
+  for (let i = 0; i < kids.length; i += 1) {
+    const r = kids[i].getBoundingClientRect();
+    if (!r || !(r.width > 0)) continue;
+    const right = (r.right - innerLeft) / z;
+    if (right > maxRight) maxRight = right;
+  }
+  const nominal = cw + gap;
+  // 末栏下标：把最右边缘折回列坐标。scrollWidth 一条路，末元素矩形一条路，取大的
+  const byLeaf = Math.round((maxRight - cw) / nominal) + 1;
+  const byScroll = Math.round((inner.scrollWidth - cw) / nominal) + 1;
+  const n = Math.max(1, byLeaf, byScroll);
+
+  // 列距用实测值：块级元素的右边缘就是栏右沿，反推出的列距比「计算值」准，
+  // 翻几十页也不会累积成「露出一条隔壁页」的错位。
+  let pitch = nominal;
+  if (n > 1 && maxRight > cw + 1) {
+    const emp = (maxRight - cw) / (n - 1);
+    if (emp > nominal * 0.94 && emp < nominal * 1.06) pitch = emp;
+  }
+
+  paged.cw = cw;
+  paged.gap = gap;
+  paged.pitch = pitch;
+  paged.step = cols * pitch;
+  paged.colsTotal = n;
+  paged.pages = Math.max(1, Math.ceil(n / cols));
+}
+
+function pagedGoPage(i, opts) {
+  if (!paged.on || !paged.inner) return;
+  const page = clamp(Math.round(Number(i) || 0), 0, paged.pages - 1);
+  paged.page = page;
+  const inner = paged.inner;
+  inner.style.transform = 'translateX(' + (-page * paged.step) + 'px)';
+  if (opts && opts.noAnim) {
+    inner.style.transition = 'none';
+    void inner.offsetWidth;                  // 让无动画的这一跳立刻落地
+    inner.style.transition = '';
+  }
+  syncModeUI();
+  updateProgress();
+  // 分页态没有 scroll 事件，位置得靠翻页自己记
+  if (scrollTimer) clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(savePos, 400);
+}
+
+function pagedRatio() {
+  if (!paged.on || paged.pages <= 1) return 0;
+  return clamp(paged.page / (paged.pages - 1), 0, 1);
+}
+
+function pagedApply(keep) {
+  if (!(pref.paged && !isPdf) || !iframeReady) {
+    if (paged.on) pagedTeardown();
+    return;
+  }
+  const ratio = (keep && paged.on) ? pagedRatio() : 0;
+  if (paged.on) pagedTeardown();
+  if (!pagedBuild()) return;
+  pagedMeasure();
+  pagedGoPage(ratio > 0 ? Math.round(ratio * Math.max(0, paged.pages - 1)) : 0, { noAnim: true });
+}
+
+// 换字体 / 开关标点挤压会改变行宽，分页态得跟着重排（页码保持）
+function afterMetricsChange() {
+  if (pref.paged && !isPdf && iframeReady) pagedApply(true);
+}
+
+// 越过分页边界就像翻书一样接下一章 / 回上一章的最后一页
+async function pagedFlip(dir) {
+  if (!paged.on) return;
+  const next = paged.page + dir;
+  if (next >= 0 && next < paged.pages) { pagedGoPage(next); return; }
+  if (dir > 0) {
+    if (currentIndex + 1 < chapterCount) { hideEndCard(); await loadChapter(currentIndex + 1, { ratio: 0 }); }
+    else setStatus('已经是最后一章了');
+  } else if (currentIndex > 0) {
+    await loadChapter(currentIndex - 1, { ratio: 1 });
+  } else {
+    setStatus('已经是第一章的开头');
+  }
+}
+
+// 把某个元素 / 范围带到它所在的那一页（书内搜索命中、笔记回跳都走这里）
+function pagedReveal(target) {
+  if (!paged.on || !paged.inner || !target) return false;
+  let r = null;
+  try { r = target.getBoundingClientRect(); } catch (e) { return false; }
+  if (!r) return false;
+  const z = pref.zoom || 1;
+  // 元素与容器受同一个 transform 影响，两者之差就是它相对「第 0 页左沿」的位置
+  const left = (r.left - paged.inner.getBoundingClientRect().left) / z;
+  const col = Math.max(0, Math.round(left / paged.pitch));
+  pagedGoPage(Math.floor(col / paged.cols));
+  return true;
+}
+
+function schedulePagedRebuild() {
+  if (!(pref.paged && !isPdf) || !iframeReady) return;
+  if (pagedTimer) clearTimeout(pagedTimer);
+  pagedTimer = setTimeout(function () { pagedTimer = null; pagedApply(true); }, 200);
+}
+
+// 滚轮翻页：一「下」只翻一页。触控板惯性会连着送几十个 wheel 事件，
+// 所以既按累计位移，也留一个最短间隔，否则一划就是七八页。
+function onPagedWheel(e) {
+  if (!paged.on) return;
+  e.preventDefault();
+  const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+  if (!delta) return;
+  const now = Date.now();
+  if (now - lastFlipAt < 260) { wheelAcc = 0; return; }
+  if (Math.abs(delta) < 6) return;
+  if (wheelAcc && (wheelAcc > 0) !== (delta > 0)) wheelAcc = 0;
+  wheelAcc += delta;
+  if (Math.abs(wheelAcc) < 36) return;
+  wheelAcc = 0;
+  lastFlipAt = now;
+  safeRun(function () { return pagedFlip(delta > 0 ? 1 : -1); });
+}
+
+function onPagedKey(e) {
+  if (!paged.on) return;
+  const t = e.target;
+  const tag = t && t.tagName ? t.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+  const k = e.key;
+  if (k === 'ArrowDown' || k === 'PageDown' || k === ' ' || k === 'Spacebar') {
+    e.preventDefault(); safeRun(function () { return pagedFlip(1); });
+  } else if (k === 'ArrowUp' || k === 'PageUp') {
+    e.preventDefault(); safeRun(function () { return pagedFlip(-1); });
+  } else if (k === 'Home') {
+    e.preventDefault(); pagedGoPage(0);
+  } else if (k === 'End') {
+    e.preventDefault(); pagedGoPage(paged.pages - 1);
+  }
+}
+
+let lastPgLabel = '';
+function renderModePages() {
+  if (!modePagesEl) return;
+  if (isPdf) { modePagesEl.textContent = pdfPages + ' 页'; lastPgLabel = ''; return; }
+  if (!paged.on) {
+    modePagesEl.textContent = Math.max(0, chapterCount) + ' 章';
+    lastPgLabel = '';
+    return;
+  }
+  const label = '第 ' + (paged.page + 1) + ' / ' + paged.pages + ' 页';
+  if (label === lastPgLabel) return;
+  lastPgLabel = label;
+  modePagesEl.textContent = '';
+  const prev = document.createElement('button');
+  prev.type = 'button'; prev.className = 'rr-pg-btn'; prev.setAttribute('data-pg', '-1');
+  prev.title = '上一页'; prev.textContent = '‹';
+  const no = document.createElement('span');
+  no.className = 'rr-pg-no'; no.textContent = label;
+  const next = document.createElement('button');
+  next.type = 'button'; next.className = 'rr-pg-btn'; next.setAttribute('data-pg', '1');
+  next.title = '下一页'; next.textContent = '›';
+  modePagesEl.appendChild(prev);
+  modePagesEl.appendChild(no);
+  modePagesEl.appendChild(next);
+}
+
+function syncModeUI() {
+  const pagedOn = !!(pref.paged && !isPdf);
+  if (flowBtn) { flowBtn.classList.toggle('rr-mode-on', !!pref.flow); flowBtn.setAttribute('aria-pressed', String(!!pref.flow)); }
+  if (pagedBtn) {
+    const on = pagedOn && !pref.spread;
+    pagedBtn.classList.toggle('rr-mode-on', on);
+    pagedBtn.setAttribute('aria-pressed', String(on));
+  }
+  if (spreadBtn) {
+    spreadBtn.classList.toggle('rr-mode-on', !!pref.spread);
+    spreadBtn.setAttribute('aria-pressed', String(!!pref.spread));
+  }
+  if (modesTip) {
+    if (isPdf) modesTip.textContent = pref.spread ? 'PDF · 双页' : 'PDF · 单页';
+    else if (pref.flow) modesTip.textContent = '连续 · 单栏';
+    else if (pagedOn) modesTip.textContent = pref.spread ? '分页 · 双页' : '分页 · 单页';
+    else modesTip.textContent = '分章 · 单栏';
+  }
+  renderModePages();
+}
+
+// ---------- 全屏：优先浏览器全屏，失败就退化成「窗口内全屏」 ----------
+function setFullUI(on) {
+  if (appEl) appEl.setAttribute('data-full', on ? '1' : '0');
+  // 伴读浮窗 / 章末卡挂在 rr-app 之外，得在 body 上也留个标记才收得干净
+  if (document.body) document.body.setAttribute('data-full', on ? '1' : '0');
+  if (fullExitBtn) fullExitBtn.hidden = !on;
+  if (fullBtn) { fullBtn.classList.toggle('rr-mode-on', !!on); fullBtn.setAttribute('aria-pressed', String(!!on)); }
+  // 全屏后正文宽度变了：只重画可见的 PDF 页，不重建 DOM，滚动位置不丢
+  if (isPdf) setTimeout(refreshPdfVisible, 160);
+}
+async function setFullMode(on) {
+  if (on) {
+    try { await document.documentElement.requestFullscreen(); }
+    catch (e) { setStatus('浏览器全屏不可用，已切成窗口内全屏'); }
+    setFullUI(true);
+  } else {
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (e) {}
+    setFullUI(false);
+  }
+}
+
+// ---------- 连续滚动（EPUB / TXT / MD）----------
+function parseChapterDoc(html) {
+  const d = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const css = Array.from(d.querySelectorAll('style')).map(function (s) { return s.textContent || ''; }).join('\n');
+  return { body: d.body ? d.body.innerHTML : '', css: css };
+}
+function flowSectionHtml(c) {
+  return '<section class="rr-flow-ch" data-ch="' + c.index + '"><h1 class="chapter-title">' +
+    escHtml(c.title) + '</h1>' + c.body + '</section>';
+}
+function flowShell(first) {
+  return '<!doctype html><html><head><meta charset="utf-8"><style>\n' +
+    'html,body{margin:0;padding:0;}body{color:#2f2b26;background:#fff;line-height:1.8;}\n' +
+    'p{margin:0 0 .6em;}img,image,svg,video{max-width:100%;height:auto;}\n' +
+    '.chapter-title{margin-top:0;font-size:1.35em;}\n' +
+    '.rr-flow-ch{padding:24px 0 40px;border-bottom:1px solid rgba(0,0,0,.09);}\n' +
+    '.rr-flow-ch + .rr-flow-ch{margin-top:18px;}\n' +
+    first.css + '\n</style></head><body>' + flowSectionHtml(first) + '</body></html>';
+}
+async function loadFlow(idx, ratio) {
+  const data = await domain('reading.readerChapter', [BOOK_ID, idx]);
+  if (!data || data.ok === false) { setStatus('章节读取失败：' + ((data && data.reason) || '未知原因')); return; }
+  const c = parseChapterDoc(data.html);
+  flowChapters = [{ index: idx, title: data.title || ('第 ' + (idx + 1) + ' 节'), body: c.body, css: c.css }];
+  currentIndex = idx;
+  iframeReady = false;
+  hideEndCard();
+  endCardShown = false;
+  pendingRatio = (typeof ratio === 'number') ? clamp(ratio, 0, 1) : null;
+  pagedReset();
+  if (iframe) iframe.srcdoc = flowShell(flowChapters[0]);
+  if (chapterTitleEl) chapterTitleEl.textContent = flowChapters[0].title;
+  if (posEl) posEl.textContent = (idx + 1) + ' / ' + chapterCount;
+  highlightToc(idx);
+  saveChapterPref(idx);
+  setStatus('连续滚动：从第 ' + (idx + 1) + ' 章往下接，滚到底自动追加下一章');
+}
+async function appendFlowChapter(idx) {
+  if (flowLoading || idx >= chapterCount || flowChapters.length >= FLOW_MAX) return;
+  flowLoading = true;
+  try {
+    const data = await domain('reading.readerChapter', [BOOK_ID, idx]);
+    if (!data || data.ok === false) return;
+    const c = parseChapterDoc(data.html);
+    const rec = { index: idx, title: data.title || ('第 ' + (idx + 1) + ' 节'), body: c.body, css: c.css };
+    const doc = iframe && iframe.contentDocument;
+    if (!doc || !doc.body) return;
+    const box = document.createElement('div');
+    box.innerHTML = flowSectionHtml(rec);
+    while (box.firstChild) doc.body.appendChild(box.firstChild);
+    if (rec.css) {
+      const st = doc.createElement('style');
+      st.textContent = rec.css;
+      doc.head.appendChild(st);
+    }
+    flowChapters.push(rec);
+    applyIframePrefs();
+    if (flowChapters.length >= FLOW_MAX) setStatus('连续滚动已接满 ' + FLOW_MAX + ' 章；点目录可以直接跳到后面的章');
+  } finally { flowLoading = false; }
+}
+function setActiveChapter(idx) {
+  if (idx === currentIndex) return;
+  currentIndex = idx;
+  highlightToc(idx);
+  if (posEl) posEl.textContent = (idx + 1) + ' / ' + chapterCount;
+  if (chapterTitleEl) chapterTitleEl.textContent = chapterTitleAt(idx);
+  saveChapterPref(idx);
+  hideEndCard();
+  endCardShown = false;
+  void refreshNotes();
+  applyHighlights();
+}
+function onFlowScroll() {
+  try {
+    const doc = iframe.contentDocument;
+    const win = iframe.contentWindow;
+    const secs = doc.querySelectorAll('.rr-flow-ch');
+    let active = currentIndex;
+    for (let i = 0; i < secs.length; i += 1) {
+      if (secs[i].offsetTop <= win.scrollY + 120) active = Number(secs[i].getAttribute('data-ch'));
+    }
+    if (active !== currentIndex) setActiveChapter(active);
+    const last = flowChapters[flowChapters.length - 1];
+    if (last && last.index + 1 < chapterCount &&
+        win.scrollY + win.innerHeight > doc.documentElement.scrollHeight - 600) {
+      void appendFlowChapter(last.index + 1);
+    }
+  } catch (e) {}
+}
+
+// ---------- PDF 原页 ----------
+// 目录统一走这里：任何一次重建（开窗 / 书签刷新 / 数据变更）都不能把 PDF 的
+// 「第 N 页」退回到兜底的「第 N 节」——之前 loadBookmarks 直接 renderToc(SRC.toc) 就踩过。
+function currentToc() {
+  if (isPdf) return buildPdfToc();
+  return (SRC && SRC.toc) ? SRC.toc : [];
+}
+function buildPdfToc() {
+  const toc = [];
+  const step = pdfPages > 200 ? 10 : 1;
+  for (let i = 0; i < pdfPages; i += step) {
+    const from = i + 1;
+    const to = Math.min(pdfPages, i + step);
+    toc.push({
+      id: 'pg-' + i, level: 1, index: i,
+      title: step > 1 ? ('第 ' + from + '–' + to + ' 页') : ('第 ' + from + ' 页')
+    });
+  }
+  return toc;
+}
+async function initPdf() {
+  if (!window.pdfjsLib || !window.pdfjsWorker) {
+    showUnsupported('PDF 解码器没加载（本地文件缺失）');
+    return;
+  }
+  const r = await domain('reading.readerPdfData', [BOOK_ID]);
+  if (!r || r.ok === false) { showUnsupported((r && r.reason) || 'PDF 读取失败'); return; }
+  try {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
+    // 主进程给的是 Buffer，结构化克隆过来可能是 Uint8Array，也可能落成普通数组 / {type,data}
+    const raw = r.data;
+    let bytes;
+    if (raw instanceof Uint8Array) bytes = raw;
+    else if (raw && Array.isArray(raw.data)) bytes = new Uint8Array(raw.data);
+    else if (Array.isArray(raw)) bytes = new Uint8Array(raw);
+    else bytes = new Uint8Array(0);
+    pdfDoc = await window.pdfjsLib.getDocument({ data: bytes, useSystemFonts: true }).promise;
+    pdfPages = pdfDoc.numPages;
+    chapterCount = pdfPages;
+  } catch (e) {
+    showUnsupported('PDF 解码失败：' + ((e && e.message) || e));
+    return;
+  }
+  hideUnsupported();
+  renderToc(currentToc());
+  syncModeUI();
+  const saved = readPos();
+  const start = clamp(saved ? saved.chapter : readChapterPref(), 0, Math.max(0, pdfPages - 1));
+  gotoPdfPage(start);
+  if (pdfStage && !pdfStage.__rrScrollBound) {
+    pdfStage.__rrScrollBound = true;
+    pdfStage.addEventListener('scroll', onPdfScroll);
+  }
+  await refreshNotes();
+  await loadBookmarks();
+  // 页数是解码后才知道的：开窗早期那次进度文本按 chapterCount=1 算过，得按真实页数重算
+  updateProgress();
+  setStatus('已打开 PDF《' + ((BOOK && BOOK.title) || '') + '》· 共 ' + pdfPages + ' 页');
+}
+function renderPdfPages() {
+  if (!pdfStage) return;
+  if (pdfObserver) { pdfObserver.disconnect(); pdfObserver = null; }
+  clear(pdfStage);
+  const grid = mk('div', 'rr-pdf-pages');
+  if (pref.spread) grid.classList.add('rr-pdf-spread');
+  const list = [];
+  if (pref.flow) {
+    // 每页只是一个空 div + 懒渲染的 canvas，几百上千页也不会一次吃满内存；
+    // 不要在这里截断，否则目录跳到后面的页会找不到对应画布
+    for (let p = 1; p <= pdfPages; p += 1) list.push(p);
+  } else {
+    // 双页时按「摊开」成对取页：1-2、3-4……封面单独占一行更像实体书
+    const first = pref.spread ? Math.min(pdfPages, Math.max(1, currentIndex - (currentIndex % 2) + 1)) : currentIndex + 1;
+    list.push(first);
+    if (pref.spread && first + 1 <= pdfPages) list.push(first + 1);
+  }
+  list.forEach(function (p) {
+    const box = mk('div', 'rr-pdf-page' + (p === 1 ? ' rr-pdf-page-first' : ''));
+    box.setAttribute('data-page', String(p));
+    box.appendChild(mk('span', 'rr-pdf-page-wait', '第 ' + p + ' 页 · 待渲染'));
+    box.appendChild(mk('span', 'rr-pdf-page-no', p + ' / ' + pdfPages));
+    grid.appendChild(box);
+  });
+  pdfStage.appendChild(grid);
+  pdfObserver = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      void renderPdfPage(en.target, Number(en.target.getAttribute('data-page')));
+    });
+  }, { root: pdfStage, rootMargin: '500px 0px' });
+  const boxes = grid.querySelectorAll('.rr-pdf-page');
+  for (let i = 0; i < boxes.length; i += 1) pdfObserver.observe(boxes[i]);
+  observePdfStage();
+}
+// window resize 抓不到「容器自己变窄」：滚动条出现、左右栏折叠、右栏拖宽都算。
+// 画布有固有尺寸，容器一动就得重画，否则只能被 CSS 压一次。
+let pdfStageObserver = null;
+function observePdfStage() {
+  if (!pdfStage || typeof ResizeObserver !== 'function') return;
+  if (pdfStageObserver) pdfStageObserver.disconnect();
+  pdfStageObserver = new ResizeObserver(function () { onPdfLayoutChange(); });
+  pdfStageObserver.observe(pdfStage);
+}
+// ---------- PDF 文本层（V3.17） ----------
+// canvas 只有像素：字看得见却选不中、搜不到、也没法摘录。pdf.js 的 getTextContent
+// 会给出每一小段文字在 PDF 坐标系里的变换矩阵，把它换算到页坐标后盖一层透明 span：
+// 眼睛看到的仍是画布，鼠标划选 / Ctrl+C / 搜索命中都落在这层真实 DOM 上。
+// 文字保持 transparent，选中时只显淡蓝底色，避免与画布上的字叠出重影。
+let pdfSearchTerm = '';
+let pdfHitRanges = Object.create(null);   // { [页号]: [{start,end}] }，页内字符偏移
+let pdfSearchToken = 0;
+
+// 两个 2x3 仿射矩阵相乘（等价于 pdfjsLib.Util.transform，但不依赖内部导出）
+function pdfMatMul(m1, m2) {
+  return [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5]
+  ];
+}
+// 页内纯文本与「每段文字占哪一段字符」共用同一口径：搜索命中的偏移、
+// 划选算出来的锚点、摘录高亮还原，三者必须能互相对上。
+function pdfJoinItems(items) {
+  let text = '';
+  const parts = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const str = typeof items[i].str === 'string' ? items[i].str : '';
+    const start = text.length;
+    text += str;
+    parts.push({ start: start, end: text.length, str: str });
+  }
+  return { text: text, parts: parts };
+}
+function pdfSpansInRange(box, start, end) {
+  const layer = box && box.__pdfLayer;
+  if (!layer) return [];
+  const spans = layer.__spans || [];
+  return spans.filter(function (sp) {
+    const a = Number(sp.getAttribute('data-off') || 0);
+    const b = a + Number(sp.getAttribute('data-len') || 0);
+    return b > start && a < end;
+  });
+}
+function paintPdfHitsForBox(box) {
+  if (!box || !box.__pdfLayer) return;
+  const spans = box.__pdfLayer.__spans || [];
+  const ranges = pdfHitRanges[Number(box.getAttribute('data-page'))] || [];
+  for (let i = 0; i < spans.length; i += 1) {
+    const sp = spans[i];
+    const a = Number(sp.getAttribute('data-off') || 0);
+    const b = a + Number(sp.getAttribute('data-len') || 0);
+    const hit = ranges.some(function (r) { return b > r.start && a < r.end; });
+    sp.classList.toggle('rr-pdf-hit', hit);
+  }
+}
+function paintPdfHits() {
+  if (!isPdf || !pdfStage) return;
+  const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+  for (let i = 0; i < boxes.length; i += 1) paintPdfHitsForBox(boxes[i]);
+}
+function paintPdfMarks() {
+  if (!isPdf || !pdfStage) return;
+  const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+  for (let i = 0; i < boxes.length; i += 1) paintPdfMarksForBox(boxes[i]);
+}
+function flashPdfFind(start) {
+  if (!isPdf || !pdfStage) return;
+  const box = pdfStage.querySelector('.rr-pdf-page[data-page="' + (currentIndex + 1) + '"]');
+  if (!box) return;
+  const old = pdfStage.querySelectorAll('.rr-pdf-hit-on');
+  for (let i = 0; i < old.length; i += 1) old[i].classList.remove('rr-pdf-hit-on');
+  const sp = pdfSpansInRange(box, start, start + 1)[0];
+  if (!sp) return;
+  sp.classList.add('rr-pdf-hit-on');
+  setTimeout(function () { sp.classList.remove('rr-pdf-hit-on'); }, 2400);
+}
+// 划选存下来的标注在页重画后要还原：anchor 仍是「页:起-止」，只是宿主从 iframe 换成文本层
+function paintPdfMarksForBox(box) {
+  if (!box || !box.__pdfLayer) return;
+  const spans = box.__pdfLayer.__spans || [];
+  for (let i = 0; i < spans.length; i += 1) {
+    spans[i].classList.remove('rr-pdf-mark');
+    delete spans[i].dataset.mark;
+  }
+  const page = Number(box.getAttribute('data-page'));
+  (chapterNotes || []).forEach(function (n) {
+    const m = /^(\d+):(\d+)-(\d+)$/.exec(n.anchor || '');
+    if (!m || Number(m[1]) !== page - 1) return;
+    if (!n.style || n.style === 'quote') return;
+    pdfSpansInRange(box, Number(m[2]), Number(m[3])).forEach(function (sp) {
+      sp.classList.add('rr-pdf-mark');
+      sp.dataset.mark = (n.style === 'highlight' ? (n.color || 'yellow') : 'blue');
+    });
+  });
+}
+async function buildPdfTextLayer(page, viewport, sheet, box, no) {
+  const layer = mk('div', 'rr-pdf-text');
+  layer.setAttribute('data-page', String(no));
+  layer.__spans = [];
+  try {
+    const tc = await page.getTextContent();
+    const items = (tc && tc.items) || [];
+    const styles = (tc && tc.styles) || {};
+    const joined = pdfJoinItems(items);
+    box.__pdfText = joined.text;
+    box.__pdfParts = joined.parts;
+    // measureText 比逐个读 offsetWidth 便宜得多：一页几百个 span，重排会卡住滚动
+    const ctx = document.createElement('canvas').getContext('2d');
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i];
+      const str = joined.parts[i].str;
+      if (!str) continue;
+      const tx = pdfMatMul(viewport.transform, it.transform || [1, 0, 0, 1, 0, 0]);
+      const fontHeight = Math.hypot(tx[2], tx[3]) || 10;
+      const st = styles[it.fontName] || {};
+      const ascent = typeof st.ascent === 'number' ? st.ascent : 1;
+      const angle = Math.atan2(tx[1], tx[0]);
+      const fa = fontHeight * ascent;
+      const left = angle === 0 ? tx[4] : tx[4] + fa * Math.sin(angle);
+      const top = angle === 0 ? tx[5] - fa : tx[5] - fa * Math.cos(angle);
+      const sp = document.createElement('span');
+      sp.textContent = str;
+      sp.setAttribute('data-off', String(joined.parts[i].start));
+      sp.setAttribute('data-len', String(str.length));
+      sp.style.left = left + 'px';
+      sp.style.top = top + 'px';
+      sp.style.fontSize = fontHeight + 'px';
+      ctx.font = fontHeight + 'px sans-serif';
+      const measured = ctx.measureText(str).width;
+      const scaleX = measured > 0 ? (it.width * viewport.scale) / measured : 1;
+      const tf = (angle ? 'rotate(' + angle + 'rad) ' : '') +
+        (scaleX > 0.02 && Math.abs(scaleX - 1) > 0.02 ? 'scaleX(' + clamp(scaleX, 0.2, 5).toFixed(3) + ')' : '');
+      if (tf) sp.style.transform = tf;
+      layer.__spans.push(sp);
+      frag.appendChild(sp);
+    }
+    layer.appendChild(frag);
+  } catch (e) {
+    // 扫描件 / 加密页拿不到文字层：画布照常可读，只是不能选中，别把整页弄坏
+    box.__pdfText = '';
+    box.__pdfParts = [];
+  }
+  sheet.appendChild(layer);
+  box.__pdfLayer = layer;
+  paintPdfHitsForBox(box);
+  paintPdfMarksForBox(box);
+}
+
+async function renderPdfPage(box, no) {
+  if (!pdfDoc || !box || box.dataset.done === '1' || box.dataset.busy === '1') return;
+  box.dataset.busy = '1';
+  try {
+    const page = await pdfDoc.getPage(no);
+    const base = page.getViewport({ scale: 1 });
+    // 宽度必须取容器的真实宽：以前给它兜了个 320 的下限，窗口一窄，
+    // 画布就比容器宽，再被 max-width 压回去——压回去就是拉伸，字照样糊
+    const cw = box.clientWidth;
+    const w = cw > 0 ? cw : 320;
+    const scale = clamp((w / base.width) * (pref.zoom || 1), 0.35, 3);
+    const vp = page.getViewport({ scale: scale });
+    // 位图按 devicePixelRatio 放大，CSS 尺寸仍按逻辑像素——PDF 走 canvas，
+    // 没有矢量文本可用：位图 1x 而屏幕 125%/150% 时，浏览器只能整幅上采样，
+    // 正文字形就整体发虚（Windows 默认缩放非 100% 的机器上尤其明显）。
+    const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(vp.width * dpr));
+    cv.height = Math.max(1, Math.round(vp.height * dpr));
+    // 显式写死 CSS 尺寸，别交给 width:100% 去拉伸：floor 出来的位图宽比容器窄
+    // 不到 1px，被拉伸回去就是一次非整数重采样，同样会糊。
+    cv.style.width = Math.floor(vp.width) + 'px';
+    cv.style.height = Math.floor(vp.height) + 'px';
+    await page.render({
+      canvasContext: cv.getContext('2d'),
+      viewport: vp,
+      transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0]
+    }).promise;
+    clear(box);
+    // canvas 与文本层同住一个尺寸写死的容器：页容器是 flex 居中，放大/缩小时
+    // 画布会水平偏移，文本层若挂在页容器上就会跟字错开。
+    const sheet = mk('div', 'rr-pdf-sheet');
+    sheet.style.width = Math.floor(vp.width) + 'px';
+    sheet.style.height = Math.floor(vp.height) + 'px';
+    sheet.appendChild(cv);
+    box.appendChild(sheet);
+    box.appendChild(mk('span', 'rr-pdf-page-no', no + ' / ' + pdfPages));
+    await buildPdfTextLayer(page, vp, sheet, box, no);
+    // 记下这页是按多大宽度 / 多少倍密度画的，窗口变形后据此判断要不要重画
+    box.dataset.cssw = String(Math.floor(vp.width));
+    box.dataset.dpr = String(dpr);
+    box.dataset.done = '1';
+  } catch (e) {
+    clear(box);
+    box.appendChild(mk('span', 'rr-pdf-page-wait', '第 ' + no + ' 页渲染失败'));
+  } finally { box.dataset.busy = '0'; }
+}
+function refreshPdfVisible() {
+  if (!isPdf || !pdfStage) return;
+  const sr = pdfStage.getBoundingClientRect();
+  const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+  for (let i = 0; i < boxes.length; i += 1) {
+    const r = boxes[i].getBoundingClientRect();
+    if (r.bottom > sr.top - 200 && r.top < sr.bottom + 200) {
+      boxes[i].dataset.done = '0';
+      void renderPdfPage(boxes[i], Number(boxes[i].getAttribute('data-page')));
+    }
+  }
+}
+// 窗口一变形，已画好的 canvas 就和新宽度对不上了。canvas 有固有尺寸，
+// CSS 只能拉伸它——拉伸就是重采样，字立刻糊。所以宽度变了就作废重画。
+let pdfLayoutTimer = null;
+function resetPdfCanvases() {
+  if (!pdfStage) return;
+  const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+  for (let i = 0; i < boxes.length; i += 1) boxes[i].dataset.done = '0';
+  refreshPdfVisible();
+}
+function onPdfLayoutChange() {
+  if (!isPdf || !pdfStage) return;
+  clearTimeout(pdfLayoutTimer);
+  pdfLayoutTimer = setTimeout(function () {
+    const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+    const dpr = String(Math.min(3, Math.max(1, window.devicePixelRatio || 1)));
+    let stale = false;
+    for (let i = 0; i < boxes.length; i += 1) {
+      const b = boxes[i];
+      if (b.dataset.done !== '1') continue;
+      const cw = Number(b.dataset.cssw || 0);
+      const bd = String(b.dataset.dpr || '1');
+      if ((cw && Math.abs(b.clientWidth - cw) > 2) || bd !== dpr) { b.dataset.done = '0'; stale = true; }
+    }
+    if (stale) refreshPdfVisible();
+  }, 220);
+}
+// 窗口被拖到另一块缩放不同的屏上时，尺寸可能一点没变、只有 dpr 变了
+function watchPdfDpr() {
+  if (!window.matchMedia || !window.matchMedia('(resolution: 1dppx)').addEventListener) return;
+  const cur = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+  const mq = window.matchMedia('(resolution: ' + cur + 'dppx)');
+  mq.addEventListener('change', function () {
+    if (isPdf) resetPdfCanvases();
+    watchPdfDpr();
+  }, { once: true });
+}
+function gotoPdfPage(idx) {
+  const i = clamp(Math.floor(Number(idx) || 0), 0, Math.max(0, pdfPages - 1));
+  const exists = pdfStage.querySelector('.rr-pdf-page[data-page="' + (i + 1) + '"]');
+  const needRebuild = !pref.flow || !exists;
+  currentIndex = i;
+  highlightToc(i);
+  saveChapterPref(i);
+  if (posEl) posEl.textContent = (i + 1) + ' / ' + pdfPages;
+  if (chapterTitleEl) chapterTitleEl.textContent = '第 ' + (i + 1) + ' 页';
+  hideEndCard();
+  endCardShown = false;
+  if (needRebuild) renderPdfPages();
+  if (pref.flow) {
+    setTimeout(function () {
+      const box = pdfStage.querySelector('.rr-pdf-page[data-page="' + (i + 1) + '"]');
+      if (box) pdfStage.scrollTop = Math.max(0, box.offsetTop - 16);
+    }, 40);
+  }
+  void refreshNotes();
+}
+function onPdfScroll() {
+  if (!pdfStage) return;
+  const boxes = pdfStage.querySelectorAll('.rr-pdf-page');
+  let active = currentIndex;
+  const top = pdfStage.scrollTop + 100;
+  for (let i = 0; i < boxes.length; i += 1) {
+    if (boxes[i].offsetTop <= top) active = Number(boxes[i].getAttribute('data-page')) - 1;
+  }
+  if (active !== currentIndex) {
+    currentIndex = active;
+    highlightToc(active);
+    if (posEl) posEl.textContent = (active + 1) + ' / ' + pdfPages;
+    if (chapterTitleEl) chapterTitleEl.textContent = '第 ' + (active + 1) + ' 页';
+    saveChapterPref(active);
+    void refreshNotes();
+  }
+  try {
+    localStorage.setItem(POS_KEY + BOOK_ID, JSON.stringify({ chapter: currentIndex, ratio: 0, ts: Date.now() }));
+  } catch (e) {}
+}
+// PDF 书内搜索（V3.17）：不再只扫前 200 页；命中区间按页内字符偏移记下来，
+// 既用来给文本层上黄底，也让「点结果」直接滚到那一处而不是只翻到那一页。
+async function pdfSearch(kw) {
+  const token = ++pdfSearchToken;
+  pdfSearchTerm = String(kw || '').trim();
+  pdfHitRanges = Object.create(null);
+  if (!pdfDoc || !pdfSearchTerm) { paintPdfHits(); return; }
+  const needle = pdfSearchTerm.toLowerCase();
+  const hits = [];
+  let total = 0;
+  let scanned = 0;
+  const MAX_HITS = 400;   // 只要总量，避免几千页的超长文档把 UI 拖死
+  const MAX_LIST = 60;    // 结果列表只列前 60 条
+  for (let p = 1; p <= pdfPages; p += 1) {
+    if (token !== pdfSearchToken) return;   // 用户又发起了新搜索，旧结果作废
+    let text = '';
+    try {
+      const page = await pdfDoc.getPage(p);
+      const tc = await page.getTextContent();
+      text = pdfJoinItems((tc && tc.items) || []).text;
+    } catch (e) { continue; }
+    scanned = p;
+    const lower = text.toLowerCase();
+    const ranges = [];
+    let from = 0;
+    let at = lower.indexOf(needle, from);
+    while (at >= 0) {
+      total += 1;
+      ranges.push({ start: at, end: at + pdfSearchTerm.length });
+      if (hits.length < MAX_LIST) {
+        const s = Math.max(0, at - 28);
+        const e = Math.min(text.length, at + pdfSearchTerm.length + 28);
+        hits.push({
+          chapterIndex: p - 1, label: '第 ' + p + ' 页', start: at,
+          snippet: (s > 0 ? '…' : '') + text.slice(s, e) + (e < text.length ? '…' : '')
+        });
+      }
+      from = at + pdfSearchTerm.length;
+      if (total >= MAX_HITS) break;
+      at = lower.indexOf(needle, from);
+    }
+    if (ranges.length) pdfHitRanges[p] = ranges;
+    if (p % 25 === 0) {
+      if (searchCountEl) searchCountEl.textContent = '已扫 ' + p + '/' + pdfPages + ' 页 · ' + total + ' 处';
+      await new Promise(function (r) { setTimeout(r, 0); });   // 长文档别把界面卡住
+    }
+    if (total >= MAX_HITS) break;
+  }
+  if (token !== pdfSearchToken) return;
+  paintPdfHits();
+  if (searchCountEl) searchCountEl.textContent = total ? (total + ' 处' + (total >= MAX_HITS ? '+' : '')) : '没有';
+  renderHits(hits);
+  setStatus(total
+    ? ('全书 ' + pdfPages + ' 页找到 ' + total + ' 处' + (scanned < pdfPages ? '（到上限，先扫到第 ' + scanned + ' 页）' : '') + ' · 点结果跳到命中处')
+    : ('全书 ' + pdfPages + ' 页里没有「' + pdfSearchTerm + '」'));
+}
+
+// ---------- 模式开关 ----------
+async function setFlowMode(on) {
+  const idx = currentIndex;
+  const ratio = scrollRatio();          // 在改 pref 之前按「旧模式」取章内位置
+  pref.flow = !!on;
+  if (pref.flow) { pref.paged = false; pref.spread = false; }
+  savePrefs();
+  syncModeUI();
+  if (isPdf) {
+    renderPdfPages();
+    if (pref.flow) gotoPdfPage(idx);
+    setStatus(pref.flow ? 'PDF 连续滚动：所有页依次排开，滚到哪儿读到哪儿' : 'PDF 回到按页翻');
+    return;
+  }
+  try { localStorage.setItem(POS_KEY + BOOK_ID, JSON.stringify({ chapter: idx, ratio: ratio, ts: Date.now() })); } catch (e) {}
+  await loadChapter(idx, { ratio: ratio, skipSave: true });
+}
+// 分页阅读：一页一屏，滚轮 / ↓ 翻下一页。开关只换「怎么摆」，不动正文内容。
+async function setPagedMode(on) {
+  if (isPdf) { setStatus('PDF 本身就是一页一页的原页；要并排看两页用「双页并排」'); return; }
+  const want = !!on;
+  const wasFlow = !!pref.flow;
+  const ratio = scrollRatio();
+  pref.paged = want;
+  if (want) pref.flow = false;
+  else pref.spread = false;             // 双页长在分页上，分页关了它也无处可依
+  savePrefs();
+  syncModeUI();
+  if (!pref.paged) {
+    applyIframePrefs();                 // 内部会把分页包装拆掉
+    setScrollRatio(ratio);
+    setStatus('已回到按章滚动');
+    return;
+  }
+  if (wasFlow) {
+    // 连续滚动的文档里接着好几章：不能直接在上面分页，得换回「单章一篇」
+    await loadChapter(currentIndex, { ratio: ratio });
+  } else {
+    pagedApply(false);
+    pagedGoPage(Math.round(clamp(ratio, 0, 1) * Math.max(0, paged.pages - 1)), { noAnim: true });
+  }
+  setStatus('分页阅读：一页一屏，滚轮 / ↓ 翻下一页');
+}
+async function setSpreadMode(on) {
+  const want = !!on;
+  if (isPdf) {
+    pref.spread = want;
+    savePrefs();
+    syncModeUI();
+    renderPdfPages();
+    if (pref.flow) gotoPdfPage(currentIndex);
+    setStatus(want ? '双页并排：左右两页一起看（封面单独占一行）' : '已回到单页');
+    return;
+  }
+  const wasFlow = !!pref.flow;
+  const ratio = scrollRatio();
+  pref.spread = want;
+  // 双页并排现在是「分页的两页」，不是「整章正文分两栏」：打开它必须先进分页态
+  if (want) { pref.paged = true; pref.flow = false; }
+  savePrefs();
+  syncModeUI();
+  if (!pref.paged) {                    // 原本就没分页，关的是个没打开的东西
+    setStatus('已回到单栏');
+    return;
+  }
+  if (wasFlow) {
+    await loadChapter(currentIndex, { ratio: ratio });
+  } else {
+    pagedApply(false);
+    pagedGoPage(Math.round(clamp(ratio, 0, 1) * Math.max(0, paged.pages - 1)), { noAnim: true });
+  }
+  setStatus(want
+    ? '双页并排：左右是紧挨着的两页，滚一下翻过去两页'
+    : '分页阅读：一页一屏，滚轮 / ↓ 翻下一页');
 }
 
 // ---- 章节 / 进度 / 笔记 动作 ----
 async function loadChapter(index, opts) {
   // 切章前先把「当前章读到哪」存下，别让翻章把上一章的位置冲掉
-  savePos();
+  if (!(opts && opts.skipSave)) savePos();
   let idx = Number(index);
   if (!isFinite(idx)) idx = 0;
   idx = Math.floor(idx);
   const max = Math.max(0, chapterCount - 1);
   if (idx < 0) idx = 0;
   if (idx > max) idx = max;
+  // V3.5：目录 / 上下章 / 书签 / 搜索命中 / 笔记回跳都汇到这一个入口，
+  // 由当前阅读方式决定是「换一页」「重建连续文档」还是「换一章 srcdoc」。
+  if (isPdf) { gotoPdfPage(idx); return; }
+  if (pref.flow) {
+    await loadFlow(idx, opts && typeof opts.ratio === 'number' ? opts.ratio : null);
+    return;
+  }
   const data = await domain('reading.readerChapter', [BOOK_ID, idx]);
   if (!data || data.ok === false) {
     setStatus('章节读取失败：' + ((data && data.reason) || '未知原因'));
@@ -1412,6 +2467,8 @@ async function loadChapter(index, opts) {
   chapterEnteredAt = Date.now();
   if (endCardTimer) { clearTimeout(endCardTimer); endCardTimer = null; }
   pendingRatio = (opts && typeof opts.ratio === 'number') ? clamp(opts.ratio, 0, 1) : null;
+  // 换 srcdoc 等于换整个文档：分页容器的引用随之作废，先清干净再挂新的
+  pagedReset();
   if (iframe) iframe.srcdoc = data.html || '';
   if (chapterTitleEl) chapterTitleEl.textContent = data.title || ('第 ' + (idx + 1) + ' 章');
   if (posEl) posEl.textContent = (idx + 1) + ' / ' + chapterCount;
@@ -1581,6 +2638,30 @@ function onKeyDown(e) {
   const t = e.target;
   const tag = t && t.tagName ? t.tagName.toUpperCase() : '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+  if (e.key === 'F11') {
+    e.preventDefault();
+    void setFullMode(!(appEl && appEl.getAttribute('data-full') === '1'));
+    return;
+  }
+  if (e.key === 'Escape' && appEl && appEl.getAttribute('data-full') === '1') {
+    void setFullMode(false);
+    return;
+  }
+  // 分页态：↓ / PageDown / 空格 翻下一页，↑ / PageUp 翻上一页（←/→ 仍是换章）
+  if (paged.on) {
+    // 焦点在按钮上时，空格是「按下这个按钮」，不能再拿去翻页
+    if (tag === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
+    if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      safeRun(function () { return pagedFlip(1); });
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+      e.preventDefault();
+      safeRun(function () { return pagedFlip(-1); });
+      return;
+    }
+  }
   if (e.key === 'ArrowLeft') {
     e.preventDefault();
     safeRun(function () { return loadChapter(currentIndex - 1); });
@@ -1613,21 +2694,45 @@ function colorLabel(c) {
 // ---- 精确位置：章 + 章内滚动比例 ----
 function scrollRatio() {
   try {
+    if (isPdf) return 0;
+    if (paged.on) return pagedRatio();
     const w = iframe.contentWindow;
     const d = iframe.contentDocument;
+    // 连续滚动时文档里接着好几十章，「全文比例」没有意义：位置必须是「当前章内」的。
+    if (pref.flow) {
+      const sec = currentFlowSection();
+      if (sec) return clamp((w.scrollY - sec.offsetTop) / Math.max(1, sec.offsetHeight), 0, 1);
+    }
     const max = Math.max(1, d.documentElement.scrollHeight - w.innerHeight);
     return clamp(w.scrollY / max, 0, 1);
   } catch (e) { return 0; }
 }
 function setScrollRatio(r) {
   try {
+    if (isPdf) return;
+    if (paged.on) {
+      pagedGoPage(clamp(r, 0, 1) * Math.max(0, paged.pages - 1), { noAnim: true });
+      return;
+    }
     const w = iframe.contentWindow;
     const d = iframe.contentDocument;
+    if (pref.flow) {
+      const sec = currentFlowSection();
+      if (sec) {
+        w.scrollTo(0, Math.max(0, sec.offsetTop + Math.max(1, sec.offsetHeight) * clamp(r, 0, 1) - 100));
+        return;
+      }
+    }
     const max = Math.max(0, d.documentElement.scrollHeight - w.innerHeight);
     w.scrollTo(0, max * clamp(r, 0, 1));
   } catch (e) {}
 }
 function savePos() {
+  // PDF 没有 iframe 正文：位置就是「第几页」，滚动时 onPdfScroll 已经按页写过了
+  if (isPdf) {
+    try { localStorage.setItem(POS_KEY + BOOK_ID, JSON.stringify({ chapter: currentIndex, ratio: 0, ts: Date.now() })); } catch (e) {}
+    return;
+  }
   if (!iframeReady) return; // 正文还没加载，别用「空页 + 第 0 章」覆盖真实位置
   try {
     const ratio = scrollRatio();
@@ -1674,6 +2779,10 @@ function changeZoom(delta) {
   pref.zoom = clamp(Math.round(((pref.zoom || 1) + delta) * 10) / 10, 0.8, 1.5);
   savePrefs();
   applyZoom();
+  // 版面比例变了，一页能装的字也变了：分页态必须重排（页码保持）
+  if (pref.paged && !isPdf) pagedApply(true);
+  // PDF 页是按容器宽度算的，缩放变了要重画可见页才清晰
+  if (isPdf) setTimeout(refreshPdfVisible, 60);
   setStatus('版面 ' + Math.round(pref.zoom * 100) + '%');
 }
 
@@ -1731,7 +2840,7 @@ async function loadBookmarks() {
   const list = await domain('reading.bookmarks', [BOOK_ID]);
   bookmarks = Array.isArray(list) ? list : [];
   renderBookmarks();
-  if (SRC && SRC.toc) renderToc(SRC.toc);
+  renderToc(currentToc());
 }
 function renderBookmarks() {
   if (!bmList) return;
@@ -1782,6 +2891,8 @@ async function jumpBookmark(bm) {
 async function doSearch() {
   const kw = ((searchInput && searchInput.value) || '').trim();
   if (!kw) { hideHits(); return; }
+  // PDF 的文字层只在解码器里，主进程搜不到：改由阅读窗逐页扫
+  if (isPdf && pdfDoc) { await pdfSearch(kw); return; }
   if (searchCountEl) searchCountEl.textContent = '查找中…';
   const r = await domain('reading.searchBook', [BOOK_ID, kw, 30]);
   if (!r || r.ok === false) {
@@ -1809,7 +2920,7 @@ function renderHits(hits) {
   hits.forEach(function (h) {
     const row = mk('div', 'rr-hit');
     row.setAttribute('data-chapter', String(h.chapterIndex));
-    row.appendChild(mk('span', 'rr-hit-ch', '第 ' + (h.chapterIndex + 1) + ' 节'));
+    row.appendChild(mk('span', 'rr-hit-ch', h.label || ('第 ' + (h.chapterIndex + 1) + ' 节')));
     row.appendChild(mk('span', 'rr-hit-text', h.snippet || ''));
     row.addEventListener('click', function () { safeRun(function () { return jumpHit(h); }); });
     hitsEl.appendChild(row);
@@ -1817,11 +2928,42 @@ function renderHits(hits) {
   hitsEl.style.display = 'block';
 }
 async function jumpHit(h) {
+  if (isPdf) { hideHits(); await jumpPdfHit(h); return; }
   await loadChapter(h.chapterIndex);
   const kw = ((searchInput && searchInput.value) || '').trim();
   hideHits();
   if (kw) setTimeout(function () { flashFind(kw); }, 120);
   setStatus('已跳到第 ' + (h.chapterIndex + 1) + ' 节');
+}
+// PDF：目标页可能是懒渲染的，先滚进视口等文本层长出来，再滚到命中那一段
+async function jumpPdfHit(h) {
+  const pageNo = Number(h.chapterIndex || 0) + 1;
+  gotoPdfPage(pageNo - 1);
+  if (pdfStage) {
+    const b0 = pdfStage.querySelector('.rr-pdf-page[data-page="' + pageNo + '"]');
+    if (b0) pdfStage.scrollTop = Math.max(0, b0.offsetTop - 16);
+  }
+  for (let i = 0; i < 25; i += 1) {
+    const b = pdfStage && pdfStage.querySelector('.rr-pdf-page[data-page="' + pageNo + '"]');
+    if (b && b.__pdfLayer && b.__pdfLayer.__spans && b.__pdfLayer.__spans.length) break;
+    if (b && b.dataset.done !== '1' && b.dataset.busy !== '1') {
+      b.dataset.done = '0';
+      void renderPdfPage(b, pageNo);
+    }
+    await new Promise(function (r) { setTimeout(r, 80); });
+  }
+  const box = pdfStage && pdfStage.querySelector('.rr-pdf-page[data-page="' + pageNo + '"]');
+  if (!box || !box.__pdfLayer) { setStatus('已跳到第 ' + pageNo + ' 页（这一页没有可提取的文字）'); return; }
+  const at = Number(h.start) || 0;
+  const sp = pdfSpansInRange(box, at, at + 1)[0] || box.__pdfLayer.__spans[0];
+  if (sp && pdfStage) {
+    pdfStage.scrollTop = Math.max(0, box.offsetTop + sp.offsetTop - 100);
+    const old = pdfStage.querySelectorAll('.rr-pdf-hit-on');
+    for (let i = 0; i < old.length; i += 1) old[i].classList.remove('rr-pdf-hit-on');
+    sp.classList.add('rr-pdf-hit-on');
+    setTimeout(function () { sp.classList.remove('rr-pdf-hit-on'); }, 2600);
+  }
+  setStatus('已跳到第 ' + pageNo + ' 页 · 命中处已点亮');
 }
 // 命中词临时点亮：只加一个 rr-find 高亮，1.8 秒后撤掉，不写进笔记
 // ---- 正文锚点：用「正文纯文本偏移」定位，不受字号/缩放/字体影响 ----
@@ -2002,7 +3144,47 @@ function resolveAnchor(map, n) {
   if (!r2) return null;
   return { range: r2, start: best.s0, end: best.s1, exact: false, chapter: ch };
 }
+// PDF 选区住在本窗口的文本层里，算偏移 / 定位都和 iframe 正文不是一套坐标
+function pdfOffsetAt(node, offset) {
+  const el = node && node.nodeType === 1 ? node : (node && node.parentNode);
+  const sp = el && el.closest ? el.closest('.rr-pdf-text span') : null;
+  if (!sp) return -1;
+  const base = Number(sp.getAttribute('data-off') || 0);
+  if (node.nodeType === 3) return base + offset;
+  return base + (offset > 0 ? Number(sp.getAttribute('data-len') || 0) : 0);
+}
+function currentPdfSelection() {
+  try {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentNode;
+    const layer = startEl && startEl.closest ? startEl.closest('.rr-pdf-text') : null;
+    if (!layer) return null;
+    const box = layer.closest ? layer.closest('.rr-pdf-page') : null;
+    if (!box) return null;
+    const text = String(sel.toString()).replace(/\s+/g, ' ').trim();
+    if (text.length < 2) return null;
+    const start = pdfOffsetAt(range.startContainer, range.startOffset);
+    const endEl = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentNode;
+    const endBox = endEl && endEl.closest ? endEl.closest('.rr-pdf-page') : null;
+    // 跨页划选：锚点只能落在一页里，尾端截到本页文本末尾
+    const end = (endBox === box) ? pdfOffsetAt(range.endContainer, range.endOffset)
+      : String(box.__pdfText || '').length;
+    if (start < 0 || end <= start) return null;
+    const full = String(box.__pdfText || '');
+    const pre = Array.from(full.slice(Math.max(0, start - 48), start).replace(/\s+/g, ' ').trim()).slice(-24).join('');
+    const suf = Array.from(full.slice(end, end + 48).replace(/\s+/g, ' ').trim()).slice(0, 24).join('');
+    return {
+      text: text, start: start, end: end, pre: pre, suf: suf,
+      chapter: Number(box.getAttribute('data-page')) - 1,
+      rect: range.getBoundingClientRect(), box: box,
+      spans: pdfSpansInRange(box, start, end)
+    };
+  } catch (e) { return null; }
+}
 function currentSelection() {
+  if (isPdf) return currentPdfSelection();
   try {
     const win = iframe.contentWindow;
     const doc = iframe.contentDocument;
@@ -2012,16 +3194,26 @@ function currentSelection() {
     const text = sel.toString().replace(/\s+/g, ' ').trim();
     if (text.length < 2) return null;
     const range = sel.getRangeAt(0);
-    const map = buildTextMap(doc.body);
-    const start = offsetAt(doc.body, range.startContainer, range.startOffset, map);
-    const end = offsetAt(doc.body, range.endContainer, range.endOffset, map);
+    // 连续滚动下按「当前章 section」建表，锚点偏移才和笔记里记的章内偏移对得上
+    const root = mapRoot();
+    if (!root) return null;
+    const map = buildTextMap(root);
+    const start = offsetAt(root, range.startContainer, range.startOffset, map);
+    const end = offsetAt(root, range.endContainer, range.endOffset, map);
     if (start < 0 || end <= start) return null;
+    let chapter = currentIndex;
+    if (pref.flow && !isPdf) {
+      const node = range.startContainer;
+      const el = node.nodeType === 1 ? node : node.parentNode;
+      const sec = el && el.closest ? el.closest('.rr-flow-ch') : null;
+      if (sec) chapter = Number(sec.getAttribute('data-ch'));
+    }
     // 前后文各取 24 个非空白字符：偏移失准时靠这两段把这一句从全章里认回来
     const preRaw = map ? normWs(map.text.slice(Math.max(0, start - 48), start)) : '';
     const sufRaw = map ? normWs(map.text.slice(end, end + 48)) : '';
     const pre = Array.from(preRaw).slice(-24).join('');
     const suf = Array.from(sufRaw).slice(0, 24).join('');
-    return { text: text, start: start, end: end, pre: pre, suf: suf, rect: range.getBoundingClientRect() };
+    return { text: text, start: start, end: end, pre: pre, suf: suf, chapter: chapter, rect: range.getBoundingClientRect() };
   } catch (e) { return null; }
 }
 function hideSelBar() {
@@ -2033,16 +3225,23 @@ function captureSelection() {
   if (!s || !selBar || !stageEl) { hideSelBar(); return; }
   selCache = s;
   const stageRect = stageEl.getBoundingClientRect();
-  const frameRect = iframe.getBoundingClientRect();
   selBar.style.display = 'flex';
+  // PDF 文本层住在本窗口，Range 的 rect 已经是视口坐标；iframe 正文的 rect
+  // 才是相对 iframe 的，要补上 iframe 左上角的偏移。两套坐标不能混。
+  let x, y;
+  if (isPdf) {
+    x = s.rect.left - stageRect.left;
+    y = s.rect.top - stageRect.top;
+  } else {
+    const frameRect = iframe.getBoundingClientRect();
+    x = frameRect.left - stageRect.left + s.rect.left;
+    y = frameRect.top - stageRect.top + s.rect.top;
+  }
   // 工具条现在多带了「重述 / 连接 / 行动」三个快捷入口，宽度得实测后再夹住，
   // 不能再按写死的 330px 算——否则贴右边划选时按钮会压出正文区。
   const bw = selBar.offsetWidth || 330;
-  const left = clamp(frameRect.left - stageRect.left + s.rect.left, 6,
-    Math.max(6, stageRect.width - bw - 6));
-  const top = Math.max(4, frameRect.top - stageRect.top + s.rect.top - 44);
-  selBar.style.left = left + 'px';
-  selBar.style.top = top + 'px';
+  selBar.style.left = clamp(x, 6, Math.max(6, stageRect.width - bw - 6)) + 'px';
+  selBar.style.top = Math.max(4, y - 44) + 'px';
 }
 function onMarkClick(e) {
   const btn = e.target && e.target.closest ? e.target.closest('button[data-color]') : null;
@@ -2052,6 +3251,10 @@ function onMarkClick(e) {
 function onSelBarClick(e) {
   const btn = e.target && e.target.closest ? e.target.closest('button') : null;
   if (!btn) return;
+  // 「复制 / 摘录」是 V3.17 给 PDF 加的两条最短路：把划选的原文带出去或带进笔记
+  const act = btn.getAttribute('data-act');
+  if (act === 'copy') { void copySelectionText(); return; }
+  if (act === 'quote') { safeRun(saveQuoteFromSelection); return; }
   // 快捷问：把这一句直接带进读中三问（Q4 重述 / Q5 连接 / Q6 行动）
   const ask = btn.getAttribute('data-ask');
   if (ask !== null) {
@@ -2074,10 +3277,75 @@ function onSelBarClick(e) {
   });
 }
 
+function clearReaderSelection() {
+  try {
+    // PDF 的选区在本窗口的文本层，iframe 那句 removeAllRanges 对它无效
+    if (isPdf) window.getSelection().removeAllRanges();
+    else iframe.contentWindow.getSelection().removeAllRanges();
+  } catch (e) {}
+}
+// 复制划选原文：优先走 clipboard API，file:// 下被拦就用 execCommand 兜底
+async function copySelectionText() {
+  const s = selCache || currentSelection();
+  if (!s) { setStatus('先划选一段文字，再点复制'); return; }
+  const text = String(s.text || '');
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) {}
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+  }
+  hideSelBar();
+  clearReaderSelection();
+  setStatus(ok ? ('已复制 ' + text.length + ' 个字' + (isPdf ? '（PDF 原文）' : ''))
+    : '复制被系统拦下，请用 Ctrl+C');
+}
+// 摘录：只把原文与页内锚点存进笔记，不在页面上涂色（要涂色用颜色按钮）
+async function saveQuoteFromSelection() {
+  const s = selCache || currentSelection();
+  if (!s) { setStatus('先划选一句，再摘录'); return; }
+  const ch = (typeof s.chapter === 'number' && isFinite(s.chapter)) ? s.chapter : currentIndex;
+  const patch = {
+    mode: (BOOK && BOOK.mode) || MODE,
+    bookId: BOOK_ID,
+    themeId: (BOOK && BOOK.themeId) || '',
+    bookTitle: (BOOK && BOOK.bookTitle) || (BOOK && BOOK.title) || '',
+    type: 'quote',
+    quote: String(s.text).slice(0, 500),
+    text: '',
+    page: isPdf ? ch + 1 : 0,
+    tags: [],
+    chapterId: 'ch-' + ch,
+    anchor: ch + ':' + s.start + '-' + s.end,
+    anchorPre: s.pre || '',
+    anchorSuf: s.suf || '',
+    color: '',
+    style: 'quote'
+  };
+  await domain('reading.addNote', [patch]);
+  hideSelBar();
+  clearReaderSelection();
+  await refreshNotes();
+  setStatus('已摘录进读书笔记 · 第 ' + (ch + 1) + ' 页 · ' + patch.quote.length + ' 字');
+}
+
 // 划选 → 直接落一条带锚点的标注：正文里画出来，右栏也有一条
 async function applyMark(opts) {
   const s = selCache || currentSelection();
   if (!s) { setStatus('先在正文里划选一段文字，再点颜色'); return; }
+  // 连续滚动时选区可能落在后面已追加的章，笔记要记在那一章，不能一律算当前章
+  const ch = (typeof s.chapter === 'number' && isFinite(s.chapter)) ? s.chapter : currentIndex;
   const style = (opts && opts.style) || 'highlight';
   const color = style === 'highlight' ? ((opts && opts.color) || 'yellow') : '';
   const patch = {
@@ -2090,8 +3358,8 @@ async function applyMark(opts) {
     text: '',
     page: 0,
     tags: [],
-    chapterId: 'ch-' + currentIndex,
-    anchor: currentIndex + ':' + s.start + '-' + s.end,
+    chapterId: 'ch-' + ch,
+    anchor: ch + ':' + s.start + '-' + s.end,
     anchorPre: s.pre || '',
     anchorSuf: s.suf || '',
     color: color,
@@ -2099,7 +3367,7 @@ async function applyMark(opts) {
   };
   await domain('reading.addNote', [patch]);
   hideSelBar();
-  try { iframe.contentWindow.getSelection().removeAllRanges(); } catch (e) {}
+  clearReaderSelection();
   await refreshNotes();
   applyHighlights();
   // T5：划选之后立刻给存量反馈——「这是这本书的第几句」比「已保存」有感觉得多
@@ -2225,6 +3493,28 @@ const TYPO_CSS =
   'body.rr-typo[data-typeface="kai"] h1,body.rr-typo[data-typeface="kai"] h2,body.rr-typo[data-typeface="kai"] h3{' +
   'font-family:KaiTi,"Kaiti SC",serif;font-weight:700;}';
 
+// 本机字体：族名是运行期才知道的，固定 TYPO_CSS 里写不进规则，
+// 于是单独挂一张 <style id="rr-device-font">，换字就重写这张表（不重排正文，只重算字形）。
+// 族名里可能带空格与括号（如「思源宋体 CN」），一律用双引号包起来；
+// 引号与反斜杠先剔掉，避免把 CSS 规则提前闭合。
+function applyDeviceFont(doc) {
+  if (!doc || !doc.head) return;
+  let st = doc.getElementById('rr-device-font');
+  if (!st) {
+    st = doc.createElement('style');
+    st.id = 'rr-device-font';
+    doc.head.appendChild(st);
+  }
+  const fam = String(pref.family || '').replace(/["'\\]/g, '').trim();
+  if (pref.typeface !== 'device' || !fam) { st.textContent = ''; return; }
+  st.textContent =
+    'body.rr-typo[data-typeface="device"]{font-family:"' + fam + '",serif;}' +
+    'body.rr-typo[data-typeface="device"] h1,body.rr-typo[data-typeface="device"] h2,' +
+    'body.rr-typo[data-typeface="device"] h3,body.rr-typo[data-typeface="device"] h4,' +
+    'body.rr-typo[data-typeface="device"] h5,body.rr-typo[data-typeface="device"] h6{' +
+    'font-family:"' + fam + '",serif;font-weight:700;}';
+}
+
 function injectReaderCss(doc) {
   if (!doc || !doc.head) return;
   if (!doc.getElementById('rr-hl-css')) {
@@ -2245,6 +3535,7 @@ function injectReaderCss(doc) {
   if (doc.body) {
     doc.body.classList.add('rr-typo');
     doc.body.setAttribute('data-typeface', pref.typeface || 'mixed');
+    applyDeviceFont(doc);
   }
 }
 
@@ -2255,7 +3546,70 @@ function applyTypeface() {
     injectReaderCss(doc);
     doc.body.classList.add('rr-typo');
     doc.body.setAttribute('data-typeface', pref.typeface || 'mixed');
+    applyDeviceFont(doc);
   } catch (e) {}
+}
+
+// ---- 本机字体清单（只在用到时读一次）----
+// 主进程走的是「直接解析字体文件 name 表」，不是 PowerShell + GDI：
+// 不 spawn 进程、不经控制台代码页，中文族名不会变成问号。
+// 253 个族名一次读齐约 0.8 秒（之后主进程内有缓存），所以只在真要挑字体时付这笔钱。
+const SYS_PREFIX = 'sys:';
+let fontListCache = null;
+let fontLoading = false;
+
+async function loadSystemFonts() {
+  if (fontListCache) return fontListCache;
+  if (fontLoading) return null;
+  fontLoading = true;
+  try {
+    const list = await domain('reading.systemFonts', []);
+    fontListCache = Array.isArray(list) ? list : [];
+  } catch (e) {
+    fontListCache = [];
+  } finally {
+    fontLoading = false;
+  }
+  return fontListCache;
+}
+
+// 把族名塞进「本机已装字体」这个 optgroup，值统一 sys: 前缀，
+// 免得某个字体恰好叫 mixed / serif 时与固定方案撞键。
+function fillSystemFonts(list) {
+  if (!sysFontGroup) return;
+  sysFontGroup.textContent = '';
+  list.forEach(function (name) {
+    const o = document.createElement('option');
+    o.value = SYS_PREFIX + name;
+    o.textContent = name;
+    sysFontGroup.appendChild(o);
+  });
+  if (pref.typeface !== 'device') return;
+  if (pref.family && list.indexOf(pref.family) >= 0) {
+    typefaceSel.value = SYS_PREFIX + pref.family;
+    return;
+  }
+  // 上次用的字体被卸载了：退回混排并说明，不要留一个选不中的下拉项
+  pref.typeface = 'mixed';
+  pref.family = '';
+  savePrefs();
+  typefaceSel.value = 'mixed';
+  applyTypeface();
+  setStatus('上次用的本机字体已不在系统里，字体方案回到混排');
+}
+
+let sysFontsLoading = false;
+async function ensureSystemFonts() {
+  if (fontListCache) return fontListCache;
+  if (sysFontsLoading) return null;
+  sysFontsLoading = true;
+  try {
+    const list = await loadSystemFonts();
+    if (list) fillSystemFonts(list);
+    return list;
+  } finally {
+    sysFontsLoading = false;
+  }
 }
 
 // 标点挤压（text-spacing-trim）与中西文间距（text-spacing）是 CSS Text L4 的实验特性，
@@ -2307,17 +3661,20 @@ function applyPunct() {
 // "parameter 1 is not of type 'AbstractRange'"，而 DOM 包裹不受 realm 限制。
 function applyHighlights() {
   try {
+    if (isPdf) { paintPdfMarks(); return; } // V3.17：标注改画在透明文本层上
     const doc = iframe && iframe.contentDocument;
     if (!doc || !doc.body) return;
     injectReaderCss(doc);
-    clearMarks(doc);
-    // 一张文本表管住全章：200 条笔记不会各建一遍（建表要遍历整章的文本节点）
-    const map = buildTextMap(doc.body);
+    const root = mapRoot();
+    if (!root) return;
+    clearMarks(root);
+    // 一张文本表管住全章：200 条笔记不会各建一遍（连续滚动时只管当前章这一节）
+    const map = buildTextMap(root);
     let miss = 0;
     let painted = 0;
     let healed = 0;
     chapterNotes.forEach(function (n) {
-      if (!n.anchor || !n.style) return;
+      if (!n.anchor || !n.style || n.style === 'quote') return;
       const hit = resolveAnchor(map, n);
       if (!hit || hit.chapter !== currentIndex) return;
       if (!hit.exact) healed += 1;
@@ -2335,10 +3692,13 @@ function applyHighlights() {
 // 命中词临时点亮：只加一个 rr-find，1.8 秒后撤掉，不写进笔记
 function flashFind(kw) {
   try {
+    if (isPdf) return; // PDF 页是画布，命中词靠搜索列表跳页，不画临时高亮
     const doc = iframe && iframe.contentDocument;
     if (!doc || !doc.body) return;
     injectReaderCss(doc);
-    const map = buildTextMap(doc.body);
+    const root = mapRoot();
+    if (!root) return;
+    const map = buildTextMap(root);
     if (!map) return;
     const text = map.text;
     const word = String(kw);
@@ -2350,7 +3710,8 @@ function flashFind(kw) {
     if (!r) return;
     const mark = wrapRange(doc, r, 'rr-mark rr-find');
     if (!mark) return;
-    mark.scrollIntoView({ block: 'center' });
+    // 分页态 scrollIntoView 不生效（正文不滚），得翻到它所在的那一页
+    if (!pagedReveal(mark)) mark.scrollIntoView({ block: 'center' });
     setTimeout(function () { unwrapMark(mark); }, 1800);
   } catch (e) {}
 }
@@ -2359,16 +3720,36 @@ async function gotoNote(n) {
   const m = ANCHOR_RE.exec(n.anchor || '');
   if (!m) { setStatus('这条笔记没有正文位置'); return; }
   const idx = Number(m[1]);
-  if (idx !== currentIndex) await loadChapter(idx);
+  if (isPdf) {
+    await loadChapter(idx);
+    setStatus('已跳到第 ' + (idx + 1) + ' 页（PDF 是原页画布，不画句级高亮）');
+    return;
+  }
+  if (pref.flow) {
+    // 目标章已经接在文档里就直接滚过去，不必重建整篇把别章的阅读位置冲掉
+    const cur = iframe && iframe.contentDocument;
+    const sec = cur && cur.querySelector('.rr-flow-ch[data-ch="' + idx + '"]');
+    if (sec) {
+      setActiveChapter(idx);
+      iframe.contentWindow.scrollTo(0, Math.max(0, sec.offsetTop - 40));
+    } else {
+      await loadChapter(idx);
+    }
+  } else if (idx !== currentIndex) {
+    await loadChapter(idx);
+  }
   setTimeout(function () {
     try {
       const doc = iframe.contentDocument;
       const win = iframe.contentWindow;
-      const map = buildTextMap(doc.body);
+      const root = mapRoot();
+      if (!root) return;
+      const map = buildTextMap(root);
       const hit = resolveAnchor(map, n);
       if (!hit) { setStatus('原文这一句已经不在了，可能换过文件或删过章节'); return; }
       const rect = hit.range.getBoundingClientRect();
-      win.scrollTo(0, Math.max(0, win.scrollY + rect.top - 120));
+      // 分页态优先翻页定位；没进分页（或还没量好页）才退回滚动定位
+      if (!pagedReveal(hit.range)) win.scrollTo(0, Math.max(0, win.scrollY + rect.top - 120));
       const flash = wrapRange(doc, hit.range, 'rr-mark rr-find');
       if (flash) setTimeout(function () { unwrapMark(flash); }, 1600);
       setStatus(hit.exact ? '已回到原文' : '位置已按原文内容重新对上');
@@ -2395,9 +3776,14 @@ function bindIframeEvents() {
     const win = iframe.contentWindow;
     win.addEventListener('scroll', function () {
       updateProgress();                       // 本章百分比要跟着滚动走，不能只在切章时变
+      // 连续滚动：滚过章边界就换「当前章」（目录 / 笔记 / 标注跟着切），滚到底追加下一章
+      if (pref.flow) onFlowScroll();
       if (scrollTimer) clearTimeout(scrollTimer);
       scrollTimer = setTimeout(savePos, 400);
     });
+    // 分页态：正文自己不滚，滚轮就是翻页；一定要 passive:false，否则拦不住默认滚动
+    win.addEventListener('wheel', onPagedWheel, { passive: false });
+    doc.addEventListener('keydown', onPagedKey, true);
 
   } catch (e) {}
 }
@@ -2420,6 +3806,17 @@ function onIframeLoad() {
   applyHighlights();
   // 短章节一屏就到底，scroll 事件可能永不触发：加载完直接算一次进度，该出卡就出卡
   setTimeout(function () { updateProgress(); }, 150);
+  // EPUB 自带 @font-face 时，字到位后行宽会变、断页位置跟着变：字体就绪再排一次
+  try {
+    const d = iframe.contentDocument;
+    if (pref.paged && !isPdf && d && d.fonts && d.fonts.ready) {
+      d.fonts.ready.then(function () { schedulePagedRebuild(); }).catch(function () {});
+    }
+  } catch (e) {}
+  // 连续滚动先垫一章：短章节打开就见底时，不用等用户先滚一下才补内容
+  if (pref.flow && !isPdf && flowChapters.length === 1) {
+    setTimeout(function () { void appendFlowChapter(flowChapters[0].index + 1); }, 90);
+  }
 }
 
 function onStyleFilterClick(e) {
@@ -2438,8 +3835,35 @@ function onStyleFilterClick(e) {
 }
 
 function bindEvents() {
-  if (prevBtn) prevBtn.addEventListener('click', function () { safeRun(function () { return loadChapter(currentIndex - 1); }); });
-  if (nextBtn) nextBtn.addEventListener('click', function () { safeRun(function () { return loadChapter(currentIndex + 1); }); });
+  // 双页并排按「一摊开」翻两页；连续滚动时逐页滚动，仍走同一个 loadChapter 入口
+  function pageStep() { return (isPdf && pref.spread && !pref.flow) ? 2 : 1; }
+  if (prevBtn) prevBtn.addEventListener('click', function () { safeRun(function () { return loadChapter(currentIndex - pageStep()); }); });
+  if (nextBtn) nextBtn.addEventListener('click', function () { safeRun(function () { return loadChapter(currentIndex + pageStep()); }); });
+  if (flowBtn) flowBtn.addEventListener('click', function () { safeRun(function () { return setFlowMode(!pref.flow); }); });
+  if (pagedBtn) pagedBtn.addEventListener('click', function () {
+    safeRun(function () { return setPagedMode(!(pref.paged && !pref.spread)); });
+  });
+  if (spreadBtn) spreadBtn.addEventListener('click', function () { safeRun(function () { return setSpreadMode(!pref.spread); }); });
+  // 页码两侧的 ‹ ›（只有分页态才渲染），事件委托到容器，翻页时不用重挂
+  if (modePagesEl) {
+    modePagesEl.addEventListener('click', function (e) {
+      const b = e.target && e.target.closest ? e.target.closest('.rr-pg-btn') : null;
+      if (!b) return;
+      safeRun(function () { return pagedFlip(Number(b.getAttribute('data-pg')) || 1); });
+    });
+  }
+  // 窗口 / 侧栏拖动 / 全屏都会改正文宽度：分页态要重排页，否则一页里装多装少都错
+  if (iframe && typeof ResizeObserver === 'function') {
+    try {
+      const ro = new ResizeObserver(function () { schedulePagedRebuild(); });
+      ro.observe(iframe);
+    } catch (e) {}
+  }
+  function isFull() { return !!(appEl && appEl.getAttribute('data-full') === '1'); }
+  if (fullBtn) fullBtn.addEventListener('click', function () { void setFullMode(!isFull()); });
+  if (fullExitBtn) fullExitBtn.addEventListener('click', function () { void setFullMode(false); });
+  // 用户按 Esc / F11 由浏览器退出全屏时，UI 也要跟着收起（不用 IPC）
+  document.addEventListener('fullscreenchange', function () { setFullUI(!!document.fullscreenElement); });
   if (syncBtn) syncBtn.addEventListener('click', function () { safeRun(syncProgress); });
   if (fontMinusBtn) fontMinusBtn.addEventListener('click', function () { changeFont(-1); });
   if (fontPlusBtn) fontPlusBtn.addEventListener('click', function () { changeFont(1); });
@@ -2511,6 +3935,7 @@ function bindEvents() {
       pref.punct = !pref.punct;
       savePrefs();
       applyPunct();
+      afterMetricsChange();
       setStatus(pref.punct
         ? ('标点挤压已开（' + punctTrimValue() + '）：行首标点收窄，字距不再被拉松' +
            (supportsCjkLatinSpacing() ? '；中西文间补 ¼ 空隙' : ''))
@@ -2518,14 +3943,34 @@ function bindEvents() {
     });
   }
   if (typefaceSel) {
-    typefaceSel.value = pref.typeface || 'mixed';
+    typefaceSel.value = (pref.typeface === 'device' && pref.family) ? (SYS_PREFIX + pref.family) : (pref.typeface || 'mixed');
+    // 第一次要挑字体时才去读清单：不选本机字体的人，不该为这个功能等 0.8 秒
+    const ensure = function () { void ensureSystemFonts(); };
+    typefaceSel.addEventListener('pointerdown', ensure, { once: true });
+    typefaceSel.addEventListener('focus', ensure, { once: true });
     typefaceSel.addEventListener('change', function () {
-      const v = typefaceSel.value;
+      const v = typefaceSel.value || '';
+      // 本机字体：值形如 sys:仿宋，族名原样带给样式表
+      if (v.indexOf(SYS_PREFIX) === 0) {
+        pref.typeface = 'device';
+        pref.family = v.slice(SYS_PREFIX.length);
+        savePrefs();
+        applyTypeface();
+        afterMetricsChange();
+        setStatus('字体：本机「' + pref.family + '」（正文与标题都用这一种）');
+        return;
+      }
       pref.typeface = (['mixed', 'serif', 'sans', 'kai'].indexOf(v) >= 0) ? v : 'mixed';
       savePrefs();
       applyTypeface();
-      setStatus('字体方案：' + (pref.typeface === 'mixed' ? '混排（宋体正文 / 黑体标题）' : pref.typeface === 'serif' ? '全宋体' : pref.typeface === 'sans' ? '全黑体' : '全楷体'));
+      afterMetricsChange();
+      setStatus('字体方案：' + (pref.typeface === 'mixed' ? '混排（宋体正文 / 黑体标题）'
+        : pref.typeface === 'serif' ? '全宋体'
+        : pref.typeface === 'sans' ? '全黑体'
+        : '全楷体'));
     });
+    // 上次关窗时选的就是本机字体：这次开书要把清单补上，否则下拉框里没有这一项
+    if (pref.typeface === 'device') void ensureSystemFonts();
   }
   if (zoomInBtn) zoomInBtn.addEventListener('click', function () { changeZoom(0.1); });
   if (zoomOutBtn) zoomOutBtn.addEventListener('click', function () { changeZoom(-0.1); });
@@ -2538,6 +3983,36 @@ function bindEvents() {
     selBar.addEventListener('mousedown', function (e) { e.preventDefault(); });
     selBar.addEventListener('click', onSelBarClick);
   }
+  // PDF 的选区住在本窗口（不是 iframe），得在主文档上另挂一套监听
+  document.addEventListener('mouseup', function (e) {
+    if (!isPdf) return;
+    const s = currentPdfSelection();
+    if (s) { selCache = s; setTimeout(captureSelection, 10); return; }
+    // 点工具栏按钮时选区会被浏览器收起，但 selCache 必须留住，否则「点颜色」存不了笔记
+    const onControl = e.target && e.target.closest && e.target.closest('.rr-selbar, .rr-toolbar, .rr-top, .rr-modes, .rr-search, .rr-right');
+    if (!onControl) hideSelBar();
+  });
+  document.addEventListener('keyup', function (e) {
+    if (!isPdf) return;
+    if (e.shiftKey || e.key === 'Shift') setTimeout(captureSelection, 10);
+  });
+  document.addEventListener('contextmenu', function (e) {
+    if (!isPdf) return;
+    const s = currentPdfSelection();
+    if (!s) return;
+    e.preventDefault();
+    selCache = s;
+    captureSelection();
+  });
+  // Ctrl/Cmd+F 直接落到书内搜索框；PDF 的浏览器原生查找对 canvas 无效
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      if (!searchInput) return;
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
   if (q9Tabs) q9Tabs.addEventListener('click', onQ9TabClick);
   if (q9List) {
     q9List.addEventListener('click', onQ9ListClick);
@@ -2582,11 +4057,16 @@ async function openBook() {
   setProgressText(BOOK.done, BOOK.total);
 
   renderLeft();
-  renderToc(SRC.toc || []);
+  isPdf = SRC.kind === 'pdf';
+  renderToc(currentToc());
 
   const savedPos = readPos();
   const start = savedPos ? savedPos.chapter : readChapterPref();
-  if (SRC.supported === false) {
+  if (isPdf) {
+    hideUnsupported();
+    syncModeUI();
+    await initPdf();                 // 页数、目录、笔记、书签、状态都在里面
+  } else if (SRC.supported === false) {
     showUnsupported(SRC.reason || '该格式暂不支持解析');
     currentIndex = clamp(start, 0, Math.max(0, chapterCount - 1));
     if (chapterTitleEl) chapterTitleEl.textContent = '暂不支持预览';
@@ -2594,11 +4074,14 @@ async function openBook() {
     highlightToc(currentIndex);
   } else {
     hideUnsupported();
+    syncModeUI();
     await loadChapter(start, savedPos ? { ratio: savedPos.ratio } : null);
   }
-  await refreshNotes();
-  await loadBookmarks();
-  setStatus('已打开《' + (BOOK.title || '') + '》');
+  if (!isPdf) {
+    await refreshNotes();
+    await loadBookmarks();
+    setStatus('已打开《' + (BOOK.title || '') + '》');
+  }
   // 位置已经自动跳好了，引导条只是把「你在哪、隔了多久」说清楚
   if (savedPos) setTimeout(function () { showResumeBar(savedPos); }, 600);
   initAsk();
@@ -2611,6 +4094,11 @@ async function init() {
   switchLeftTab('toc');
   updateChrome();
   bindEvents();
+  syncModeUI();
+  // PDF 画布得跟着「窗口宽」和「屏幕像素密度」走：它没有矢量文本，
+  // 一旦被 CSS 拉伸就只剩重采样的糊字
+  window.addEventListener('resize', onPdfLayoutChange);
+  watchPdfDpr();
   try { await openBook(); } catch (e) { showError(e); }
   subscribeDataChanged();
 }

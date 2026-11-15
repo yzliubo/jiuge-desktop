@@ -199,15 +199,15 @@ watch(() => [props.date, props.tick], load);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
 }
-.wt-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.wt-head { display: flex; align-items: baseline; gap: 10px; font-size: var(--text-sm); }
 .wt-total { color: var(--surface-muted); }
-.wt-total b { color: var(--palette-primary); font-size: 14px; font-variant-numeric: tabular-nums; }
-.wt-sub { color: var(--surface-muted); font-size: 11px; }
+.wt-total b { color: var(--palette-primary); font-size: var(--text-h2); font-variant-numeric: tabular-nums; }
+.wt-sub { color: var(--surface-muted); font-size: var(--text-xs); }
 .wt-un { color: var(--state-warn); font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; }
 .wt-act {
   border: 0.5px solid var(--palette-border); background: transparent; color: var(--palette-primary);
-  border-radius: var(--radius-sm); font-size: 11px; padding: 2px 8px; line-height: 16px;
+  border-radius: var(--radius-sm); font-size: var(--text-xs); padding: 2px 8px; line-height: 16px;
 }
 .wt-act:disabled { opacity: 0.5; }
 .wt-band { display: flex; height: 14px; border-radius: 3px; overflow: hidden; background: var(--palette-soft); }
@@ -216,14 +216,14 @@ watch(() => [props.date, props.tick], load);
 .wt-seg-on { background: var(--palette-primary); opacity: 0.72; cursor: pointer; }
 .wt-seg-on[data-cell='未归类'] { background: var(--surface-muted); opacity: 0.5; }
 .wt-seg-pick { outline: 1px solid var(--palette-accent); outline-offset: -1px; }
-.wt-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--surface-muted); }
+.wt-axis { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--surface-muted); }
 .wt-pop {
-  display: flex; align-items: center; gap: 8px; font-size: 11px;
+  display: flex; align-items: center; gap: 8px; font-size: var(--text-xs);
   padding: 4px 6px; border-radius: var(--radius-sm); background: var(--palette-soft);
 }
 .wt-pop-t { font-variant-numeric: tabular-nums; color: var(--palette-primary); }
 .wt-pop-a { color: var(--surface-muted); }
 .wt-pop-l { color: var(--palette-accent); }
-.wt-err { margin: 0; font-size: 11px; color: var(--state-warn); }
+.wt-err { margin: 0; font-size: var(--text-xs); color: var(--state-warn); }
 .wt-code { color: var(--surface-muted); }
 </style>

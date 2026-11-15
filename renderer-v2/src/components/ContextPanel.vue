@@ -11,6 +11,7 @@
 import { computed } from 'vue';
 import type { DiaryRecord, ViewKey } from '../types';
 import { GRID_LABELS } from '../types';
+import { useWritingCheck } from '../composables/useWritingCheck';
 import TodayContext from './context/TodayContext.vue';
 import TodayOptions from './context/TodayOptions.vue';
 import WorkContext from './context/WorkContext.vue';
@@ -20,6 +21,7 @@ import InsightContext from './context/InsightContext.vue';
 import TimelineContext from './context/TimelineContext.vue';
 import ReviewContext from './context/ReviewContext.vue';
 import CapsuleContext from './context/CapsuleContext.vue';
+import WritingContext from './context/WritingContext.vue';
 import HabitContext from './context/HabitContext.vue';
 import DreamContext from './context/DreamContext.vue';
 import DataContext from './context/DataContext.vue';
@@ -27,6 +29,7 @@ import BinContext from './context/BinContext.vue';
 import InspireContext from './context/InspireContext.vue';
 import ReadingContext from './context/ReadingContext.vue';
 import FinanceContext from './context/FinanceContext.vue';
+import ExploreContext from './context/ExploreContext.vue';
 import SettingsContext from './context/SettingsContext.vue';
 
 const props = defineProps<{
@@ -79,10 +82,14 @@ const headTitle = computed(() => {
 });
 
 const headHint = computed(() => HINTS[props.view] || '');
+
+// 写作法体检的统计卡已从中栏搬到右栏：只有中栏停在「③ 长文撰写」时才挂上来，
+// 切到胶囊 / 闪念两 tab 就收回去（右栏是本页的上下文，不是常驻仪表盘）。
+const { active: writingActive } = useWritingCheck();
 </script>
 
 <template>
-  <aside class="context" aria-label="上下文面板" :data-context="view">
+  <aside id="rail-drawer" class="context" aria-label="上下文面板" :data-context="view">
     <div class="ctx-head">
       <h2 class="ctx-head-title">{{ headTitle }}</h2>
       <p v-if="headHint" class="ctx-head-hint">{{ headHint }}</p>
@@ -121,6 +128,7 @@ const headHint = computed(() => HINTS[props.view] || '');
       @select-item="emit('select-item', $event)"
       @changed="emit('changed')"
       @notify="emit('notify', $event)"
+      @navigate="emit('navigate', $event)"
     />
     <CellContext
       v-else-if="view === 'cell'"
@@ -138,11 +146,15 @@ const headHint = computed(() => HINTS[props.view] || '');
       @navigate="emit('navigate', $event)"
     />
     <TimelineContext v-else-if="view === 'timeline'" @navigate="emit('navigate', $event)" />
-    <ReviewContext v-else-if="view === 'review'" @navigate="emit('navigate', $event)" />
+    <ReviewContext v-else-if="view === 'review'" :tick="tick" @navigate="emit('navigate', $event)" />
     <!-- 胶囊降级后右栏上下文留在「自由记录」页（三 tab 的①就是胶囊收录），
          三组计数与「不泄露未开启正文」的老口径原样保留（GUI #94） -->
     <CapsuleContext v-else-if="view === 'capsule'" @navigate="emit('navigate', $event)" />
-    <CapsuleContext v-else-if="view === 'free'" @navigate="emit('navigate', $event)" />
+    <!-- 自由记录页：长文撰写时右栏先给「写作法」，下面仍是胶囊三组计数（切 tab 即换） -->
+    <template v-else-if="view === 'free'">
+      <WritingContext v-if="writingActive" />
+      <CapsuleContext @navigate="emit('navigate', $event)" />
+    </template>
     <HabitContext v-else-if="view === 'habit'" @navigate="emit('navigate', $event)" />
     <!-- 梦想：顶部常驻图片窗 + 选中那条的量化 / 账户 / 日期与总结（可写，只写选中的一条） -->
     <DreamContext
@@ -167,6 +179,14 @@ const headHint = computed(() => HINTS[props.view] || '');
       :today="today"
       :tick="tick"
     />
+    <!-- T17：时间纵深 / 内容连接 / 关系经营 / 长期形状 原来都掉进 SettingsContext 的
+         通用兜底，右栏只有「当前配置 + 数据与合规」两张与页面无关的卡，白占 300px。
+         现在按页换成真实数据（只读 + 每行可跳转），正文仍只在主栏写。 -->
+    <ExploreContext
+      v-else-if="view === 'life' || view === 'relation' || view === 'connect' || view === 'long'"
+      :view="view"
+      @navigate="emit('navigate', $event)"
+    />
     <SettingsContext v-else @navigate="emit('navigate', $event)" />
   </aside>
 </template>
@@ -185,8 +205,8 @@ const headHint = computed(() => HINTS[props.view] || '');
   overflow: auto;
 }
 .ctx-head { padding: 0 2px; }
-.ctx-head-title { font-size: 12px; font-weight: 500; margin: 0; color: var(--surface-text); }
-.ctx-head-hint { font-size: 11px; color: var(--surface-muted); margin: 2px 0 0; line-height: 1.5; }
+.ctx-head-title { font-size: var(--text-sm); font-weight: 500; margin: 0; color: var(--surface-text); }
+.ctx-head-hint { font-size: var(--text-xs); color: var(--surface-muted); margin: 2px 0 0; line-height: 1.5; }
 
 .ctx-card {
   padding: var(--space-2);
@@ -198,7 +218,7 @@ const headHint = computed(() => HINTS[props.view] || '');
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
   margin: 0 0 var(--space-1);
   color: var(--surface-muted);
@@ -207,21 +227,21 @@ const headHint = computed(() => HINTS[props.view] || '');
   margin-left: auto;
   padding: 0 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 400;
   background: var(--palette-soft);
   color: var(--palette-primary);
 }
 .ctx-tag-warn { background: var(--state-warn-soft); color: var(--state-warn); }
 .ctx-warn { color: var(--state-warn); }
-.ctx-muted { font-size: 12px; color: var(--surface-muted); margin: var(--space-1) 0 0; line-height: 1.6; }
+.ctx-muted { font-size: var(--text-sm); color: var(--surface-muted); margin: var(--space-1) 0 0; line-height: 1.6; }
 
 .ctx-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { /* 保留旧类名：既有门禁与皮肤卡断言依赖 */
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
   border: 0.5px solid transparent;
 }
 .chip-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
@@ -229,9 +249,9 @@ const headHint = computed(() => HINTS[props.view] || '');
 .ctx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .ctx-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .ctx-kv { background: var(--surface-panel); border-radius: var(--radius-md); padding: 6px 8px; }
-.ctx-kv-label { display: block; font-size: 11px; color: var(--surface-muted); }
-.ctx-kv-val { display: block; font-size: 15px; font-weight: 500; color: var(--surface-text); line-height: 1.4; }
-.ctx-kv-unit { font-size: 11px; font-weight: 400; color: var(--surface-muted); margin-left: 2px; }
+.ctx-kv-label { display: block; font-size: var(--text-xs); color: var(--surface-muted); }
+.ctx-kv-val { display: block; font-size: var(--text-h2); font-weight: 500; color: var(--surface-text); line-height: 1.4; }
+.ctx-kv-unit { font-size: var(--text-xs); font-weight: 400; color: var(--surface-muted); margin-left: 2px; }
 
 .ctx-dots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
 .ctx-dot {
@@ -239,7 +259,7 @@ const headHint = computed(() => HINTS[props.view] || '');
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-panel);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--surface-muted);
   text-align: left;
 }
@@ -255,13 +275,13 @@ const headHint = computed(() => HINTS[props.view] || '');
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   color: var(--surface-text);
 }
 button.ctx-item:hover { border-color: var(--palette-border); background: var(--palette-soft); }
 .ctx-item-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctx-item-side { font-size: 11px; color: var(--surface-muted); flex: 0 0 auto; }
+.ctx-item-side { font-size: var(--text-xs); color: var(--surface-muted); flex: 0 0 auto; }
 
 .past-row { /* 保留旧类名 */
   display: flex;
@@ -273,7 +293,7 @@ button.ctx-item:hover { border-color: var(--palette-border); background: var(--p
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
 }
 .past-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
@@ -289,19 +309,19 @@ button.ctx-item:hover { border-color: var(--palette-border); background: var(--p
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   color: var(--surface-text);
 }
 .ctx-soon-row:hover { border-color: var(--palette-border); background: var(--palette-soft); }
 .ctx-soon-on { border-color: var(--palette-border); }
-.ctx-soon-when { flex: 0 0 auto; font-size: 11px; color: var(--surface-muted); min-width: 42px; }
+.ctx-soon-when { flex: 0 0 auto; font-size: var(--text-xs); color: var(--surface-muted); min-width: 42px; }
 .ctx-soon-tag {
   flex: 0 0 auto;
   padding: 0 5px;
   border-radius: 999px;
   background: var(--surface-raised);
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--surface-muted);
 }
 .ctx-soon-tag[data-kind="capsule"] { background: var(--palette-soft); color: var(--palette-primary); }
@@ -309,7 +329,7 @@ button.ctx-item:hover { border-color: var(--palette-border); background: var(--p
 
 .ctx-bar { height: 4px; border-radius: 999px; background: var(--surface-panel); overflow: hidden; margin-top: 4px; }.ctx-bar-in { display: block; height: 100%; background: var(--palette-accent); border-radius: 999px; }
 .ctx-bar-row { margin-top: 6px; }
-.ctx-bar-head { display: flex; justify-content: space-between; font-size: 11px; color: var(--surface-muted); }
+.ctx-bar-head { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--surface-muted); }
 
 .ctx-heat { display: grid; grid-template-columns: repeat(15, minmax(0, 1fr)); gap: 2px; margin-top: var(--space-1); }
 .ctx-heat-cell { aspect-ratio: 1; border-radius: 2px; background: var(--surface-panel); }
@@ -321,7 +341,7 @@ button.ctx-item:hover { border-color: var(--palette-border); background: var(--p
   border: 0.5px solid var(--surface-border);
   border-radius: 999px;
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .ctx-link:hover { border-color: var(--palette-border); background: var(--palette-soft); color: var(--palette-primary); }
 /* 版权/合规声明已收进全局底栏（StatusBar），右栏不再留底部卡片 */

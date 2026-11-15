@@ -277,13 +277,13 @@ onMounted(function () {
   border: 0.5px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--surface-muted);
 }
 .rt-btn:hover { border-color: var(--surface-border); color: var(--palette-primary); }
 .rt-btn-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .rt-spacer { flex: 1; }
-.rt-count { font-size: 11px; color: var(--surface-muted); font-variant-numeric: tabular-nums; }
+.rt-count { font-size: var(--text-xs); color: var(--surface-muted); font-variant-numeric: tabular-nums; }
 .rt-over { color: var(--palette-accent); }
 .rt-body {
   padding: 8px 10px;
@@ -291,7 +291,7 @@ onMounted(function () {
   outline: none;
   overflow: auto;
   max-height: 420px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 .rt-body:empty:before {
   content: attr(data-placeholder);
@@ -299,7 +299,7 @@ onMounted(function () {
   pointer-events: none;
 }
 .rt-body :deep(p) { margin: 0 0 6px; }
-.rt-body :deep(h3) { margin: 8px 0 4px; font-size: 13px; font-weight: 600; color: var(--palette-primary); }
+.rt-body :deep(h3) { margin: 8px 0 4px; font-size: var(--text-body); font-weight: 600; color: var(--palette-primary); }
 .rt-body :deep(blockquote) {
   margin: 4px 0;
   padding: 2px 10px;
@@ -311,7 +311,7 @@ onMounted(function () {
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--surface-panel);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .rt-prompt {
   display: flex;
@@ -320,7 +320,7 @@ onMounted(function () {
   gap: 6px;
   padding: 6px 8px;
   border-top: 0.5px dashed var(--surface-border);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--surface-muted);
 }
 .rt-prompt-on .rt-prompt-label { color: var(--palette-primary); }
@@ -335,7 +335,7 @@ onMounted(function () {
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .rt-prompt-btn:disabled { opacity: 0.45; }
 .rt-prompt-insert { color: var(--palette-primary); border-color: var(--palette-border); }

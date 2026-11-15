@@ -3,6 +3,7 @@
 // 四个去处各有语义：自由格=当日记、收件箱=当待办、胶囊=封起来、参考资料=先存着。
 // 记住上次选择，所以「回车即存」依然成立——分流不牺牲速度。
 import { computed, onMounted, ref } from 'vue';
+import { useDialogFocus } from '../composables/useDialogFocus';
 
 const props = defineProps<{ date: string }>();
 
@@ -12,6 +13,10 @@ const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'saved', payload: QuickPayload): void;
 }>();
+
+// T15：Esc 关闭 + 焦点归还统一走 composable（根节点捕获，输入框内的 Esc 也能收到）。
+const boxEl = ref<HTMLElement | null>(null);
+useDialogFocus(boxEl, () => emit('close'));
 
 const TARGET_KEY = 'jiuge.quickTarget';
 
@@ -71,7 +76,7 @@ function submit(): void {
 </script>
 
 <template>
-  <div class="quick" :class="{ 'note-on': true }" role="dialog" aria-label="快速记录">
+  <div ref="boxEl" class="quick" :class="{ 'note-on': true }" role="dialog" aria-modal="true" aria-label="快速记录">
     <header class="quick-head">
       <strong>速记 · {{ date }}</strong>
       <button class="close" aria-label="关闭速记" @click="emit('close')">关闭</button>
@@ -83,9 +88,8 @@ function submit(): void {
       :class="{ 'input-on': canSave }"
       rows="3"
       aria-label="速记正文"
-      placeholder="写一句，回车即存到「{{ targetLabel }}」"
+      :placeholder="'写一句，回车即存到「' + targetLabel + '」'"
       @keydown.enter.exact.prevent="submit"
-      @keydown.esc="emit('close')"
     ></textarea>
 
     <!-- 四处分流：默认是上次的去处，改一次记住一次 -->
@@ -106,7 +110,7 @@ function submit(): void {
     </div>
 
     <footer class="quick-foot">
-      <span class="tip">Enter 存入「 targetLabel }}」 · Esc 关闭</span>
+      <span class="tip">Enter 存入「{{ targetLabel }}」 · Esc 关闭</span>
       <button class="submit" :class="{ 'submit-on': canSave }" :disabled="!canSave" :aria-disabled="!canSave" @click="submit">
         存入{{ targetLabel }}
       </button>
@@ -119,23 +123,23 @@ function submit(): void {
   position: absolute;
   right: var(--space-4);
   bottom: 48px;
-  width: 380px;
+  width: min(380px, calc(100vw - 48px));
   padding: var(--space-3);
   border: 0.5px solid var(--palette-border);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  z-index: 10;
+  z-index: var(--z-sticky);
 }
 .note-on { border-color: var(--palette-accent); }
 .quick-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-2); }
-.close { border: 0; background: transparent; color: var(--surface-muted); font-size: 12px; }
+.close { border: 0; background: transparent; color: var(--surface-muted); font-size: var(--text-sm); }
 .quick-input { width: 100%; resize: vertical; padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-bg); outline: none; }
 .input-on { border-color: var(--palette-accent); }
 .targets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--space-2); }
 .target {
   padding: 3px 10px; border: 0.5px solid var(--surface-border);
-  border-radius: 999px; background: var(--surface-panel); font-size: 12px; color: var(--surface-muted);
+  border-radius: 999px; background: var(--surface-panel); font-size: var(--text-sm); color: var(--surface-muted);
 }
 .target-on { background: var(--palette-soft); color: var(--palette-primary); border-color: var(--palette-border); }
 .cap-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
@@ -144,7 +148,7 @@ function submit(): void {
   border-radius: var(--radius-md); background: var(--surface-panel); outline: none;
 }
 .quick-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
-.tip { font-size: 11px; color: var(--surface-muted); }
+.tip { font-size: var(--text-xs); color: var(--surface-muted); }
 .submit { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); white-space: nowrap; }
 .submit-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .submit:disabled { opacity: 0.5; cursor: default; }

@@ -79,7 +79,7 @@ export const GRID_LIBRARY: Record<TemplateId, Record<string, string[]>> = {
       '把最沉的那句写下来，然后另起一行写「先放这儿」。'
     ],
     // 休闲娱乐：桌面版新格，覆盖闲书 / 影像 / 音乐 / 游戏 / 放空 / 出门 / 断屏 / 玩物
-    leisure: [
+    dream: [
       '今天哪一段空闲，是完全不必有用的？',
       '读到的哪句闲书、看到的哪个镜头，还想留着？',
       '有没有一段旋律，反复听了不止一遍？',
@@ -159,7 +159,7 @@ export const GRID_LIBRARY: Record<TemplateId, Record<string, string[]>> = {
       '哪个念头一直消耗注意力？',
       '写一句对结果不设限的话。'
     ],
-    leisure: [
+    dream: [
       '给自己排的休息，今天真的兑现了吗？',
       '这周有没有一段不带产出的时间？',
       '想玩的那件事，定到哪一天？',
@@ -233,7 +233,7 @@ export const GRID_LIBRARY: Record<TemplateId, Record<string, string[]>> = {
       '今天有没有一次，情绪自己退潮了？',
       '写一句「我现在这样，也可以」。'
     ],
-    leisure: [
+    dream: [
       '刚才那段放空，身体是什么感觉？',
       '有哪个画面让你不自觉地笑了？',
       '今天玩的时候，心里有没有一点愧疚？',
@@ -265,7 +265,7 @@ export const GRID_LIBRARY: Record<TemplateId, Record<string, string[]>> = {
     relation: ['今天想到谁，写个名字。', '一句没说出口的话。', '一个称呼就好。', '有谁，写一笔。', '一个表情也行。', '留个名字给以后。'],
     future: ['六条里先写一条。', '一个动词。', '写「无事」也算。', '留下第一条。', '一句话收工。', '挑最轻的那条。'],
     emotion: ['此刻一个词。', '今天的底色。', '一个字。', '不形容也行。', '写下第一反应。', '给心情一个颜色。'],
-    leisure: ['刚才在玩什么，四个字。', '一个画面。', '一首歌名也行。', '写「发呆」也可以。', '闲了多久，估一下。', '给这段空留个词。'],
+    dream: ['刚才在玩什么，四个字。', '一个画面。', '一首歌名也行。', '写「发呆」也可以。', '闲了多久，估一下。', '给这段空留个词。'],
     growth: ['今天的一个新词。', '一句话说清。', '记个问号也行。', '一个发现。', '写半句，留半句。', '哪句听懂了？'],
     free: ['一行就够。', '一个画面。', '随手一词。', '不写标题。', '留个记号。', '写了就算。']
   }
@@ -279,7 +279,7 @@ export const FIRST_WEEK_EASY: Record<string, string> = {
   relation: '今天谁让你想起来就笑一下？',
   future: '明天想给自己安排一件什么轻松事？',
   emotion: '给今天的心情挑个颜色，随手写。',
-  leisure: '今天哪一小会儿，纯粹玩得开心？',
+  dream: '今天哪一小会儿，纯粹玩得开心？',
   growth: '今天碰到一个什么新鲜词？',
   free: '留一句今天的风、光或声音。'
 };
@@ -374,6 +374,17 @@ export function fallbackFor(key: string): string {
   const list = GRID_LIBRARY.standard[key];
   return list && list.length ? list[0] : '';
 }
+
+/**
+ * V3.7 复盘三问的固定口径：证据 → 归因 → 一个改动。
+ * 中栏 ReviewView 与右栏 ReviewContext 共用这一份，避免两边问的不是同一件事；
+ * 原来按周期键轮换的 REVIEW_SETS 不删，退成中栏每格的「换个角度」提示。
+ */
+export const REVIEW_EVIDENCE_QUESTIONS: string[] = [
+  '这期哪些做法真的有效？',
+  '为什么有效，或者为什么没效？',
+  '下期只改哪一条？（写一条能动手的）'
+];
 
 /** 语料规模（供设置页 / 自检脚本核对，不参与取词） */
 export function promptStats(): { grid: number; easy: number; review: number; total: number } {

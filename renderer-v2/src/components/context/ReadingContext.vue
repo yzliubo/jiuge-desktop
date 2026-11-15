@@ -70,7 +70,7 @@ watch(() => props.tick, () => { void load(); });
     <h3 class="ctx-title">相关去处</h3>
     <div class="ctx-links">
       <button class="ctx-link" @click="emit('open-cell', 'growth')">学习成长</button>
-      <button class="ctx-link" @click="emit('open-cell', 'leisure')">休闲娱乐格</button>
+      <button class="ctx-link" @click="emit('open-cell', 'dream')">休闲娱乐格</button>
       <button class="ctx-link" @click="emit('navigate', 'inspire')">语料库</button>
       <button class="ctx-link" @click="emit('navigate', 'data')">数据中心</button>
     </div>

@@ -314,16 +314,16 @@ onMounted(async () => {
 .btn, .seg { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .btn-on, .seg-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm); background: var(--surface-raised); font-size: 12px; }
+.item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm); background: var(--surface-raised); font-size: var(--text-sm); }
 .item-on { opacity: 0.6; text-decoration: line-through; }
 .item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.check, .del, .tag { border: 0; background: transparent; font-size: 12px; }
+.check, .del, .tag { border: 0; background: transparent; font-size: var(--text-sm); }
 .check { color: var(--palette-primary); }
-.tag { padding: 0 6px; border-radius: 999px; background: var(--surface-panel); font-size: 11px; }
+.tag { padding: 0 6px; border-radius: 999px; background: var(--surface-panel); font-size: var(--text-xs); }
 .tag-on { background: var(--palette-soft); color: var(--palette-primary); }
-.empty, .muted { font-size: 12px; color: var(--surface-muted); }
+.empty, .muted { font-size: var(--text-sm); color: var(--surface-muted); }
 .money-row { display: flex; gap: 6px; }
-.stat { padding: 2px 8px; border-radius: 999px; background: var(--surface-raised); font-size: 12px; }
+.stat { padding: 2px 8px; border-radius: 999px; background: var(--surface-raised); font-size: var(--text-sm); }
 .stat-on { background: var(--palette-soft); color: var(--palette-primary); }
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--surface-muted); }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); color: var(--surface-muted); }
 </style>

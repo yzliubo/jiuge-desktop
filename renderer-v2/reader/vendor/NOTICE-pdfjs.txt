@@ -1,0 +1,20 @@
+九格手记 · 独立阅读窗随附的第三方组件声明
+
+组件：pdf.js（npm 包名 pdfjs-dist）
+版本：3.11.174（legacy build）
+来源：https://www.npmjs.com/package/pdfjs-dist/v/3.11.174
+项目：https://github.com/mozilla/pdf.js
+版权：Copyright (c) Mozilla Foundation 及 pdf.js 贡献者
+许可证：Apache License, Version 2.0（SPDX: Apache-2.0）
+许可证全文：同目录 LICENSE-pdfjs.txt
+
+本目录包含两个按原样分发、未作任何修改的压缩构建文件：
+  - pdf.min.js          （解码器主文件，377,116 B）
+  - pdf.worker.min.js   （worker 全局处理器，1,133,660 B）
+
+使用方式：两个文件都由本地 file:// 加载，不联网、不引 CDN；
+阅读窗 CSP 保持 connect-src 'none' / script-src 'self'，没有放宽任何一条。
+之所以用 legacy build + 先加载 worker 再加载解码器，是为了让 pdf.js 在
+file:// 下走主线程 fake worker，避开 new Worker 被 CORS 拦住的问题。
+
+MOBI / AZW3 仍不支持：可靠渲染需要整套 Kindle 解码器，本期不做。

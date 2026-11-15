@@ -24,6 +24,10 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // 真正的图片文件落在 <userData>/jiuge-data/dream-images/，与图书馆封面同一套办法。
 const IMAGE_ID_RE = /^[A-Za-z0-9._-]{1,80}$/;
 
+// 证据窗口：多久之内真的被推动过，才算「在推」而不是「挂在那」。
+// 30 天是刻意选的：一周太短（汇报周期还没走完），一季度太长（挂三个月也会被算成在推）。
+const EVIDENCE_DAYS = 30;
+
 const HORIZONS = [
     { key: 'short', label: '短期', hint: '一年内' },
     { key: 'mid', label: '中期', hint: '2~3 年' },
@@ -80,6 +84,16 @@ function diffDays(from, to) {
     const b = dayNumber(to);
     if (isNaN(a) || isNaN(b)) return 0;
     return Math.round((b - a) / 86400000);
+}
+// 证据只认「有日期、能回查」的事实：完成的任务、存进账户的钱。
+// 进度条是被手推动的，没有变更时间戳，拿来当证据会变成自己给自己作证。
+function inWindow(iso, now, days) {
+    const d = diffDays(str(iso), now);
+    return d >= 0 && d <= days;
+}
+function yuanText(cents) {
+    const y = Math.round((Number(cents) || 0) / 100);
+    return '¥' + y.toLocaleString('zh-CN');
 }
 
 const AREA_ALIAS = { work: 'career', money: 'career', relation: 'family', leisure: 'spirit', other: 'material' };
@@ -390,6 +404,37 @@ function board(state, tasks, today) {
         const fundPct = target > 0 ? Math.min(100, Math.round(saved * 100 / target)) : 0;
         // 钱够了并不等于事做完了：这里只表示「可以动手了」
         const ready = target > 0 && saved >= target && d.status !== 'done';
+
+        // ---- 证据回流：这件目标最近被什么推动过（只读派生，不改任何字段）----
+        // 目标页最容易变成「许愿墙」：进度数字可以在半年里一动不动，
+        // 但同一条目标下可能已经完成过好几件事。把那些事拎出来，才算「在推」有据。
+        const doneRecent = linked.filter(function (t) {
+            return t.status === 'done' && t.doneAt && inWindow(todayOf(new Date(t.doneAt)), now, EVIDENCE_DAYS);
+        }).sort(function (a, b) { return b.doneAt - a.doneAt; });
+        const depositRecent = d.deposits.filter(function (x) { return inWindow(x.date, now, EVIDENCE_DAYS); });
+        const depositRecentCents = depositRecent.reduce(function (n, x) { return n + (Number(x.cents) || 0); }, 0);
+        const lastDeposit = d.deposits.length
+            ? d.deposits.slice().sort(function (a, b) { return str(b.date).localeCompare(str(a.date)); })[0].date
+            : '';
+        const evidenceText = doneRecent.length
+            ? '近 ' + EVIDENCE_DAYS + ' 天完成 ' + doneRecent.length + ' 件相关任务'
+            : (depositRecent.length
+                ? '近 ' + EVIDENCE_DAYS + ' 天存入 ' + yuanText(depositRecentCents)
+                : (linked.length === 0 && !d.deposits.length
+                    ? '还没挂任何能动手的事'
+                    : '近 ' + EVIDENCE_DAYS + ' 天没有新证据'));
+        const evidence = {
+            windowDays: EVIDENCE_DAYS,
+            doneCount: doneRecent.length,
+            doneTitles: doneRecent.slice(0, 3).map(function (t) { return t.title; }),
+            lastDoneDate: doneRecent.length ? todayOf(new Date(doneRecent[0].doneAt)) : '',
+            depositCount: depositRecent.length,
+            depositCents: depositRecentCents,
+            lastDepositDate: lastDeposit,
+            has: doneRecent.length > 0 || depositRecent.length > 0,
+            text: evidenceText
+        };
+
         byHorizon[d.horizon] += 1;
         byArea[d.area] += 1;
         progressSum += progress;
@@ -419,6 +464,8 @@ function board(state, tasks, today) {
             taskTotal: linked.length,
             taskOpen: openTasks,
             taskDone: linked.length - openTasks,
+            // 证据回流：给「在推 / 挂着」一个可回查的依据，而不是看进度条猜
+            evidence: evidence,
             dueDays: d.dueDate ? diffDays(now, d.dueDate) : null,
             overdue: isOverdue,
             // 期限不是「还剩 12 天」这种冷数字，要说得出「已经在收尾」还是「还没动」
@@ -457,7 +504,15 @@ function board(state, tasks, today) {
         overdue: overdue,
         avgProgress: rows.length ? Math.round(progressSum / rows.length) : 0,
         byHorizon: byHorizon,
-        byArea: byArea
+        byArea: byArea,
+        // 「在推」与「挂着」分开数：进行中、过了窗口、且窗口内零证据的才算挂着。
+        // 刚建的目标不算——否则首启那 17 条种子目标会被一次性判成「30 天没动」，
+        // 第一次打开就被自己的工具否定一遍。
+        evidenceCount: rows.filter(function (r) { return r.evidence.has; }).length,
+        staleCount: rows.filter(function (r) {
+            if (r.status !== 'doing' || r.evidence.has) return false;
+            return diffDays(todayOf(new Date(r.createdAt)), now) > EVIDENCE_DAYS;
+        }).length
     };
 
     let insight;
@@ -483,6 +538,8 @@ function board(state, tasks, today) {
         horizons: HORIZONS,
         areas: AREAS,
         statusMeta: STATUS,
+        // 界面上要写明「多少天算在推」，别让人以为这是永久结论
+        evidenceDays: EVIDENCE_DAYS,
         limits: { dreams: MAX_DREAMS, title: TITLE_MAX, summary: SUMMARY_MAX, taskLinks: MAX_TASK_LINKS }
     };
 }
@@ -516,6 +573,7 @@ function mergeSection(state, section) {
 
 module.exports = {
     MAX_DREAMS: MAX_DREAMS,
+    EVIDENCE_DAYS: EVIDENCE_DAYS,
     TITLE_MAX: TITLE_MAX,
     SUMMARY_MAX: SUMMARY_MAX,
     MAX_TASK_LINKS: MAX_TASK_LINKS,

@@ -25,8 +25,20 @@ const ALLOWED = {
   migrate: ['ts', 'stage'],
   quick_capture: ['ts', 'date'],
   snapshot_restore: ['ts', 'id'],
-  backup_run: ['ts', 'reason']
+  backup_run: ['ts', 'reason'],
+  // V3.8 成效侧：从「用得多不多」补到「有没有真的推动」。
+  // 只记「发生了一次、落在哪一天」，不记任务标题、不记目标名、不记复盘答案。
+  // kind 是一小组枚举（progress/metric/status/period），不是自由文本。
+  outcome_task_done: ['ts', 'date', 'n'],
+  outcome_dream_move: ['ts', 'date', 'kind'],
+  outcome_read_move: ['ts', 'date', 'n'],
+  outcome_review: ['ts', 'date', 'period']
 };
+
+// 成效侧的四类事件：完成一件任务 / 目标被推动 / 阅读往前翻 / 复盘落成。
+// 名字里带 outcome_ 前缀的才进成效汇总，别的 kind 混进来也不算。
+const OUTCOME_KINDS = ['task_done', 'dream_move', 'read_move', 'review'];
+
 
 const FORBIDDEN_FIELDS = ['text', 'content', 'body', 'note', 'title', 'raw', 'payload'];
 
@@ -132,6 +144,12 @@ function createMetrics(dir, opts) {
     let migrateSuccess = 0;
     let firstDay = '';
     let starts = 0;
+    // V3.8 成效侧三档：近 7 天 / 近 30 天 / 全期。窗口口径与「周有效记录天数」同源，
+    // 都是「含今天往前 N 个自然日」，免得两个数字用两套算法。
+    const out7 = { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 };
+    const out30 = { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 };
+    const outAll = { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 };
+    let outcomeEvents = 0;
 
     for (let i = 0; i < recs.length; i++) {
       const r = recs[i];
@@ -148,6 +166,20 @@ function createMetrics(dir, opts) {
       if (r.k === 'migrate') {
         if (r.stage === 'start') migrateStart += 1;
         if (r.stage === 'success') migrateSuccess += 1;
+      }
+      // 成效侧：完成一件算一件（gtd.completeAll 会带 n），其余按事件次数算
+      if (String(r.k).indexOf('outcome_') === 0 && d) {
+        const key = String(r.k).slice(8);
+        if (OUTCOME_KINDS.indexOf(key) >= 0) {
+          const n = key === 'task_done' ? (Number(r.n) || 1) : 1;
+          const bucket = key === 'task_done' ? 'taskDone'
+            : (key === 'dream_move' ? 'dreamMove' : (key === 'read_move' ? 'readMove' : 'review'));
+          const diff = dayDiff(d, today);
+          outAll[bucket] += n;
+          outcomeEvents += 1;
+          if (diff >= 0 && diff < 7) out7[bucket] += n;
+          if (diff >= 0 && diff < 30) out30[bucket] += n;
+        }
       }
     }
 
@@ -214,6 +246,15 @@ function createMetrics(dir, opts) {
         searchUse: searchUses,
         migrateStart: migrateStart,
         migrateSuccess: migrateSuccess
+      },
+      // 成效侧：一条都没有时 available=false，界面据此写「还没有成效事件」，
+      // 而不是拿一排 0 冒充「你什么都没做成」。
+      outcome: {
+        available: outcomeEvents > 0,
+        events: outcomeEvents,
+        window7: out7,
+        window30: out30,
+        total: outAll
       }
     };
   }
@@ -227,4 +268,9 @@ function createMetrics(dir, opts) {
   };
 }
 
-module.exports = { createMetrics: createMetrics, ALLOWED: ALLOWED, FORBIDDEN_FIELDS: FORBIDDEN_FIELDS };
+module.exports = {
+  createMetrics: createMetrics,
+  ALLOWED: ALLOWED,
+  OUTCOME_KINDS: OUTCOME_KINDS,
+  FORBIDDEN_FIELDS: FORBIDDEN_FIELDS
+};

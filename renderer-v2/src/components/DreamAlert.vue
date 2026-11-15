@@ -86,24 +86,24 @@ watch(function () { return props.tick; }, load);
 .da-head { display: flex; align-items: center; gap: 6px; }
 .da-tag {
   padding: 1px 8px; border-radius: 999px;
-  background: var(--palette-soft); color: var(--palette-primary); font-size: 11px;
+  background: var(--palette-soft); color: var(--palette-primary); font-size: var(--text-xs);
 }
 .da-close {
   margin-left: auto; border: 0; background: transparent;
-  color: var(--surface-muted); font-size: 14px; line-height: 1;
+  color: var(--surface-muted); font-size: var(--text-h2); line-height: 1;
 }
-.da-title { font-size: 13px; font-weight: 500; margin: 8px 0 2px; }
-.da-line { font-size: 12px; margin: 0; color: var(--surface-text); }
-.da-hz { color: var(--surface-muted); margin-left: 4px; font-size: 11px; }
-.da-hint { font-size: 11px; color: var(--surface-muted); margin: 6px 0 0; line-height: 1.7; }
+.da-title { font-size: var(--text-body); font-weight: 500; margin: 8px 0 2px; }
+.da-line { font-size: var(--text-sm); margin: 0; color: var(--surface-text); }
+.da-hz { color: var(--surface-muted); margin-left: 4px; font-size: var(--text-xs); }
+.da-hint { font-size: var(--text-xs); color: var(--surface-muted); margin: 6px 0 0; line-height: 1.7; }
 .da-actions { display: flex; gap: 6px; margin-top: 10px; }
 .da-go {
-  flex: 1; padding: 5px 10px; font-size: 12px;
+  flex: 1; padding: 5px 10px; font-size: var(--text-sm);
   border: 0.5px solid var(--palette-primary); border-radius: var(--radius-md);
   background: var(--palette-primary); color: var(--palette-on);
 }
 .da-later {
-  padding: 5px 12px; font-size: 12px;
+  padding: 5px 12px; font-size: var(--text-sm);
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
   background: var(--surface-panel); color: var(--surface-muted);
 }

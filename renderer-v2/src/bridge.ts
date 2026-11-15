@@ -154,7 +154,14 @@ function createMemoryBridge(): PreloadBridge {
               weekActiveDays: 0, nextDayRetention: null, week4Retention: null,
               migrateRate: null, searchUsageRate: null, saveLatencyP50: null, saveLatencyP95: null
             },
-            counts: { appStart: 0, entrySave: 0, saveEvents: 0, searchUse: 0, migrateStart: 0, migrateSuccess: 0 }
+            counts: { appStart: 0, entrySave: 0, saveEvents: 0, searchUse: 0, migrateStart: 0, migrateSuccess: 0 },
+            // V3.8 成效侧：mock 里一条成效事件都没有，available 必须是 false
+            outcome: {
+              available: false, events: 0,
+              window7: { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 },
+              window30: { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 },
+              total: { taskDone: 0, dreamMove: 0, readMove: 0, review: 0 }
+            }
           };
           break;
         case 'v1/metrics:setEnabled':
@@ -496,6 +503,19 @@ export interface MetricsSummary {
     appStart: number; entrySave: number; saveEvents: number;
     searchUse: number; migrateStart: number; migrateSuccess: number;
   };
+  // V3.8 成效侧：完成 / 目标推进 / 阅读推进 / 复盘落成的次数。
+  // available=false 表示还没有任何成效事件，界面要说「还没有」，不能摆一排 0。
+  outcome: {
+    available: boolean;
+    events: number;
+    window7: OutcomeBucket;
+    window30: OutcomeBucket;
+    total: OutcomeBucket;
+  };
+}
+
+export interface OutcomeBucket {
+  taskDone: number; dreamMove: number; readMove: number; review: number;
 }
 
 export function metricsSummary(): Promise<MetricsSummary | null> {
@@ -528,9 +548,35 @@ export function openReader(bookId: string, mode: 'leisure' | 'theme' = 'leisure'
     .then((r) => r.data || { ok: false, reason: r.message });
 }
 
+// 豆瓣封面（V3.13）：两条会联网的通道，与天气同一类，所以不走 domainCall。
+// 「没搜到」是正常结果（ok:true, items:[]），不是错误——所以这里只做透传，不改写 ok。
+export interface DoubanCover {
+  title: string; author: string; year: string;
+  picHost: string; picPath: string; thumb: string;
+}
+export interface DoubanCoverResult {
+  ok: boolean; items: DoubanCover[]; keyword?: string;
+  reason?: string; empty?: boolean;
+}
+export function doubanCovers(bookId: string): Promise<DoubanCoverResult> {
+  return bridge.invoke<DoubanCoverResult>('v1/reading:doubanCovers', { args: [bookId] })
+    .then((r) => r.data || { ok: false, items: [], reason: r.message || '豆瓣没搜到' });
+}
+export function doubanApply(bookId: string, picHost: string, picPath: string): Promise<{ ok: boolean; reason?: string; bytes?: number }> {
+  return bridge.invoke<{ ok: boolean; reason?: string; bytes?: number }>(
+    'v1/reading:doubanApply', { args: [bookId, picHost, picPath] }
+  ).then((r) => r.data || { ok: false, reason: r.message || '封面没取到' });
+}
+
 // 独立账本窗口（左中右三栏）：主窗顶栏只说「开账本」，窗口句柄不进渲染层。
 export function openFinance(): Promise<{ ok: boolean; reused?: boolean; reason?: string }> {
   return bridge.invoke<{ ok: boolean; reused?: boolean; reason?: string }>('v1/finance:open', {})
+    .then((r) => r.data || { ok: false, reason: r.message });
+}
+
+// 独立图书馆窗口（文件夹树 / 书架 / 详情三栏）：与账本同一形态，主窗只负责开窗。
+export function openLibrary(): Promise<{ ok: boolean; reused?: boolean; reason?: string }> {
+  return bridge.invoke<{ ok: boolean; reused?: boolean; reason?: string }>('v1/library:open', {})
     .then((r) => r.data || { ok: false, reason: r.message });
 }
 

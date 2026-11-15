@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 与真实阅读窗同一套 CSP：验证 pdf.js 无需放宽任何一条 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-src 'self' data:; connect-src 'none'; object-src 'none'">
+<title>pdf.js 可行性探针</title>
+<script src="./pdf.min.js"></script>
+<script src="./pdf.worker.min.js"></script>
+<script src="./probe.js" defer></script>
+</head>
+<body>
+<p>PDF 第一页：</p>
+<canvas id="cv"></canvas>
+<pre id="out">running…</pre>
+</body>
+</html>

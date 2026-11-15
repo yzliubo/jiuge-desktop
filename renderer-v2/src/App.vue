@@ -25,12 +25,13 @@ import LifeView from './views/LifeView.vue';
 import RelationView from './views/RelationView.vue';
 import ConnectView from './views/ConnectView.vue';
 import LongView from './views/LongView.vue';
-import ReadingView from './views/ReadingView.vue';
-// 胶囊降级 + 自由记录三合一：胶囊的书写/到期走顶栏弹窗，三 tab 模块占原导航位
+// 图书馆已搬到独立窗口（V3.14）：主窗不再内嵌书架，避免同一份 md_reading 两套界面
+// 胶囊降级 + 自由记录三合一：胶囊的书写/到期走顶栏弹窗；三 tab 模块不占一级导航，
+// 入口是九格目录里的「自由记录」（2026-11-13 撤掉导航项，与九格同功能不重复列）
 import CapsuleModal from './components/CapsuleModal.vue';
 import FreeView from './views/FreeView.vue';
 import { emptyRecord, localDate, GRID_KEYS, SKINS, type DiaryRecord, type SkinId, type ViewKey } from './types';
-import { listDiaries, upsertDiary, flush, onDataChanged, isMockBridge, openFinance, onQuickCapture } from './bridge';
+import { listDiaries, upsertDiary, flush, onDataChanged, isMockBridge, openFinance, openLibrary, onQuickCapture } from './bridge';
 import { callDomain } from './composables/useDomain';
 import { useTheme } from './composables/useTheme';
 import { useWeather } from './composables/useWeather';
@@ -49,6 +50,13 @@ const record = ref<DiaryRecord>(emptyRecord(today));
 const total = ref(0);
 const writtenDates = ref<string[]>([]);
 const dirty = ref(false);
+// 九格草稿是否未保存：由 GridEditor 上抛。切日期 / 切页前拦一次，不再静默丢字（P0-1）
+const draftDirty = ref(false);
+const pendingNav = ref<{ label: string; run: () => void } | null>(null);
+const gridEl = ref<{ saveIfDirty: () => void } | null>(null);
+// 窄态（<=1120）右栏收成抽屉，标题栏「关联」按钮唤起
+const railOpen = ref(false);
+const railToggleEl = ref<HTMLElement | null>(null);
 // GTD 中栏每改一次清单就自增，右栏据此重取（右栏只读，但读的是同一份数据）
 const gtdTick = ref(0);
 // 当前选中的 GTD 任务：中栏点一行 → 右栏换成它的详情。
@@ -86,6 +94,19 @@ weather.onSaveToToday(async function (w) {
   return true;
 });
 const toast = ref('');
+let truncObs: MutationObserver | null = null;
+// 省略号必须有全文可看：对「overflow hidden / ellipsis 且内容被裁」的元素补 title。
+// 一处通用兜底覆盖全站 28 条无提示截断，避免逐页漏改；输入控件不参与。
+function scanTruncations(): void {
+  document.querySelectorAll<HTMLElement>('.center *, .context *').forEach((el) => {
+    if (el.hasAttribute('title') || el.closest('input, textarea, select, [contenteditable]')) return;
+    const cs = getComputedStyle(el);
+    if (!/hidden|clip|ellipsis/.test(cs.overflowX + cs.textOverflow)) return;
+    if (el.scrollWidth <= el.clientWidth + 1) return;
+    const text = (el.textContent || '').trim();
+    if (text) el.setAttribute('title', text);
+  });
+}
 let off: (() => void) | null = null;
 let offQuick: (() => void) | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -114,13 +135,35 @@ function clampW(v: number, lo: number, hi: number): number {
 function loadLayout(): void {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return;
+    if (!raw) { fitLayout(); return; }
     const o = JSON.parse(raw) as { nav?: number; rail?: number };
     if (typeof o.nav === 'number' && isFinite(o.nav)) navW.value = clampW(o.nav, NAV_MIN, NAV_MAX);
     if (typeof o.rail === 'number' && isFinite(o.rail)) railW.value = clampW(o.rail, RAIL_MIN, RAIL_MAX);
   } catch {
     // 坏值（手改过 / 隐私模式读不出）就用默认宽度，不影响启动
   }
+  fitLayout();
+}
+
+// 宽屏拖好的栏宽搬到窄窗会把中栏压穿（实测最小窗只剩 133px）。
+// 读回 / 改窗时按三栏总和再夹一次，中栏永远优先（P0-2）。
+function fitLayout(): void {
+  if (window.innerWidth <= 1120) return; // 窄态右栏是抽屉，不占栏宽
+  const avail = columnsEl.value?.clientWidth || window.innerWidth;
+  if (avail - navW.value - railW.value - 12 >= CENTER_MIN) return;
+  railW.value = clampW(avail - navW.value - 12 - CENTER_MIN, RAIL_MIN, RAIL_MAX);
+  if (avail - navW.value - railW.value - 12 < CENTER_MIN) {
+    navW.value = clampW(avail - railW.value - 12 - CENTER_MIN, NAV_MIN, NAV_MAX);
+  }
+  if (avail - navW.value - railW.value - 12 < CENTER_MIN) {
+    navW.value = NAV_MIN;
+    railW.value = RAIL_MIN;
+  }
+}
+
+function onResize(): void {
+  fitLayout();
+  if (window.innerWidth > 1120) railOpen.value = false;
 }
 
 function saveLayout(): void {
@@ -202,9 +245,28 @@ function shiftDate(delta: number): string {
 
 // 切日期时主动换记录：找不到就换成空记录，绝不把上一篇的内容留在这一天上。
 // （refresh() 相反，只在命中时更新，避免把用户正在输入的内容冲掉。）
+function guardLeave(label: string, run: () => void): void {
+  if (!draftDirty.value) { run(); return; }
+  // 行内确认条：不弹原生对话框，与工作看板的两次确认口径一致
+  pendingNav.value = { label, run };
+}
+
+function discardAndGo(): void {
+  const p = pendingNav.value;
+  if (!p) return;
+  pendingNav.value = null;
+  draftDirty.value = false;
+  p.run();
+}
+
 async function goDate(next: string): Promise<void> {
   if (next > today) {
     notify('还没到那一天，只能补记过去');
+    return;
+  }
+  if (next === selectedDate.value) return;
+  if (draftDirty.value) {
+    guardLeave('切到 ' + next, () => { void goDate(next); });
     return;
   }
   selectedDate.value = next;
@@ -245,6 +307,14 @@ async function save(next: DiaryRecord): Promise<void> {
 }
 
 function navigate(key: ViewKey): void {
+  // 图书馆是独立窗口（V3.14）：这个入口只负责开窗，主窗不切页。
+  // 右栏「图书馆 →」、学习台的在读书等旧入口全走 navigate('reading')，
+  // 改在这一处，所有入口一起跟着走，不必逐个改按钮。
+  if (key === 'reading') { void openLibrary(); return; }
+  if (draftDirty.value && key !== view.value) {
+    guardLeave('切到「' + key + '」', () => navigate(key));
+    return;
+  }
   view.value = key;
   // 离开工作台/学习台/梦想页就清掉选中：右栏换页后不该还挂着上一条
   if (key !== 'cell') { gtdSel.value = ''; growthSel.value = ''; }
@@ -260,7 +330,8 @@ async function refreshWtOn(): Promise<void> {
 
 // 九格 → 该格主功能。不占一级导航：它是「从格子里进去」的第二层入口。
 function openCell(key: string): void {
-  // 九格第 9 格与一级导航「自由记录」是同一个视图：入口唯一，不再开单格书写台。
+  // 九格第 9 格直接进三合一的自由记录页（2026-11-13 起它不再占一级导航，
+  // 这里就是那一页唯一的入口）：入口唯一，不再开单格书写台。
   if (key === 'free') { navigate('free'); return; }
   if (key !== 'work') gtdSel.value = '';
   if (key !== 'growth') growthSel.value = '';
@@ -272,6 +343,28 @@ function openCell(key: string): void {
 function openInsight(key: string): void {
   cellKey.value = key;
   view.value = 'insight';
+}
+
+function focusCenter(): void {
+  (document.getElementById('main') as HTMLElement | null)?.focus();
+}
+
+function toggleRail(): void {
+  railOpen.value = !railOpen.value;
+  if (railOpen.value) {
+    void nextTick(() => {
+      const el = document.querySelector('.context') as HTMLElement | null;
+      el?.querySelector<HTMLElement>('button, a, input, select, [tabindex]')?.focus();
+    });
+  } else {
+    railToggleEl.value?.focus();
+  }
+}
+
+function closeRail(): void {
+  if (!railOpen.value) return;
+  railOpen.value = false;
+  railToggleEl.value?.focus();
 }
 
 function notify(text: string): void {
@@ -351,6 +444,12 @@ async function openDataDir(): Promise<void> {
 
 // Ctrl+←/→ 前后一天。落在输入框里的 Ctrl+方向键是系统「按词移动光标」，不能抢。
 function onKeydown(ev: KeyboardEvent): void {
+  if (ev.key === 'Escape' && railOpen.value) { closeRail(); return; }
+  if (ev.ctrlKey && !ev.altKey && !ev.shiftKey && (ev.key === 's' || ev.key === 'S')) {
+    ev.preventDefault();
+    gridEl.value?.saveIfDirty();
+    return;
+  }
   if (!ev.ctrlKey || ev.altKey || ev.shiftKey) return;
   if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
   const el = ev.target as HTMLElement | null;
@@ -369,6 +468,15 @@ onMounted(async () => {
   // 全局热键 / 托盘速记：主进程推「现在可以记了」，这里负责切日 + 开浮窗（R-09）
   offQuick = onQuickCapture((p) => { void openQuickCapture(p); });
   window.addEventListener('keydown', onKeydown);
+  window.addEventListener('resize', onResize);
+  fitLayout();
+  let truncTimer: ReturnType<typeof setTimeout> | null = null;
+  truncObs = new MutationObserver(() => {
+    if (truncTimer) clearTimeout(truncTimer);
+    truncTimer = setTimeout(scanTruncations, 200);
+  });
+  truncObs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  window.addEventListener('resize', scanTruncations);
   void refreshWtOn();
   // 天气走独立状态源（useWeather 单例）：这里只负责首屏取一次，
   // 组件自己订阅同一份状态，设置页改完开关立刻反映到底栏与问候头。
@@ -398,11 +506,15 @@ onUnmounted(() => {
   if (offQuick) offQuick();
   if (toastTimer) clearTimeout(toastTimer);
   window.removeEventListener('keydown', onKeydown);
+  window.removeEventListener('resize', onResize);
+  window.removeEventListener('resize', scanTruncations);
+  truncObs?.disconnect();
 });
 </script>
 
 <template>
   <div class="workbench" :data-skin="skin" data-surface="light">
+    <a class="skip-link" href="#main" @click.prevent="focusCenter">跳到正文</a>
     <header class="titlebar">
       <strong class="brand">九格手记 · 个人记录工作台</strong>
       <!-- 补记：日期导航常驻标题栏。切到过去时整条变色，避免"以为在写今天" -->
@@ -419,7 +531,7 @@ onUnmounted(() => {
         >›</button>
         <button v-if="isBackfill" class="dn-today" @click="goToday">回到今天</button>
       </div>
-      <span class="view-crumb">{{ viewLabel }}</span>
+      <span v-if="viewLabel !== selectedLabel" class="view-crumb">{{ viewLabel }}</span>
       <span class="spacer"></span>
       <!-- 单格洞察从左栏二级目录上移到这里：它是「看」的入口，不是「写」的一格，
            放左栏会让九格目录里混进一个不同类的东西（主理人 2026-11-08 23:16） -->
@@ -429,13 +541,11 @@ onUnmounted(() => {
         :aria-current="view === 'insight' ? 'page' : undefined"
         @click="navigate('insight')"
       >单格洞察</button>
-      <!-- 图书馆是重功能但不属「今天 / 回看 / 数据」任何一条线：沿用单格洞察上顶栏的先例。
-           一级导航仍 7 项 + 设置（GUI #122 锁住），高频入口也不必藏进二级目录。 -->
+      <!-- 图书馆是重功能，且左栏要挂一棵文件夹树：与账本同样走独立窗口（V3.14）。
+           一级导航仍 7 项 + 设置（GUI #122 锁住），主窗只负责「开窗」这一个动作。 -->
       <button
         class="reading-btn"
-        :class="{ 'reading-on': view === 'reading' }"
-        :aria-current="view === 'reading' ? 'page' : undefined"
-        @click="navigate('reading')"
+        @click="openLibrary()"
       >图书馆</button>
       <!-- 家庭账本：重功能走独立窗口（左中右三栏），一级导航仍锁 7 项 + 设置。
            主窗只负责「开窗」这一个动作，窗口句柄与数据都不经过这里。 -->
@@ -472,6 +582,13 @@ onUnmounted(() => {
         @click="quickOpen = !quickOpen"
       >＋ 快速记录</button>
       <button
+        ref="railToggleEl"
+        class="rail-toggle"
+        :aria-expanded="railOpen"
+        aria-controls="rail-drawer"
+        @click="toggleRail"
+      >关联<span v-if="railOpen"> · 收起</span></button>
+      <button
         class="settings-btn"
         :class="{ 'settings-on': view === 'settings' }"
         :aria-current="view === 'settings' ? 'page' : undefined"
@@ -479,11 +596,18 @@ onUnmounted(() => {
       >设置</button>
     </header>
 
+    <!-- 未保存草稿守卫：切日期 / 切页前拦一次，绝不静默丢字（P0-1） -->
+    <div v-if="pendingNav" class="discard-bar" role="alertdialog" aria-label="未保存的草稿">
+      <span class="db-text">九格草稿还没保存 · 要{{ pendingNav.label }}吗？</span>
+      <button class="db-btn" @click="pendingNav = null">先别切 · 我要保存（Ctrl+S）</button>
+      <button class="db-btn db-warn" @click="discardAndGo">丢弃草稿并继续</button>
+    </div>
+
     <div
       class="columns"
       ref="columnsEl"
       :style="{ '--nav-w': navW + 'px', '--rail-w': railW + 'px' }"
-      :class="{ 'col-dragging': !!dragging }"
+      :class="{ 'col-dragging': !!dragging, 'rail-open': railOpen }"
     >
       <NavSidebar
         :active="view"
@@ -512,7 +636,7 @@ onUnmounted(() => {
         @keydown.right.prevent="nudge('nav', 16)"
       ></div>
 
-      <main class="center">
+      <main id="main" class="center" tabindex="-1">
         <template v-if="view === 'today'">
           <!-- 补记时顶部明示，并说清统计口径：右侧与问候条的统计仍按真实今天算 -->
           <div v-if="isBackfill" class="backfill-banner" role="status">
@@ -526,12 +650,14 @@ onUnmounted(() => {
           <GreetingBar :today="today" :total="total" @navigate="navigate" />
           <!-- 今日六条已并入九格「今日六条」格：今日页顶部不再单独占一条横条 -->
           <GridEditor
+            ref="gridEl"
             :record="record"
             :total="total"
             :date="selectedDate"
             :backfill="isBackfill"
             @save="save"
             @open-cell="openCell"
+            @draft-change="draftDirty = $event"
           />
           <!-- 今日状态（基础栏 4 项）与三块快速录入面板已移到右栏「本页选项」：
                主栏只留九格与写作，右栏承担这一页的配置与关联信息（主理人 2026-11-08 22:32） -->
@@ -616,7 +742,7 @@ onUnmounted(() => {
           @go-cell="openCell"
           @notify="notify"
         />
-        <ReviewView v-else-if="view === 'review'" mode="retro" />
+        <ReviewView v-else-if="view === 'review'" mode="retro" @changed="gtdTick += 1" />
         <FreeView v-else-if="view === 'free'" @notify="notify" />
         <!-- 旧 ViewKey 分支保留作兼容（命令面板等旧入口），主入口已是顶栏弹窗 -->
         <CapsuleView v-else-if="view === 'capsule'" />
@@ -633,18 +759,7 @@ onUnmounted(() => {
         <DataCenter v-else-if="view === 'data'" :total="total" @open-bin="navigate('bin')" />
         <BinView v-else-if="view === 'bin'" />
         <LibraryView v-else-if="view === 'inspire'" @notify="notify" />
-        <!-- 图书馆：两类阅读 + 读书笔记；九格回写只追加、只写真实今天 -->
-        <ReadingView
-          v-else-if="view === 'reading'"
-          :record="record"
-          :today="today"
-          :backfill="isBackfill"
-          @back="navigate('today')"
-          @save="save"
-          @notify="notify"
-          @changed="gtdTick += 1"
-          @open-cell="openCell"
-        />
+        <!-- 图书馆已迁到独立窗口（V3.14）：主窗不再内嵌书架，避免同一份 md_reading 两套界面 -->
         <!-- 家庭账本已迁到独立窗口：主窗不再内嵌第二套账本界面，避免同一份数据两套 UI -->
         <SettingsView v-else @go-data="navigate('data')" @notify="notify" @wt-changed="refreshWtOn" />
       </main>
@@ -689,6 +804,8 @@ onUnmounted(() => {
       />
     </div>
 
+    <div v-if="railOpen" class="rail-scrim" aria-hidden="true" @click="closeRail"></div>
+
     <!-- 梦想账户存够 → 浮窗提醒走下一步，直到这条目标被标记达成 -->
     <DreamAlert :tick="gtdTick" @go="navigate('dream')" />
 
@@ -716,7 +833,7 @@ onUnmounted(() => {
       @saved="quickSaved"
     />
 
-    <div v-if="toast" class="toast" :class="{ 'toast-on': !!toast }" role="status">{{ toast }}</div>
+    <div v-if="toast" class="toast" :class="{ 'toast-on': !!toast }" role="status" aria-live="polite">{{ toast }}</div>
   </div>
 </template>
 
@@ -737,8 +854,8 @@ onUnmounted(() => {
   background: var(--palette-primary);
   color: var(--palette-on);
 }
-.brand { font-weight: 500; font-size: 14px; }
-.view-crumb { font-size: 12px; opacity: 0.8; }
+.brand { font-weight: 500; font-size: var(--text-h2); }
+.view-crumb { font-size: var(--text-sm); opacity: 0.8; }
 
 /* 补记：日期导航常驻标题栏，切到过去时整条变琥珀色 */
 .date-nav {
@@ -754,14 +871,14 @@ onUnmounted(() => {
   background: rgba(246, 193, 119, 0.14);
 }
 .dn-btn {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1;
   cursor: pointer;
   border-radius: 4px;
@@ -769,12 +886,12 @@ onUnmounted(() => {
 }
 .dn-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
 .dn-btn:disabled { opacity: 0.3; cursor: default; }
-.dn-label { font-size: 12px; min-width: 46px; text-align: center; }
+.dn-label { font-size: var(--text-sm); min-width: 46px; text-align: center; }
 .dn-past { color: #f6c177; font-weight: 500; }
 .dn-today {
   margin-left: 4px;
   padding: 1px 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   border: 0.5px solid rgba(246, 193, 119, 0.7);
   border-radius: 999px;
   background: transparent;
@@ -792,14 +909,14 @@ onUnmounted(() => {
   border: 0.5px solid var(--state-warn);
   background: var(--state-warn-soft);
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .bf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--state-warn); flex: none; }
 .bf-text { flex: 1; }
 .bf-sub { opacity: 0.75; }
 .bf-btn {
   padding: 2px 10px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   cursor: pointer;
   border: 0.5px solid var(--state-warn);
   border-radius: 999px;
@@ -807,7 +924,7 @@ onUnmounted(() => {
   color: var(--state-warn);
 }
 .spacer { flex: 1; }
-.quick-btn, .settings-btn, .insight-btn, .reading-btn, .finance-btn, .capsule-btn {
+.quick-btn, .settings-btn, .insight-btn, .reading-btn, .finance-btn, .capsule-btn, .rail-toggle {
   padding: 4px 12px;
   border: 0.5px solid rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-md);
@@ -815,7 +932,7 @@ onUnmounted(() => {
   color: inherit;
 }
 .quick-on, .settings-on, .insight-on, .reading-on, .finance-on, .capsule-on { background: var(--palette-on); color: var(--palette-primary); }
-.cap-badge { display: inline-block; min-width: 15px; padding: 0 4px; margin-left: 5px; border-radius: 9px; background: var(--palette-accent); color: var(--palette-on); font-size: 10px; line-height: 15px; }
+.cap-badge { display: inline-block; min-width: 15px; padding: 0 4px; margin-left: 5px; border-radius: 9px; background: var(--palette-primary); color: var(--palette-on); font-size: var(--text-xs); line-height: 15px; }
 .columns {
   display: flex;
   min-height: 0;
@@ -833,6 +950,10 @@ onUnmounted(() => {
   cursor: col-resize;
   background: transparent;
   outline: none;
+}
+.col-divider::before {
+  /* 视觉宽仍是 6px，命中区左右各外扩 9px */
+  content: ''; position: absolute; top: 0; bottom: 0; left: -9px; right: -9px;
 }
 .col-divider::after {
   content: '';
@@ -854,12 +975,17 @@ onUnmounted(() => {
 .skin-pick { display: flex; align-items: center; gap: 6px; padding-right: 2px; }
 .skin-dot-wrap { display: inline-flex; }
 .skin-dot {
+  /* 视觉仍是 14px 圆点，命中区 24×24（WCAG 2.5.8） */
+  box-sizing: content-box;
+  min-height: 0;
   width: 14px;
   height: 14px;
-  padding: 0;
+  padding: 5px;
+  margin: -5px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.7);
   background: var(--palette-primary);
+  background-clip: content-box;
   cursor: pointer;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
@@ -867,21 +993,57 @@ onUnmounted(() => {
 .skin-dot-on { border-color: var(--palette-on); box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.22); }
 .toast {
   position: absolute;
+  z-index: var(--z-toast);
   right: var(--space-4);
   bottom: 44px;
   padding: 8px 16px;
   border-radius: var(--radius-lg);
   background: var(--palette-primary);
   color: var(--palette-on);
-  font-size: 12px;
+  font-size: var(--text-sm);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 .toast-on { border: 0.5px solid var(--palette-border); }
-@media (max-width: 1024px) {
-  /* 窄屏：中栏优先。左栏图标化、右栏让位，手柄随之隐藏（拖也拖不出空间） */
+/* ---- 窄态骨架（D1：<=1120，实测最小窗视口 1025 能命中）----
+   取舍：先砍右栏、不砍九格列数；左栏保持 240（64px 无图标资源，实测会竖排）。 */
+.skip-link {
+  position: absolute; left: 8px; top: -60px; z-index: var(--z-toast);
+  padding: 4px 12px; border-radius: var(--radius-sm);
+  background: var(--surface-bg); color: var(--palette-primary); font-size: var(--text-sm);
+}
+.skip-link:focus { top: 4px; }
+.rail-toggle { display: none; }
+.rail-scrim { display: none; }
+.discard-bar {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 6px var(--space-3); font-size: var(--text-sm);
+  background: var(--state-warn-soft); color: var(--state-warn);
+  border-bottom: 0.5px solid var(--state-warn);
+}
+.db-text { flex: 1; }
+.db-btn {
+  padding: 3px 10px; font-size: var(--text-sm); border-radius: var(--radius-sm);
+  border: 0.5px solid var(--state-warn); background: transparent; color: inherit;
+}
+.db-warn { background: var(--state-warn); color: #ffffff; }
+
+@media (max-width: 1120px) {
   .col-divider { display: none; }
-  .columns :deep(.nav) { width: 64px; }
+  .columns :deep(.nav) { width: 240px; }
+  /* 右栏不删功能：收成可唤起的抽屉。关闭时 display:none，
+     既不会被当成「视口外溢出」，也不会被 Tab 聚焦到看不见的元素 */
   .columns :deep(.context) { display: none; }
+  .columns.rail-open :deep(.context) {
+    display: flex;
+    position: fixed; top: 44px; right: 0; bottom: 22px;
+    width: min(300px, 60vw); z-index: var(--z-drawer);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.14);
+  }
+  .rail-toggle { display: inline-flex; align-items: center; }
+  .rail-scrim {
+    display: block; position: fixed; inset: 44px 0 22px; z-index: calc(var(--z-drawer) - 5);
+    background: rgba(0, 0, 0, 0.12);
+  }
   .center { padding: var(--space-2); }
 }
 </style>

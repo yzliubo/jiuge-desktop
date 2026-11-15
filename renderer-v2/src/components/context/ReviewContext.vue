@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 「回顾」的右栏：复盘完成度（周 / 月两套周期键各填了几问）+ 三问提示。
 // 复盘本身在中栏，右栏负责回答「我这一期到底写完了没有」。
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { callDomain } from '../../composables/useDomain';
-import { reviewTriplet } from '../../composables/promptLibrary';
+import { REVIEW_EVIDENCE_QUESTIONS } from '../../composables/promptLibrary';
 import type { ViewKey } from '../../types';
 
+const props = defineProps<{ tick?: number }>();
 const emit = defineEmits<{ (e: 'navigate', key: ViewKey): void }>();
 
 interface PeriodState { key: string; filled: number; total: number }
@@ -34,21 +35,22 @@ async function load(): Promise<void> {
       callDomain<string>('reviewPeriodKey', '', 'week'),
       callDomain<string>('reviewPeriodKey', '', 'month')
     ]);
-    const [wAns, mAns, p] = await Promise.all([
+    const [wAns, mAns] = await Promise.all([
       callDomain<unknown>('loadReview', ['', '', ''], 'week', wKey),
-      callDomain<unknown>('loadReview', ['', '', ''], 'month', mKey),
-      callDomain<string[]>('reviewPrompts', ['', '', ''], 'week')
+      callDomain<unknown>('loadReview', ['', '', ''], 'month', mKey)
     ]);
     week.value = { key: wKey, filled: countFilled(wAns), total: 3 };
     month.value = { key: mKey, filled: countFilled(mAns), total: 3 };
-    // 与中栏复盘同口径：右栏「本周三问」也取同一组原创题，避免两边文案打架。
-    const fresh = reviewTriplet('week', wKey);
-    prompts.value = fresh.length === 3 ? fresh : (Array.isArray(p) ? p.slice(0, 3) : ['', '', '']);
+    // V3.7：中栏三问固定成「证据 → 归因 → 一个改动」，右栏必须显示同一组口径。
+    // 两边共用 promptLibrary 的同一份常量；轮换题组只在中栏当「换个角度」提示。
+    prompts.value = REVIEW_EVIDENCE_QUESTIONS.slice(0, 3);
   } finally {
     loading.value = false;
   }
 }
 
+// 中栏存完三问 / 落成下一步后重取：否则右栏完成度还停在旧数字
+watch(() => props.tick, function () { void load(); });
 onMounted(load);
 </script>
 
@@ -72,6 +74,7 @@ onMounted(load);
 
   <section class="ctx-card">
     <h2 class="ctx-title">本周三问</h2>
+    <p class="ctx-muted" style="margin: 0 0 6px">与中栏同一口径；轮换题只作「换个角度」提示</p>
     <div class="ctx-list">
       <div v-for="(p, i) in prompts" :key="i" class="ctx-item">
         <span class="ctx-item-side">{{ i + 1 }}</span>

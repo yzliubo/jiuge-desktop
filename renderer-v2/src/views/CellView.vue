@@ -77,9 +77,9 @@ function saveCell(): void {
 <style scoped>
 .cell-view { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
-.head h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.head h2 { margin: 0; font-size: var(--text-h2); font-weight: 500; }
 .head-actions { display: flex; gap: 6px; }
-.muted { font-size: 12px; color: var(--surface-muted); }
+.muted { font-size: var(--text-sm); color: var(--surface-muted); }
 .primary, .ghost, .back {
   padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md);
   background: var(--surface-raised);
@@ -87,6 +87,6 @@ function saveCell(): void {
 .primary.cell-save-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .editor { display: flex; flex-direction: column; gap: 6px; }
 .edit-foot { display: flex; align-items: center; justify-content: space-between; }
-.msg { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--surface-panel); font-size: 12px; }
+.msg { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--surface-panel); font-size: var(--text-sm); }
 .message-on { background: var(--palette-soft); color: var(--palette-primary); }
 </style>

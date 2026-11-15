@@ -30,9 +30,9 @@ const backupLabel = (): string => {
 
 // 合规声明按实际开关改口。三态不够用（两样都开时要两个都说），所以组合成四种说法。
 const netLabel = computed(() => {
-  if (props.wxOn && props.wtOn) return '仅本机回环 + 天气联网';
+  if (props.wxOn && props.wtOn) return '仅本机 + 天气联网';
   if (props.wxOn) return '仅天气联网';
-  if (props.wtOn) return '仅本机回环';
+  if (props.wtOn) return '仅本机使用';
   return '零网络';
 });
 const netTitle = computed(() => {
@@ -70,7 +70,7 @@ const netTitle = computed(() => {
   padding: 0 var(--space-3);
   border-top: 0.5px solid var(--surface-border);
   background: var(--surface-panel);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1;
   color: var(--surface-muted);
   white-space: nowrap;
@@ -82,7 +82,7 @@ const netTitle = computed(() => {
 .spacer { flex: 1; }
 .dir-btn {
   border: 0; background: transparent; color: var(--palette-primary);
-  padding: 0; font-size: 11px; line-height: 1;
+  padding: 0 4px; font-size: var(--text-xs); line-height: 20px; min-height: 20px;
 }
 .dir-btn:hover { text-decoration: underline; }
 .local { color: var(--surface-muted); }

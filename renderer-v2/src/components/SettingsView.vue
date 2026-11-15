@@ -327,7 +327,7 @@ onMounted(async () => {
         <p v-if="wxMsg" class="muted">{{ wxMsg }}</p>
         <p v-if="wx.state.error" class="muted">上次失败：{{ wx.state.error.msg }}（会保留上一次的温度并标灰，不假装是最新的）</p>
       </template>
-      <p v-else class="muted">关闭态：首页连天气占位都不渲染，主进程一次请求都不发。</p>
+      <p v-else class="muted">关闭态：首页不显示天气，后台不会发起任何请求。</p>
     </div>
 
     <div class="card"><h2>8 · 语言</h2>
@@ -351,7 +351,7 @@ onMounted(async () => {
 
     <!-- 界面减负：原先散落在各模块常驻显示的设计口径与免责说明，统一收进这个默认收起的入口 -->
     <details class="card" style="cursor: pointer;">
-      <summary style="font-size: 13px;">功能说明与边界</summary>
+      <summary style="font-size: var(--text-body);">功能说明与边界</summary>
       <p class="line"><strong>数据与备份</strong>：全部记录只存本机；导入只补不改；迁移失败进入只读模式，回滚前强制导出一份备份。</p>
       <p class="line"><strong>搜索与内链</strong>：<code>A | B</code> 为「或」匹配；拼音首字母表是启发式近似，表外字可能不准。正文 <code>[[ ]]</code> 只是 Markdown 写法，零新键、不新增数据字段。</p>
       <p class="line"><strong>关系温度</strong>：100×(1−e^(−S/6))，S = Σ(渠道权重 × 深度系数 × 0.5^(天数/90))。只用来排序「谁最久没被想起」，不算总分、不做健康度评分，也不做「他给过我什么」的对称账；权重与 90 天半衰期是启发式，不是心理学常数；邓巴数只提示、不设闸门。</p>
@@ -366,12 +366,12 @@ onMounted(async () => {
 
 <style scoped>
 .settings { display: flex; flex-direction: column; gap: var(--space-2); }
-.head h1 { font-size: 15px; font-weight: 500; margin: 0; }
-.head p, .muted, .desc { font-size: 12px; color: var(--surface-muted); }
+.head h1 { font-size: var(--text-h2); font-weight: 500; margin: 0; }
+.head p, .muted, .desc { font-size: var(--text-sm); color: var(--surface-muted); }
 .card { padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-panel); }
-.card h2 { font-size: 13px; font-weight: 500; margin: 0 0 8px; }
+.card h2 { font-size: var(--text-body); font-weight: 500; margin: 0 0 8px; }
 .skins { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-.skin { padding: 8px 4px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); font-size: 12px; }
+.skin { padding: 8px 4px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); font-size: var(--text-sm); }
 .skin-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
 .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .seg, .btn { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
@@ -379,21 +379,21 @@ onMounted(async () => {
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 0.5px solid var(--surface-border); }
 .switch-row:last-of-type { border-bottom: 0; }
 .switch-row div { display: flex; flex-direction: column; }
-.switch { padding: 4px 14px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); font-size: 12px; }
+.switch { padding: 4px 14px; border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); font-size: var(--text-sm); }
 .switch-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.line { font-size: 12px; margin: 4px 0; }
+.line { font-size: var(--text-sm); margin: 4px 0; }
 .set-in {
-  padding: 4px 8px; font-size: 12px; max-width: 180px;
+  padding: 4px 8px; font-size: var(--text-sm); max-width: 180px;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
   background: var(--surface-raised); outline: none; box-sizing: border-box;
 }
 .set-in:focus { border-color: var(--palette-accent); }
 .wt-rule {
-  display: flex; align-items: baseline; gap: 8px; font-size: 12px;
+  display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm);
   padding: 3px 0; border-bottom: 0.5px dashed var(--surface-border);
 }
 .wt-rule-l { color: var(--palette-primary); }
-.wt-rule-m { flex: 1; min-width: 0; color: var(--surface-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.link { border: 0; background: transparent; color: var(--palette-primary); font-size: 12px; }
+.wt-rule-m { flex: 1; min-width: 0; color: var(--surface-muted); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link { border: 0; background: transparent; color: var(--palette-primary); font-size: var(--text-sm); }
 .tips { margin-top: var(--space-2); }
 </style>

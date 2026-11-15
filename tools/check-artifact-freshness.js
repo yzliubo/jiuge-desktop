@@ -93,7 +93,10 @@ if (!distAssets.length || !distNewest.ms) {
 }
 
 // 2) 交付 exe 唯一（R-04）
-const buildDirs = ['build-v2', 'build-v2b'].map(function (d) { return path.join(ROOT, d); }).filter(fs.existsSync);
+// 输出目录可能不止一个：build-v2 是交付位，build-v2b / build-v2c 是「产物位被别的进程
+// （宿主 WorkBuddy / 杀软）长期占着 app.asar 时」改出来的输出位——electron-builder 覆盖不了
+// 被占用的 asar，交付位又不能空着。三处一起扫：取**最新**的 asar 做新鲜度证据，exe 仍要求全局唯一。
+const buildDirs = ['build-v2', 'build-v2b', 'build-v2c', 'build-v2d'].map(function (d) { return path.join(ROOT, d); }).filter(fs.existsSync);
 let exes = [];
 for (const d of buildDirs) {
   for (const f of fs.readdirSync(d)) {

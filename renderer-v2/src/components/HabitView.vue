@@ -109,19 +109,19 @@ onMounted(async () => {
 
 <style scoped>
 .habit { display: flex; flex-direction: column; gap: var(--space-2); }
-.head h1 { font-size: 15px; font-weight: 500; margin: 0; }
-.head p { font-size: 12px; color: var(--surface-muted); margin: 4px 0 0; }
+.head h1 { font-size: var(--text-h2); font-weight: 500; margin: 0; }
+.head p { font-size: var(--text-sm); color: var(--surface-muted); margin: 4px 0 0; }
 .card { padding: var(--space-2); border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg); background: var(--surface-panel); }
-.card h2 { font-size: 13px; font-weight: 500; margin: 0 0 6px; }
+.card h2 { font-size: var(--text-body); font-weight: 500; margin: 0 0 6px; }
 .hero { background: var(--palette-soft); }
 .big { font-size: 24px; font-weight: 500; color: var(--palette-primary); }
-.big small { font-size: 12px; font-weight: 400; }
+.big small { font-size: var(--text-sm); font-weight: 400; }
 .stats { display: flex; flex-wrap: wrap; gap: 6px; margin: var(--space-2) 0; }
-.stat { padding: 2px 8px; border-radius: 999px; background: var(--surface-raised); font-size: 12px; }
+.stat { padding: 2px 8px; border-radius: 999px; background: var(--surface-raised); font-size: var(--text-sm); }
 .stat-on, .badge { background: var(--palette-primary); color: var(--palette-on); }
 .progress { height: 5px; background: var(--surface-border); border-radius: 3px; margin-bottom: 6px; }
 .progress span { display: block; height: 100%; background: var(--palette-accent); border-radius: 3px; }
-.line, .muted, .empty, .message { font-size: 12px; color: var(--surface-muted); }
+.line, .muted, .empty, .message { font-size: var(--text-sm); color: var(--surface-muted); }
 .message { color: var(--palette-primary); }
 .first { background: var(--palette-soft); }
 .first-on { border-color: var(--palette-border); }
@@ -130,7 +130,7 @@ onMounted(async () => {
 .at { flex: 0 0 80px; }
 .btn, .seg { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .btn-on { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); margin-bottom: 4px; font-size: 12px; }
+.item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); margin-bottom: 4px; font-size: var(--text-sm); }
 .item-on { border-color: var(--palette-accent); }
 .badge { padding: 2px 8px; border-radius: 999px; }
 .reward { flex: 1; }

@@ -164,13 +164,13 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
   border-radius: 999px;
   background: transparent;
   color: var(--surface-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 .wx-btn:hover { border-color: var(--palette-accent); color: var(--surface-text); }
-.wx-icon { font-size: 12px; color: var(--palette-accent); }
+.wx-icon { font-size: var(--text-sm); color: var(--palette-accent); }
 .wx-place { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wx-temp { color: var(--surface-text); font-weight: 600; }
 .wx-range { opacity: 0.7; }
@@ -179,14 +179,14 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
 .wx-warn {
   display: inline-block;
   width: 12px; height: 12px; line-height: 12px; text-align: center;
-  border-radius: 50%; background: var(--palette-accent); color: var(--palette-on); font-size: 9px;
+  border-radius: 50%; background: var(--palette-accent); color: var(--palette-on); font-size: var(--text-xs);
 }
 
 .wx-pop {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  z-index: 40;
+  z-index: var(--z-overlay);
   width: 240px;
   padding: 10px 12px;
   border: 0.5px solid var(--surface-border);
@@ -196,24 +196,24 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
   text-align: left;
   white-space: normal;
 }
-.wx-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; }
+.wx-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--text-body); }
 .wx-line strong { color: var(--palette-primary); font-weight: 600; }
-.wx-sub { margin: 4px 0 0; font-size: 11px; color: var(--surface-muted); line-height: 1.6; }
-.wx-err { margin: 6px 0 0; font-size: 11px; color: var(--palette-accent); line-height: 1.6; }
+.wx-sub { margin: 4px 0 0; font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.6; }
+.wx-err { margin: 6px 0 0; font-size: var(--text-xs); color: var(--palette-accent); line-height: 1.6; }
 .wx-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .wx-link {
   padding: 0; border: 0; background: transparent;
-  color: var(--palette-primary); font-size: 11px; cursor: pointer;
+  color: var(--palette-primary); font-size: var(--text-xs); cursor: pointer;
 }
 .wx-link:hover { text-decoration: underline; }
 /* 主操作单独一行，别和「刷新 / 定位 / 关闭」挤成一排分不出轻重 */
 .wx-save-row { padding-top: 8px; border-top: 0.5px dashed var(--surface-border); }
-.wx-save-row .wx-link { font-size: 12px; font-weight: 600; }
+.wx-save-row .wx-link { font-size: var(--text-sm); font-weight: 600; }
 .wx-link:disabled { color: var(--surface-muted); cursor: default; text-decoration: none; }
 .wx-in {
   flex: 1; min-width: 0;
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   border: 0.5px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
@@ -222,5 +222,5 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick));
   box-sizing: border-box;
 }
 .wx-in:focus { border-color: var(--palette-accent); }
-.wx-note { margin: 8px 0 0; font-size: 10px; color: var(--surface-muted); line-height: 1.5; opacity: 0.85; }
+.wx-note { margin: 8px 0 0; font-size: var(--text-xs); color: var(--surface-muted); line-height: 1.5; opacity: 0.85; }
 </style>

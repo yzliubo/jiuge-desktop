@@ -125,7 +125,7 @@ async function shuffleQuote(): Promise<void> {
   align-items: center;
   gap: var(--space-2);
   min-height: 22px;
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.5;
   letter-spacing: 0.04em;
   color: var(--surface-muted);
@@ -140,14 +140,14 @@ async function shuffleQuote(): Promise<void> {
   letter-spacing: 0.02em;
   color: var(--palette-primary);
 }
-.greeting-hint { margin-top: 6px; font-size: 12px; color: var(--surface-muted); line-height: 1.6; }
+.greeting-hint { margin-top: 6px; font-size: var(--text-sm); color: var(--surface-muted); line-height: 1.6; }
 .hint-tag {
   display: inline-block;
   margin-right: 6px;
   padding: 0 6px;
   border-radius: 999px;
   border: 0.5px solid var(--surface-border);
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--surface-muted);
 }
 /* 四颗读数胶囊靠右排：左边留白给问候语，右侧这条空白正好放它们，
@@ -166,7 +166,7 @@ async function shuffleQuote(): Promise<void> {
   display: flex;
   align-items: baseline;
   gap: 0 6px;
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   line-height: 1.6;
   color: var(--surface-muted);
   font-variant-numeric: tabular-nums;
@@ -176,7 +176,7 @@ async function shuffleQuote(): Promise<void> {
 /* 连续有记录时只把这一处点亮，不整块反白 */
 .stat-on { color: var(--palette-primary); font-weight: 600; }
 .stat-dot { opacity: 0.35; }
-.gentle { margin: 0; font-size: 12px; color: var(--surface-muted); }
+.gentle { margin: 0; font-size: var(--text-sm); color: var(--surface-muted); }
 
 /* ② 名言：单独一块，左侧竖线 + 浅底，与上面的纯文字区分开 */
 .quote-block {
@@ -188,13 +188,13 @@ async function shuffleQuote(): Promise<void> {
 }
 .quote-line {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-h2);
   line-height: 1.7;
   color: var(--surface-text);
 }
 .quote-author {
   margin-left: 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--surface-muted);
   white-space: nowrap;
 }
@@ -203,10 +203,10 @@ async function shuffleQuote(): Promise<void> {
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--palette-primary);
   cursor: pointer;
 }
 .qa-btn:hover { text-decoration: underline; }
-.qa-hint { margin-left: auto; font-size: 10px; color: var(--surface-muted); }
+.qa-hint { margin-left: auto; font-size: var(--text-xs); color: var(--surface-muted); }
 </style>

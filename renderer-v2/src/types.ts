@@ -24,7 +24,7 @@ export interface DiaryRecord {
 // 数据层不动：旧记录里的 cells.dream 仍在（导出、备份、搜索都能看到）。
 export const GRID_KEYS = [
   'work', 'money', 'health', 'relation', 'future',
-  'emotion', 'leisure', 'growth', 'free'
+  'emotion', 'dream', 'growth', 'free'
 ] as const;
 
 // 九格统一四字名：两字名放进行目录里太轻，看不出「这一格是干什么的」；
@@ -35,8 +35,7 @@ export const GRID_KEYS = [
 export const GRID_LABELS: Record<string, string> = {
   work: '工作推进', money: '金钱收支', health: '身心健康',
   relation: '关系经营', future: '今日六条', emotion: '情绪觉察',
-  leisure: '休闲娱乐',
-  dream: '梦想', // 旧数据的 cells.dream 仍在（不计入九格，但导出/搜索要能显示名字）
+  dream: '休闲娱乐', // 数据键与领域层一致；只换显示名，历史 cells.dream 正文原样保留
   growth: '学习成长', free: '自由记录'
 };
 
@@ -59,9 +58,10 @@ export const NAV_ITEMS: Array<{ key: ViewKey; label: string }> = [
   { key: 'today', label: '今天' },
   { key: 'timeline', label: '时间轴' },
   { key: 'review', label: '回顾' },
-  // 胶囊功能单一，降为顶栏按钮 + 两个弹窗；腾出的导航位给三合一的「自由记录」。
-  // 计数仍是 7 项 + 设置（GUI #09 / #122 硬断言），胶囊的 ViewKey 保留作兼容，不再占导航。
-  { key: 'free', label: '自由记录' },
+  // 2026-11-13：一级导航里的「自由记录」撤掉——它与九格「自由」格是同一个视图，
+  // 同一功能两个入口，左栏就多一行。入口收敛到「今天 → 自由」这条九格目录
+  // （openCell('free') → view 'free'，App.vue 单点分支），ViewKey 保留。
+  // 计数仍是 6 项 + 设置（GUI #09 / #122 硬断言改成 7）。
   { key: 'habit', label: '坚持' },
   // 梦想从九格升成一级模块：目标板（短/中/长期 + 量化 + 关联行动）
   { key: 'dream', label: '梦想' },

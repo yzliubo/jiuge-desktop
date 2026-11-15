@@ -193,20 +193,20 @@ onMounted(async () => {
 .extras-flat .card { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .extras-flat .card + .card { padding-top: 10px; border-top: 0.5px dashed var(--surface-border); }
 .extras-flat .base-grid { grid-template-columns: 1fr; gap: 8px; margin: 8px 0; }
-.card-title { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
-.hint, .muted { font-size: 12px; color: var(--surface-muted); }
+.card-title { font-size: var(--text-body); font-weight: 500; margin: 0 0 4px; }
+.hint, .muted { font-size: var(--text-sm); color: var(--surface-muted); }
 .hint.wx-auto { color: var(--palette-primary); }
-.hint .link { font-size: 12px; }
+.hint .link { font-size: var(--text-sm); }
 .base-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
-.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--surface-muted); }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); color: var(--surface-muted); }
 .text { width: 100%; padding: 6px 8px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); outline: none; }
 .row { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
 .btn { padding: 6px 12px; border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .btn-on, .primary { background: var(--palette-primary); color: var(--palette-on); border-color: var(--palette-primary); }
-.link { border: 0; background: transparent; color: var(--palette-primary); font-size: 12px; }
+.link { border: 0; background: transparent; color: var(--palette-primary); font-size: var(--text-sm); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { padding: 2px 10px; border-radius: 999px; background: var(--surface-raised); font-size: 12px; }
+.chip { padding: 2px 10px; border-radius: 999px; background: var(--surface-raised); font-size: var(--text-sm); }
 .chip-on { background: var(--palette-soft); color: var(--palette-primary); }
 .quick-row .text { flex: 1; min-width: 180px; }
-.insight-hint { font-size: 12px; color: var(--surface-muted); margin: var(--space-2) 0 0; }
+.insight-hint { font-size: var(--text-sm); color: var(--surface-muted); margin: var(--space-2) 0 0; }
 </style>

@@ -209,6 +209,17 @@ function createApiLayer(opts) {
     }
   });
 
+  // 独立图书馆窗口（V3.14）：同上。书架搬出主窗是因为左侧要挂一棵文件夹树，
+  // 主窗中栏放不下；开窗仍是主进程的事，渲染层只说「开图书馆」。
+  route('v1/library:open', function () {
+    if (!opts.libraryOpener) return contract.fail('CLIENT_EXCEPTION', '未提供图书馆窗口');
+    try {
+      return contract.ok(opts.libraryOpener());
+    } catch (e) {
+      return contract.fail('CLIENT_EXCEPTION', (e && e.message) || String(e));
+    }
+  });
+
   // 领域层白名单：8 utils 的 68 个能力以显式白名单暴露，渲染层不得越权调用
   const DOMAIN_WHITELIST = [
     'today', 'formatDate', 'emptyRecord', 'hasContent', 'load', 'listDates', 'all', 'writtenDates', 'stats',
@@ -217,6 +228,8 @@ function createApiLayer(opts) {
     'firstWeekEnabled', 'setFirstWeekEnabled', 'modules', 'setModule', 'firstWeekState',
     'promptFor', 'previousToday', 'sameDayAcrossYears', 'search', 'weeklyReview',
     'frequentPhrases', 'moodTrend', 'reviewPeriodKey', 'reviewPrompts', 'loadReview', 'saveReview',
+    // V3.10 跨期对照：只读派生，一次回看最近 6 期（含本期草稿），不写任何东西
+    'review.cross',
     'yearPixels', 'randomEntry', 'exportText', 'exportMarkdown', 'exportBackup', 'importBackup',
     'capsulePresets', 'saveCapsule', 'listCapsules', 'dueCapsules', 'openCapsule', 'capsuleGroups', 'prettyDate',
     'workSummary', 'workDigest', 'workTagPool', 'moneySummary', 'moduleDigest',
@@ -240,10 +253,12 @@ function createApiLayer(opts) {
     'growth.meta', 'growth.read', 'growth.board',
     'growth.addExam', 'growth.updateExam', 'growth.removeExam',
     'growth.addSubject', 'growth.updateSubject', 'growth.removeSubject',
-    'growth.setExamResult', 'growth.retakeExam',
+    'growth.setExamResult', 'growth.setExamCauses', 'growth.retakeExam',
     'growth.addSkill', 'growth.updateSkill', 'growth.removeSkill',
     'growth.addMilestone', 'growth.toggleMilestone', 'growth.removeMilestone',
     'growth.addPractice', 'growth.removePractice',
+    // V3.9 练习反馈：卡点 / 下次提高一点什么（写成长模块自己的键，不新增存储）
+    'growth.setSkillBlocker', 'growth.clearSkillBlocker', 'growth.setSkillNextUp',
     'growth.addTheme', 'growth.updateTheme', 'growth.removeTheme',
     'growth.addBook', 'growth.updateBook', 'growth.removeBook',
     'growth.advanceBook', 'growth.setBookStatus', 'growth.addQuote', 'growth.removeQuote',
@@ -281,6 +296,13 @@ function createApiLayer(opts) {
     'reading.bookmarks', 'reading.addBookmark', 'reading.removeBookmark', 'reading.searchBook',
     'reading.addBook', 'reading.updateBook', 'reading.removeBook',
     'reading.advanceBook', 'reading.setBookStatus',
+    // 2026-11-14 书架整理：排序 / 再读一遍 / 最近在读 / 换封面 / 本机字体
+    'reading.reorder', 'reading.reread', 'reading.touch', 'reading.setCover', 'reading.systemFonts',
+    // V3.13 豆瓣封面走**专用异步通道**（v1/reading:doubanCovers / :doubanApply），
+    // 不在这里登记——domain:call 是同步白名单，登记一个返回 Promise 的函数会在序列化时炸。
+    // V3.5：书架分组 / 收藏夹（写 books 标签）+ PDF 原页字节（只读，不落临时文件）
+    'reading.setBookGroup', 'reading.setBookFavorite', 'reading.renameGroup', 'reading.removeGroup',
+    'reading.readerPdfData',
     'reading.addChapter', 'reading.updateChapter', 'reading.removeChapter',
     'reading.addNote', 'reading.updateNote', 'reading.removeNote', 'reading.markPushed',
     'reading.themeAdvance', 'reading.importGrowthQuotes', 'reading.diaryLine', 'reading.exportMd',
@@ -326,6 +348,46 @@ function createApiLayer(opts) {
     'writing.check', 'writing.cards'
   ];
 
+  // ---- 成效侧度量（V3.8）：只回答「有没有真的推动」，一个字的正文都不记 ----
+  // 判定只看①调用名 ②参数里的**键名**是否出现，绝不把参数值写进日志。
+  // 读值就意味着任务标题、复盘答案有机会落盘——那正是 metrics.js 白名单要防的事。
+  function todayIso() {
+    const d = new Date();
+    const p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function outcomeEvent(name, args) {
+    const list = Array.isArray(args) ? args : [];
+    const ts = new Date().toISOString();
+    const date = todayIso();
+    if (name === 'gtd.complete') return { k: 'outcome_task_done', fields: { ts: ts, date: date, n: 1 } };
+    if (name === 'reading.advanceBook' || name === 'reading.readerProgress') {
+      // 两条都是「真的往前读了」：书架手动 +10 与阅读窗同步进度。
+      // 只记发生次数，不记读了几页 / 读到第几章（那是正文层的事，不必进日志）。
+      return { k: 'outcome_read_move', fields: { ts: ts, date: date, n: 1 } };
+    }
+    if (name === 'dream.deposit') return { k: 'outcome_dream_move', fields: { ts: ts, date: date, kind: 'deposit' } };
+    if (name === 'dream.update') {
+      // 只改标题 / 备注 / 配图不算「推动」：目标被推动＝进度、量化指标或状态变了
+      const patch = (list[1] && typeof list[1] === 'object') ? list[1] : null;
+      if (!patch) return null;
+      const kind = patch.metric !== undefined ? 'metric'
+        : (patch.progress !== undefined ? 'progress'
+          : (patch.status !== undefined ? 'status' : ''));
+      return kind ? { k: 'outcome_dream_move', fields: { ts: ts, date: date, kind: kind } } : null;
+    }
+    if (name === 'saveReview') {
+      // 只统计「真的写了至少一问」的落成；清空答案 / 手滑保存不算成效
+      const answers = Array.isArray(list[2]) ? list[2] : [];
+      const filled = answers.filter(function (x) { return String(x || '').trim().length > 0; }).length;
+      if (!filled) return null;
+      const period = String(list[0] || '') === 'month' ? 'month' : 'week';
+      return { k: 'outcome_review', fields: { ts: ts, date: date, period: period } };
+    }
+    return null;
+  }
+
   route('v1/domain:call', function (p) {
     const q = p || {};
     const name = typeof q.name === 'string' ? q.name : '';
@@ -339,6 +401,13 @@ function createApiLayer(opts) {
       // 检索使用率（R-11）：只记「用了哪种检索」，不记关键词
       if (name.indexOf('search.') === 0 && typeof opts.metricsRecord === 'function') {
         try { opts.metricsRecord('search_use', { ts: new Date().toISOString(), mode: name }); } catch (e) { /* 度量失败不影响检索 */ }
+      }
+      // 成效侧：调用成功后记一笔「发生了」，失败抛错就不记——没发生的事不该算成效
+      if (typeof opts.metricsRecord === 'function') {
+        try {
+          const ev = outcomeEvent(name, args);
+          if (ev) opts.metricsRecord(ev.k, ev.fields);
+        } catch (e) { /* 度量失败绝不影响业务调用 */ }
       }
       return contract.ok(result === undefined ? null : result);
     } catch (e) {
@@ -383,6 +452,29 @@ function createApiLayer(opts) {
   }
   route('v1/weather:sync', asyncDomain('weather.sync'));
   route('v1/weather:geocode', asyncDomain('weather.geocode'));
+
+  // 豆瓣封面（V3.13）：同样会发远程 HTTP，只能走异步路由，不能进 domain:call
+  // （那条白名单是按「同步纯函数」写的，返回 Promise 会让 IPC 序列化直接报
+  //  "An object could not be cloned"）。
+  // 与 weather 的区别：**「没搜到」不是通道错误**。搜不到书、豆瓣抽风、没网，
+  // 都算一次正常往返，由渲染层按 r.ok / r.reason 决定怎么说；只有领域层抛异常才走 fail。
+  function asyncPass(name) {
+    return function (p) {
+      if (!domain) return Promise.resolve(contract.fail('CLIENT_EXCEPTION', '领域层未挂载'));
+      const fn = domain[name];
+      if (typeof fn !== 'function') return Promise.resolve(contract.fail('CLIENT_EXCEPTION', '领域函数不可用: ' + name));
+      const q = p || {};
+      return Promise.resolve().then(function () {
+        return fn.apply(null, Array.isArray(q.args) ? q.args : []);
+      }).then(function (r) {
+        return contract.ok(r === undefined ? null : r);
+      }, function (e) {
+        return contract.fail((e && e.code) || 'CLIENT_EXCEPTION', (e && e.message) || String(e));
+      });
+    };
+  }
+  route('v1/reading:doubanCovers', asyncPass('reading.doubanCovers'));
+  route('v1/reading:doubanApply', asyncPass('reading.doubanApply'));
 
   // ---- 可回滚版本（R-10）：列出与回滚都由主进程执行 ----
   // 渲染层拿不到文件路径，只传一个 id；id 的合法性与快照可读性由主进程校验。

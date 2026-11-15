@@ -12,10 +12,10 @@ export default defineConfig({
     target: 'es2020',
     sourcemap: true,
     cssCodeSplit: true,
-    // 两个 HTML 入口：主窗 + 独立账本窗口。相对路径以 renderer-v2 为 root，
-    // 产物都落在 dist/，electron-builder 的 dist/**/* 通配会自动把两者带上。
+    // 三个 HTML 入口：主窗 + 独立账本窗口 + 独立图书馆窗口。相对路径以 renderer-v2 为 root，
+    // 产物都落在 dist/，electron-builder 的 dist/**/* 通配会自动把三者带上。
     rollupOptions: {
-      input: { main: 'index.html', finance: 'finance.html' }
+      input: { main: 'index.html', finance: 'finance.html', library: 'library.html' }
     }
   }
 });

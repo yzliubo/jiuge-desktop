@@ -31,7 +31,7 @@
 
 - **文档与 QA 日志**里的本机绝对路径已统一替换为 `<仓库根>` / `<文档根>` / `<工作区>` / `<用户目录>` 占位符（30 个文件）；45 个 JSON 结构未受影响（`bom-backup.json` 的 BOM 为原有格式，用 `utf-8-sig` 读取即可）。
 - **例外（23 处 / 6 文件）**：`tools/` 下 4 个脚本、`tests/qa-unit.js` 与 `src/.copy-manifest.json` 仍引用外部小程序源码目录的绝对路径。`npm run verify` / `smoke` 直接依赖这些路径，改成占位符会让门禁失效（实测报找不到源码），因此本轮保留原样。彻底清理需先把它们重构为 `JIUGE_SOURCE_DIR` 环境变量。
-- 提交历史中的旧路径与作者邮箱仍在历史对象里；**后续提交已改用 GitHub noreply 邮箱**。是否重写历史由主理人决定（重写会使所有旧 commit SHA 失效）。
+- **历史已重写**（2026-11-15）：17 个提交的作者 / 提交者邮箱统一为 GitHub noreply，以 `--force-with-lease` 推送，旧 commit SHA 全部失效；本地 `refs/original/refs/heads/main` 保留重写前快照。历史提交文件内容里的旧路径未改动，仍可在历史 diff 中翻到。
 
 ## 参与入口
 

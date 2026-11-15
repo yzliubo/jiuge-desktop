@@ -11,13 +11,13 @@
       "id": "B-33",
       "name": "启动日志 bootstrap 结果 loadedScripts=5 / pages=5",
       "ok": true,
-      "detail": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}\", source: file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html (62)"
+      "detail": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}\", source: file:///<仓库根>/src/renderer/index.html (62)"
     },
     {
       "id": "B-34",
       "name": "启动日志：5 个常驻 Page 实例，冷启动落在「今日」",
       "ok": true,
-      "detail": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」\", source: file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js (283)"
+      "detail": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」\", source: file:///<仓库根>/src/renderer/page-runtime.js (283)"
     },
     {
       "id": "B-35",
@@ -41,7 +41,7 @@
       "id": "D-09",
       "name": "关窗 flush 真调用且顺序为 syncWorkReflection→syncStudyNote→persist→stopTimer",
       "ok": true,
-      "detail": "[退出 flush] 顺序完成：syncWorkReflection → syncStudyNote → persist → stopTimer（来源：close）\", source: file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/flush.js (83)"
+      "detail": "[退出 flush] 顺序完成：syncWorkReflection → syncStudyNote → persist → stopTimer（来源：close）\", source: file:///<仓库根>/src/renderer/flush.js (83)"
     },
     {
       "id": "D-10",
@@ -284,5 +284,5 @@
     "logBytes": 1270,
     "jsErrors": 0
   },
-  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.qa-userdata"
+  "userData": "<仓库根>/tests/.qa-userdata"
 }

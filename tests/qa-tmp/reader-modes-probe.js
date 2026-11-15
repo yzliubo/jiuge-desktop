@@ -3,10 +3,10 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const P = 'G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop';
-const OUT = 'G:/workbuddy/2026-11-08-09-57-53/jiuge-redesign/评估-20261114/shots-library';
+const P = '<仓库根>';
+const OUT = '<文档根>/评估-20261114/shots-library';
 const { _electron: electron } = require(path.join(P, 'tests/e2e/node_modules/playwright'));
-const PDF = 'C:/Users/yzliu/Downloads/北湖污水处理厂深隧泵站水泵装置安装及调试_杨文中.pdf';
+const PDF = '<用户目录>/Downloads/北湖污水处理厂深隧泵站水泵装置安装及调试_杨文中.pdf';
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 const log = [];

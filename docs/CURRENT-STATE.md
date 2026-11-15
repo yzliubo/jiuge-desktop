@@ -24,8 +24,14 @@
 - exe 未购买代码签名证书，Windows SmartScreen 会拦一下。
 - `renderer-v2/reader/` 为静态页，不进 Vite 构建；改完必须重打包 exe 才生效。
 - 扫描件 / 自定义字体编码的 PDF 无法提取文字（pdf.js 限制），画布照常显示，文本层自动降级。
-- 仓库尚无 `LICENSE`，许可证待定。
+- **许可证：MIT**（根目录 `LICENSE`）。`renderer-v2/reader/vendor/` 内的 pdf.js 为 **Apache-2.0**，许可文本见同目录 `LICENSE-pdfjs.txt` / `NOTICE-pdfjs.txt`；分发 exe 时须一并保留。
 - `tests/qa-tmp/`、`tests/qa-logs/` 是开发期探针留档，含本机路径，不是产品代码。
+
+## 公开后的清理状态（2026-11-15）
+
+- **文档与 QA 日志**里的本机绝对路径已统一替换为 `<仓库根>` / `<文档根>` / `<工作区>` / `<用户目录>` 占位符（30 个文件）；45 个 JSON 结构未受影响（`bom-backup.json` 的 BOM 为原有格式，用 `utf-8-sig` 读取即可）。
+- **例外（23 处 / 6 文件）**：`tools/` 下 4 个脚本、`tests/qa-unit.js` 与 `src/.copy-manifest.json` 仍引用外部小程序源码目录的绝对路径。`npm run verify` / `smoke` 直接依赖这些路径，改成占位符会让门禁失效（实测报找不到源码），因此本轮保留原样。彻底清理需先把它们重构为 `JIUGE_SOURCE_DIR` 环境变量。
+- 提交历史中的旧路径与作者邮箱仍在历史对象里；**后续提交已改用 GitHub noreply 邮箱**。是否重写历史由主理人决定（重写会使所有旧 commit SHA 失效）。
 
 ## 参与入口
 

@@ -5,7 +5,7 @@ const fs = require('fs');
 const { _electron: electron } = require('playwright');
 
 const root = path.resolve(__dirname, '../..');
-const userData = 'G:/workbuddy/tmp-build/diag-cell-userdata';
+const userData = '<工作区>/diag-cell-userdata';
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 (async function () {

@@ -1,12 +1,12 @@
 'use strict';
 // 截图脚本（保留在仓库里，供每轮改版肉眼复核中栏顶部）。
-// 用法：cd tests/e2e && TEMP=G:/workbuddy/tmp-build node shot-greeting.js
+// 用法：cd tests/e2e && TEMP=<工作区> node shot-greeting.js
 const path = require('path');
 const fs = require('fs');
 const { _electron: electron } = require('playwright');
 
 const root = path.resolve(__dirname, '../..');
-const userData = 'G:/workbuddy/tmp-build/shot-userdata';
+const userData = '<工作区>/shot-userdata';
 const out = path.join(root, 'build-v2/shot-today.png');
 const out2 = path.join(root, 'build-v2/shot-focus.png');
 

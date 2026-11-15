@@ -3,7 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const P = 'G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop';
+const P = '<仓库根>';
 const { _electron: electron } = require(path.join(P, 'tests/e2e/node_modules/playwright'));
 delete process.env.ELECTRON_RUN_AS_NODE;
 

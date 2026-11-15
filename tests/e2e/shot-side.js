@@ -6,7 +6,7 @@ const fs = require('fs');
 const { _electron: electron } = require('playwright');
 
 const root = path.resolve(__dirname, '../..');
-const userData = 'G:/workbuddy/tmp-build/shot-side-userdata';
+const userData = '<工作区>/shot-side-userdata';
 const shot = function (n) { return path.join(root, 'build-v2/' + n); };
 
 delete process.env.ELECTRON_RUN_AS_NODE;

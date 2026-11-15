@@ -1,7 +1,7 @@
 {
   "label": "qa-r3",
   "generatedAt": "2026-11-07T06:44:43.202Z",
-  "userData": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\.d01-qa-userdata",
+  "userData": "<仓库根>/tests/.d01-qa-userdata",
   "checks": [
     {
       "id": "QA-00",
@@ -485,19 +485,19 @@
       "level": "1",
       "message": "[页面运行时] 已落盘页面 JS：index,review,capsule,habit,settings",
       "line": 267,
-      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+      "source": "file:///<仓库根>/src/renderer/page-runtime.js"
     },
     {
       "level": "1",
       "message": "[页面运行时] 启动完成：5 个常驻 Page 实例，冷启动落在「今日」",
       "line": 283,
-      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/page-runtime.js"
+      "source": "file:///<仓库根>/src/renderer/page-runtime.js"
     },
     {
       "level": "1",
       "message": "[启动] bootstrap 结果：{\"ok\":true,\"pages\":5,\"loadedScripts\":5}",
       "line": 62,
-      "source": "file:///G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop/src/renderer/index.html"
+      "source": "file:///<仓库根>/src/renderer/index.html"
     },
     {
       "level": "2",

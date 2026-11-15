@@ -4,8 +4,8 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const P = 'G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop';
-const EPUB = 'C:/Users/yzliu/Downloads/小强升职记.epub';
+const P = '<仓库根>';
+const EPUB = '<用户目录>/Downloads/小强升职记.epub';
 const { _electron: electron } = require(path.join(P, 'tests/e2e/node_modules/playwright'));
 delete process.env.ELECTRON_RUN_AS_NODE;
 

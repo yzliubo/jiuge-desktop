@@ -1,7 +1,7 @@
 {
   "electronVersion": "31.7.7",
   "hasApp": true,
-  "userData": "C:\\Users\\yzliu\\AppData\\Roaming\\Electron",
+  "userData": "<用户目录>/AppData/Roaming/Electron",
   "runAsNode": "(unset)",
-  "argv1": "G:\\workbuddy\\2026-11-07-09-44-09\\jiuge-desktop\\tests\\_smoke_entry.js"
+  "argv1": "<仓库根>/tests/_smoke_entry.js"
 }

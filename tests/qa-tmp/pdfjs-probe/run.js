@@ -2,9 +2,9 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const P = 'G:/workbuddy/2026-11-07-09-44-09/jiuge-desktop';
+const P = '<仓库根>';
 const { _electron: electron } = require(path.join(P, 'tests/e2e/node_modules/playwright'));
-const PDF = process.argv[2] || 'C:/Users/yzliu/Downloads/北湖污水处理厂深隧泵站水泵装置安装及调试_杨文中.pdf';
+const PDF = process.argv[2] || '<用户目录>/Downloads/北湖污水处理厂深隧泵站水泵装置安装及调试_杨文中.pdf';
 delete process.env.ELECTRON_RUN_AS_NODE;
 
 (async function () {

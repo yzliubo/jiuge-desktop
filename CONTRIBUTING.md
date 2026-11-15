@@ -4,7 +4,7 @@
 
 > **先读两句话**
 > 1. 根目录 `README.md` 是 **v1 版本快照**，其中「纯本地零网络 / 不联网」已不适用于当前主线（v2 渲染层 + V3.17）。当前状态以 [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md) 和代码为准。
-> 2. 仓库**尚未选定开源许可证**。在许可证明确前，请勿直接再分发或商用集成；授权口径会随许可证一并公布。
+> 2. 本仓库采用 **MIT 许可证**（见 [`LICENSE`](LICENSE)）。提交 PR 即表示你同意按 MIT 授权你的贡献；第三方依赖的许可口径见 [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md)。
 
 ## 一、从哪里开始
 
@@ -71,7 +71,6 @@ PR 描述里请写明改了哪些模块、跑了哪几条门禁；界面改动**
 
 ## 七、还没做的事（欢迎认领）
 
-- 选定并补上 `LICENSE`
 - 把 `README.md` 从 v1 快照重写为当前版本说明
 - 补 GitHub Actions（至少 `view:check` / `verify` / `smoke` 三条）
 - 清理历史文档与 QA 日志里的本机绝对路径

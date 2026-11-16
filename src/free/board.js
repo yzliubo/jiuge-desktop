@@ -127,20 +127,35 @@ function findDoc(s, id) {
 
 // 闪念先落库（sync:'pending'），再由主进程串行同步到 gtd 收件箱；
 // 同步失败只改标记、绝不回滚原文——「不静默丢字」高于「两边绝对一致」。
+// patch.sync / patch.source 只在「只留原文、不进收件箱」的路径上传入（见 addNote）：
+// 速记与九格格内快记是当日记号，不是待办，不能悄悄往收件箱里塞任务。
 function addFlash(state, patch) {
   var s = normalize(state);
   var p = patch || {};
   var text = trimClip(p.text, FLASH_MAX);
   if (!text || s.flashes.length >= MAX_FLASH) return s;
-  var id = newId('f');
+  var id = trimClip(p.id, 40) || newId('f');
   s.flashes.unshift({
     id: id, text: text,
     date: /^\d{4}-\d{2}-\d{2}$/.test(str(p.date)) ? str(p.date) : '',
     createdAt: Date.now(),
-    tags: [], source: flashSource(id), sync: 'pending', taskId: ''
+    tags: [], source: trimClip(p.source, 32) || flashSource(id),
+    sync: p.sync === 'ok' ? 'ok' : 'pending', taskId: ''
   });
   return normalize(s);
 }
+
+// 只留原文的闪念：速记「自由记录」去处、九格第 9 格的一句话、任务转发、一键留一句。
+// 与闪念快记的区别只在一处——不生成收件箱任务（source 用 nt: 前缀，界面据此标「仅留原文」）。
+function addNote(state, patch) {
+  var p = patch || {};
+  var id = newId('f');
+  return addFlash(state, {
+    id: id, text: p.text, date: p.date,
+    sync: 'ok', source: noteSource(id)
+  });
+}
+function noteSource(id) { return 'nt:' + clip(str(id), 28); }
 
 function setFlashSync(state, id, sync, taskId) {
   var s = normalize(state);
@@ -207,7 +222,7 @@ module.exports = {
   FLASH_MAX: FLASH_MAX, DOC_BODY_MAX: DOC_BODY_MAX, DOC_TITLE_MAX: DOC_TITLE_MAX,
   MAX_FLASH: MAX_FLASH, MAX_DOCS: MAX_DOCS,
   normalize: normalize, mergeSection: mergeSection, flashSource: flashSource,
-  addFlash: addFlash, setFlashSync: setFlashSync, removeFlash: removeFlash,
+  addFlash: addFlash, addNote: addNote, setFlashSync: setFlashSync, removeFlash: removeFlash,
   pendingSync: pendingSync, findFlash: findFlash,
   addDoc: addDoc, updateDoc: updateDoc, removeDoc: removeDoc, findDoc: findDoc,
   setPrefs: setPrefs

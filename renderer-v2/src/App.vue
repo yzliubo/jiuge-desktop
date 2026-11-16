@@ -13,6 +13,7 @@ import CapsuleView from './components/CapsuleView.vue';
 import HabitView from './components/HabitView.vue';
 import DreamView from './views/DreamView.vue';
 import DreamAlert from './components/DreamAlert.vue';
+import FamilyReminder from './components/FamilyReminder.vue';
 import SettingsView from './components/SettingsView.vue';
 import BinView from './components/BinView.vue';
 import WorkView from './views/WorkView.vue';
@@ -23,6 +24,8 @@ import FocusView from './views/FocusView.vue';
 import LibraryView from './views/LibraryView.vue';
 import LifeView from './views/LifeView.vue';
 import RelationView from './views/RelationView.vue';
+import FamilyView from './views/FamilyView.vue';
+import LeisureView from './views/LeisureView.vue';
 import ConnectView from './views/ConnectView.vue';
 import LongView from './views/LongView.vue';
 // 图书馆已搬到独立窗口（V3.14）：主窗不再内嵌书架，避免同一份 md_reading 两套界面
@@ -59,6 +62,21 @@ const railOpen = ref(false);
 const railToggleEl = ref<HTMLElement | null>(null);
 // GTD 中栏每改一次清单就自增，右栏据此重取（右栏只读，但读的是同一份数据）
 const gtdTick = ref(0);
+// 自由记录每写一次就自增：九格第 9 格的当天摘要据此重取（速记不经过 record，没有别的信号）
+const freeTick = ref(0);
+// 家庭亲子每写一次就自增：右栏「本周陪伴 / 最近足迹」据此重取
+const famTick = ref(0);
+// 关系经营 / 休闲娱乐写一次也各推一格：右栏通讯录与阅读账跟着重取
+const relTick = ref(0);
+const leisureTick = ref(0);
+
+// 右栏「本页选项」在「今天」页里也可能只写别的表而不动正文（一键留一句 → md_freewrite）。
+// 那种改动没有 save 事件，所以统一在这里把两个 tick 都推一格：
+// gtdTick 管今天页的联动块，freeTick 管九格第 9 格的当天摘要。
+function todayChanged(): void {
+  gtdTick.value += 1;
+  freeTick.value += 1;
+}
 // 当前选中的 GTD 任务：中栏点一行 → 右栏换成它的详情。
 // 只在这里存一份，中栏高亮与右栏表单都读它，避免两边各自记一份选中态。
 const gtdSel = ref('');
@@ -232,7 +250,7 @@ const viewLabel = computed(() => ({
   today: '今天', insight: '单格洞察', cell: '单格工作台', timeline: '时间轴', review: '回顾', capsule: '胶囊',
   habit: '坚持', dream: '梦想', data: '数据中心', bin: '封存箱', inspire: '语料库', settings: '设置',
   life: '时间纵深', relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本',
-  free: '自由记录'
+  free: '自由记录', family: '家庭亲子', leisure: '休闲娱乐'
 }[view.value]));
 
 function shiftDate(delta: number): string {
@@ -333,6 +351,16 @@ function openCell(key: string): void {
   // 九格第 9 格直接进三合一的自由记录页（2026-11-13 起它不再占一级导航，
   // 这里就是那一页唯一的入口）：入口唯一，不再开单格书写台。
   if (key === 'free') { navigate('free'); return; }
+  // 关系经营一直是九格第 4 格的主功能，此前却挂在「时间轴」二级目录里：
+  // 左栏同名两行，一行进通用单格页、一行进关系台，等于同一件事两个入口。
+  // 2026-11-16 合并到九格这一行——点格子就是关系台，时间轴下不再重复列。
+  if (key === 'relation') { navigate('relation'); return; }
+  // 第 6 格同理：2026-11-16 由「情绪觉察」重构为「家庭亲子」，点格子直接进家庭台。
+  // 数据键仍是 emotion（历史正文原样在 cells.emotion 里），这里只换去处。
+  if (key === 'emotion') { navigate('family'); return; }
+  // 第 7 格：休闲娱乐专属页。梦想板仍是独立的 view 'dream'（一级导航那一项），
+  // 两者别混——点九格格子进的是这一页，数据键仍是 cells.dream。
+  if (key === 'dream') { navigate('leisure'); return; }
   if (key !== 'work') gtdSel.value = '';
   if (key !== 'growth') growthSel.value = '';
   dreamSel.value = '';
@@ -413,12 +441,18 @@ async function quickSaved(payload: { target: string; text: string; openAt: strin
       notify('已封成胶囊 · ' + payload.openAt + ' 才能打开');
       return;
     }
-    const base = JSON.parse(JSON.stringify(record.value)) as DiaryRecord;
+    // 自由记录打通（2026-11-16）：速记的「自由记录 / 参考资料」不再写 cells.free，
+    // 统一落 md_freewrite 的「只留原文」闪念——九格第 9 格与三合一读的是同一份数据。
+    // 走 noteAdd 而不是 flashAdd：一句当日记号不该悄悄变成一条收件箱任务。
     const body = payload.target === 'ref' ? '#资料 ' + text : text;
-    base.cells.free = (base.cells.free || '') + (base.cells.free ? '\n' : '') + body;
-    await save(base);
+    const res = await callDomain<{ item?: unknown } | null>('free.noteAdd', null, body, quickDate.value);
+    if (!res || !res.item) {
+      notify('没存成，文本已保留，请重试');
+      return;
+    }
     quickOpen.value = false;
-    notify(payload.target === 'ref' ? '已标 #资料 存进「自由」格' : '速记已写入「自由」格');
+    freeTick.value += 1;
+    notify(payload.target === 'ref' ? '已标 #资料 存进自由记录' : '已记进自由记录 · 闪念');
   } catch {
     // 保存失败：保留浮窗与已输入文本，不静默丢字，供用户重试
     notify('保存失败，文本已保留，请重试');
@@ -655,9 +689,14 @@ onUnmounted(() => {
             :total="total"
             :date="selectedDate"
             :backfill="isBackfill"
+            :tick="freeTick"
+            :task-tick="gtdTick"
             @save="save"
             @open-cell="openCell"
             @draft-change="draftDirty = $event"
+            @free-note="todayChanged"
+            @notify="notify"
+            @task-changed="gtdTick += 1"
           />
           <!-- 今日状态（基础栏 4 项）与三块快速录入面板已移到右栏「本页选项」：
                主栏只留九格与写作，右栏承担这一页的配置与关联信息（主理人 2026-11-08 22:32） -->
@@ -723,10 +762,33 @@ onUnmounted(() => {
         />
         <RelationView
           v-else-if="view === 'relation'"
+          :record="record"
+          :today="today"
           @back="navigate('today')"
           @go-date="navigate('timeline')"
           @go-cell="openCell"
           @notify="notify"
+          @save="save"
+          @changed="relTick += 1"
+        />
+        <FamilyView
+          v-else-if="view === 'family'"
+          :record="record"
+          :today="today"
+          @back="navigate('today')"
+          @notify="notify"
+          @save="save"
+          @changed="famTick += 1"
+        />
+        <!-- 九格第 7 格：休闲娱乐。正文仍写 cells.dream；梦想板是另一个 view 'dream' -->
+        <LeisureView
+          v-else-if="view === 'leisure'"
+          :record="record"
+          :today="today"
+          :tick="leisureTick"
+          @save="save"
+          @notify="notify"
+          @navigate="navigate"
         />
         <ConnectView
           v-else-if="view === 'connect'"
@@ -788,7 +850,7 @@ onUnmounted(() => {
         :total="total"
         :written="written"
         :today="today"
-        :tick="gtdTick"
+        :tick="gtdTick + famTick + relTick + leisureTick"
         :task-id="gtdSel"
         :item-id="growthSel"
         :dream-id="dreamSel"
@@ -798,7 +860,7 @@ onUnmounted(() => {
         @select-task="gtdSel = $event"
         @select-item="growthSel = $event"
         @select-dream="dreamSel = $event"
-        @changed="gtdTick += 1"
+        @changed="todayChanged"
         @save="save"
         @notify="notify"
       />
@@ -808,6 +870,7 @@ onUnmounted(() => {
 
     <!-- 梦想账户存够 → 浮窗提醒走下一步，直到这条目标被标记达成 -->
     <DreamAlert :tick="gtdTick" @go="navigate('dream')" />
+    <FamilyReminder :tick="famTick" @go="navigate('family')" />
 
     <StatusBar
       :total="total"

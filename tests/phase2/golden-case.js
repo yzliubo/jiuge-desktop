@@ -37,6 +37,7 @@ const modEpub = require(path.resolve(__dirname, '../../src/reading/epub.js'));
 const modReaderSource = require(path.resolve(__dirname, '../../src/reading/reader-source.js'));
 const modWorktime = require(path.resolve(__dirname, '../../src/worktime/board.js'));
 const modFinance = require(path.resolve(__dirname, '../../src/finance/board.js'));
+const modFamily = require(path.resolve(__dirname, '../../src/family/board.js'));
 const workAgg = require(path.resolve(__dirname, '../../src/worktime/aggregate.js'));
 const workClient = require(path.resolve(__dirname, '../../src/worktime/client.js'));
 
@@ -2217,19 +2218,19 @@ test('v2', 'reading/board：书架顺序 / 拖动重排 / 最近在读 / 再读�
   s = modReading.addBook(s, { id: 'b2', title: '乙', total: 100 });
   s = modReading.addBook(s, { id: 'b3', title: '丙', total: 100 });
   // 新书排最前：每本的 order 比现有最小值再小一，刚放上书架的那本立刻在第一屏
-  assert.deepStrictEqual(modReading.board(s, []).books.map(function (b) { return b.id; }), ['b3', 'b2', 'b1'],
+  assert.deepStrictEqual(modReading.board(s).books.map(function (b) { return b.id; }), ['b3', 'b2', 'b1'],
     '新书没排在最前');
   assert.strictEqual(modReading.normalize(s).books.length, 3, 'order 字段应进白名单，不被 normalize 削掉');
 
   // 拖动重排：只认传入的 id 次序，未列入的保持相对次序接在后面
   s = modReading.normalize(modReading.reorderBooks(s, ['b1', 'b3']));
-  const order = modReading.board(s, []).books.map(function (b) { return b.id; });
+  const order = modReading.board(s).books.map(function (b) { return b.id; });
   assert.deepStrictEqual(order, ['b1', 'b3', 'b2'], '拖动重排没生效：' + JSON.stringify(order));
-  const first = modReading.board(s, []).books[0];
+  const first = modReading.board(s).books[0];
   assert.strictEqual(first.order, 0, '重排后应从头编号');
   // 传入未知 id / 空数组：不炸、不改顺序
   assert.deepStrictEqual(
-    modReading.board(modReading.normalize(modReading.reorderBooks(s, ['nope', 'b3', 'b1'])), []).books.map(function (b) { return b.id; }),
+    modReading.board(modReading.normalize(modReading.reorderBooks(s, ['nope', 'b3', 'b1']))).books.map(function (b) { return b.id; }),
     ['b3', 'b1', 'b2'], '含未知 id 的重排把顺序弄乱了');
 
   // 最近在读：只改时间，不碰进度与状态
@@ -2260,12 +2261,12 @@ test('v2', 'reading/board：书架顺序 / 拖动重排 / 最近在读 / 再读�
   s = modReading.normalize(modReading.addNote(s, {
     mode: 'leisure', bookId: 'b2', bookTitle: '乙', type: 'note', quote: '', text: '乙书的想法', page: 9, tags: []
   }));
-  const one = modReading.exportMarkdown(s, [], 'b1');
-  const all = modReading.exportMarkdown(s, [], '');
+  const one = modReading.exportMarkdown(s, 'b1');
+  const all = modReading.exportMarkdown(s, '');
   assert.ok(one.indexOf('一句') >= 0, '按书导出漏了这本书的笔记');
   assert.ok(one.indexOf('乙书的想法') < 0, '按书导出混进了别的书的笔记');
   assert.ok(all.indexOf('一句') >= 0 && all.indexOf('乙书的想法') >= 0, '全库汇总漏了笔记');
-  const other = modReading.exportMarkdown(s, [], 'b2');
+  const other = modReading.exportMarkdown(s, 'b2');
   assert.ok(other.indexOf('乙书的想法') >= 0, '按书导出的另一本取错');
   assert.ok(other.indexOf('一句') < 0, '按书导出混进了别的书的笔记');
 });
@@ -2275,31 +2276,31 @@ test('v2', 'reading/board：书架分组 / 收藏 / 重命名合并 / 解散不�
   s = modReading.normalize(modReading.addBook(s, { id: 'b1', title: '甲', total: 100, group: '技术', favorite: true }));
   s = modReading.normalize(modReading.addBook(s, { id: 'b2', title: '乙', total: 100 }));
   s = modReading.normalize(modReading.addBook(s, { id: 'b3', title: '丙', total: 100 }));
-  let bd = modReading.board(s, []);
+  let bd = modReading.board(s);
   assert.deepStrictEqual(bd.groups, [{ name: '技术', count: 1 }], '分组清单没从 books 派生');
   assert.strictEqual(bd.favoriteCount, 1, '收藏数不对');
 
   // 收藏开关：开一次、关一次，别只认 true 不认 false
   s = modReading.normalize(modReading.setBookFavorite(s, 'b2', true));
   s = modReading.normalize(modReading.setBookFavorite(s, 'b1', false));
-  bd = modReading.board(s, []);
+  bd = modReading.board(s);
   assert.strictEqual(bd.favoriteCount, 1, '收藏开关没生效');
   assert.strictEqual(bd.books.filter(function (x) { return x.id === 'b2'; })[0].favorite, true);
 
   s = modReading.normalize(modReading.setBookGroup(s, 'b2', '技术'));
   s = modReading.normalize(modReading.setBookGroup(s, 'b3', '工具'));
-  bd = modReading.board(s, []);
+  bd = modReading.board(s);
   assert.strictEqual(bd.groups.reduce(function (m, g) { return m + g.count; }, 0), 3, '分组总数不对');
 
   // 重命名到已有组 = 合并，一本书都不能丢
   s = modReading.normalize(modReading.renameGroup(s, '工具', '技术'));
-  bd = modReading.board(s, []);
+  bd = modReading.board(s);
   assert.deepStrictEqual(bd.groups, [{ name: '技术', count: 3 }], '重命名合并没生效');
   assert.strictEqual(s.books.length, 3, '合并把书弄丢了');
 
   // 解散只清标签，绝不删书
   s = modReading.normalize(modReading.removeGroup(s, '技术'));
-  bd = modReading.board(s, []);
+  bd = modReading.board(s);
   assert.deepStrictEqual(bd.groups, [], '解散后仍残留分组');
   assert.strictEqual(s.books.length, 3, '解散分组把书删了');
   assert.ok(s.books.every(function (x) { return x.group === ''; }), '解散后分组字段没清空');
@@ -2321,16 +2322,24 @@ test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单�
   assert.ok(line.indexOf('【读书·主题阅读】') === 0, '回写行缺阅读模式');
   assert.ok(line.indexOf('《给水排水》') >= 0 && line.indexOf('p.32') >= 0, '回写行缺书名 / 页码');
   assert.ok(line.indexOf('#管网') >= 0 && line.indexOf('我的想法') >= 0, '回写行缺标签 / 正文');
+  // P0-3：回写行要能反查回原笔记（行尾标记是唯一凭据），正文本身仍是给人读的。
+  // 没有 id 的临时对象（比如还没落库就预览）不硬塞标记——宁缺勿错。
+  assert.strictEqual(line.indexOf('〔rd:'), -1, '没有 id 的笔记不该带 rd: 标记');
   let s = modReading.normalize(modReading.addNote(modReading.empty(),
     Object.assign({}, n, { bookId: 'b1', themeId: 't1', type: 'highlight' })));
   const id = s.notes[0].id;
+  const marked = modReading.noteToDiaryLine(s.notes[0]);
+  assert.deepStrictEqual(modReading.refIdsIn(marked), [id], 'rd: 标记没带出真实笔记 id');
+  assert.strictEqual(modReading.stripRefMarks(marked).indexOf('〔rd:'), -1, '剥标记后仍留着 rd:');
   let p = modReading.normalize(modReading.markPushed(s, id, 'growth', 1000));
   p = modReading.normalize(modReading.markPushed(p, id, 'leisure', 2000));
   assert.strictEqual(p.notes[0].pushedAt, 1000, '重复回写不得覆盖标记');
   assert.strictEqual(p.notes[0].pushedCell, 'growth', '重复回写不得改落格');
-  const themeBooks = [{ themeId: 't1', themeTitle: '给排水', bookId: 'b1', title: '给水排水', total: 100, done: 20, pct: 20, status: 'reading' }];
-  const bd = modReading.board(p, themeBooks);
-  assert.strictEqual(bd.themeBooks.length, 1, 'board 应原样带出旧 growth 主题书单（兼容）');
+  // P0-1：board() 不再接收、也不再返回旧 growth 主题书单。
+  // 主题书的唯一来源是 md_reading.books 里 themeId 非空的记录。
+  const bd = modReading.board(p);
+  assert.strictEqual(bd.themeBooks, undefined, 'board 仍在透传旧 growth 主题书单');
+  assert.strictEqual(bd.stats.themeBooks, 0, '这本书写在 themes 之外，不该算成主题书');
   // V2.14：主题书自建进 md_reading.books（themeId 非空），与休闲书共用一张表
   let t = modReading.addTheme(modReading.empty(), { id: 't9', title: '主题九' });
   t = modReading.addBook(t, { id: 'bk9', title: '主题九的书', themeId: 't9', filePath: 'C:/a.epub' });
@@ -2346,7 +2355,7 @@ test('v2', 'reading/board：回写行 / 防重复 / 合并幂等 / 主题书单�
   assert.strictEqual(modReading.importGrowthThemes(migrated, legacy).themes.length, 1, '重复迁移幂等');
   assert.strictEqual(modReading.mergeSection(modReading.empty(), p).state.notes.length, 1, '合并应补进笔记');
   assert.strictEqual(modReading.mergeSection(p, p).added, 0, '二次合并必须幂等');
-  assert.ok(modReading.exportMarkdown(p, themeBooks).indexOf('# 读书笔记') === 0, '汇总导出缺标题');
+  assert.ok(modReading.exportMarkdown(p, '').indexOf('# 读书笔记') === 0, '汇总导出缺标题');
   assert.strictEqual(modReading.notesQuery(p, { tag: '管网' }).items.length, 1, '按标签检索失败');
 });
 
@@ -2495,7 +2504,7 @@ test('v2', 'reading/board：本地书字段读回不丢、路径去重、normali
   assert.strictEqual(modReading.normalize(s).books[0].filePath, b.filePath, '二次 normalize 丢字段');
   assert.strictEqual(modReading.hasPath(s, 'c:/books/a b/城门.EPUB'), true, 'Windows 路径应大小写不敏感去重');
   assert.strictEqual(modReading.hasPath(s, 'C:/books/别的.epub'), false);
-  const bd = modReading.board(s, []);
+  const bd = modReading.board(s);
   assert.strictEqual(bd.books[0].hasFile, true, 'board 应派生 hasFile');
   assert.strictEqual(modReading.notesQuery(s, {}).items.length, 0);
   const m = modReading.mergeSection(modReading.empty(), s);
@@ -2612,7 +2621,7 @@ test('v2', 'reading/board：书签增删 / 同位置去重 / 上限 / 老数据�
   // 2 条书签 + 1 条笔记，合并应全部带进来
   assert.strictEqual(modReading.mergeSection(modReading.empty(), s).added, 3, '备份合并应带上书签');
   assert.strictEqual(modReading.mergeSection(s, s).added, 0, '二次合并书签必须幂等');
-  assert.ok(modReading.exportMarkdown(s, []).indexOf('# 读书笔记') === 0, '加书签后导出不应崩');
+  assert.ok(modReading.exportMarkdown(s, '').indexOf('# 读书笔记') === 0, '加书签后导出不应崩');
 });
 
 test('v2', 'reading/board：标注三字段 anchor / color / style 归一化与读回', function () {
@@ -2637,7 +2646,7 @@ test('v2', 'reading/board：标注三字段 anchor / color / style 归一化与�
   const m = modReading.meta();
   assert.ok(m.hlColors.indexOf('green') >= 0, 'meta 未暴露高亮色板');
   assert.ok(m.noteStyles.indexOf('underline') >= 0, 'meta 未暴露标注样式');
-  assert.strictEqual(modReading.board(s, []).stats.bookmarks, 0, 'stats 应带书签数');
+  assert.strictEqual(modReading.board(s).stats.bookmarks, 0, 'stats 应带书签数');
 });
 
 
@@ -3565,7 +3574,7 @@ test('v2', 'reading/board：主题书不进休闲书架，主题行与书架同�
     mode: 'theme', themeId: 'th1', bookId: 't1', bookTitle: 'GB 18918 解读', type: 'highlight', text: '一条批注'
   }));
 
-  const b = modReading.board(s6, []);
+  const b = modReading.board(s6);
   assert.deepStrictEqual(b.books.map(function (x) { return x.id; }), ['t3', 't2', 't1', 'l2', 'l1'],
     'books 应仍是全部（其他消费方按旧口径读）');
   assert.deepStrictEqual(b.leisureBooks.map(function (x) { return x.id; }), ['l2', 'l1'],
@@ -3620,6 +3629,673 @@ test('v2', 'reading/cover-net：只认豆瓣两类域名、只取图书、格式
   const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]);
   assert.strictEqual(net.sniffExt(webp), 'webp');
   assert.strictEqual(net.sniffExt(Buffer.from('<html></html>')), '', '不是图片就该返回空');
+});
+
+// ------------------------------------------------------------
+// P0/P1 图书馆内部互通（2026-11-16）
+// 指纹身份 / 引用完整性 / 体检与可逆修复 / 检索合流 / 再曝光 / 迁移核对
+// ------------------------------------------------------------
+const modFp = require(path.resolve(__dirname, '../../src/reading/fingerprint.js'));
+
+test('v2', 'reading/fingerprint：大小 + 首 64KB 就是身份，改名不变、改内容就变', function () {
+  const dir = fresh('reading-fp');
+  const a = path.join(dir, 'a.epub');
+  fs.writeFileSync(a, Buffer.alloc(1000, 7));
+  const fa = modFp.fingerprintOf(a);
+  assert.ok(/^[0-9a-f]{64}$/.test(fa), '指纹应是 64 位小写十六进制');
+  assert.strictEqual(modFp.fingerprintOf(a), fa, '同内容两次指纹不一致（掺了时间或路径？）');
+  // 改名 / 换目录：路径变了，身份不能变——这是「重新关联」能成立的前提
+  const b = path.join(dir, 'renamed.epub');
+  fs.copyFileSync(a, b);
+  assert.strictEqual(modFp.fingerprintOf(b), fa, '改名或搬目录后认不出是同一本');
+  // 内容改一个字节 → 必须变
+  const bufC = Buffer.alloc(1000, 7);
+  bufC[999] = 8;
+  const c = path.join(dir, 'c.epub');
+  fs.writeFileSync(c, bufC);
+  assert.notStrictEqual(modFp.fingerprintOf(c), fa, '内容变了指纹没变');
+  // 同前缀、只是长了一个字节 → 大小拼进哈希，必须不同
+  const d = path.join(dir, 'd.epub');
+  fs.writeFileSync(d, Buffer.alloc(1001, 7));
+  assert.notStrictEqual(modFp.fingerprintOf(d), fa, '同前缀不同长度被认成同一本');
+  // 空文件也要能算（0 字节不能走成「没有身份」）
+  const e = path.join(dir, 'e.epub');
+  fs.writeFileSync(e, Buffer.alloc(0));
+  assert.ok(/^[0-9a-f]{64}$/.test(modFp.fingerprintOf(e)), '空文件算不出指纹');
+  // 算不出来时不许把登记流程带崩
+  assert.strictEqual(modFp.fingerprintSafe(path.join(dir, 'nope.epub')), '', '算不出来应返回空串');
+  assert.throws(function () { modFp.fingerprintOf(dir); }, /不是文件/, '目录应当被拒');
+  assert.strictEqual(modFp.sizeOf(a), 1000);
+  assert.strictEqual(modFp.sizeOf(path.join(dir, 'nope.epub')), 0, '不存在的文件大小应为 0');
+});
+
+test('v2', 'reading/指纹判重：同一本书换了位置走 relink，bookId / 笔记 / 章节一个不丢', function () {
+  const fp = 'ab'.repeat(32);
+  // 章节走原始数据构造：addChapter 会做存在性校验，而这里要验的是「已有章节在 relink 后还在」
+  const s = modReading.normalize({
+    books: [{ id: 'bk1', title: '给水排水工程', filePath: '/old/a.epub', fileExt: 'epub', fileSize: 100, fingerprint: fp }],
+    chapters: [{ id: 'c1', bookId: 'bk1', title: '第一章' }],
+    notes: [{ id: 'n1', bookId: 'bk1', bookTitle: '给水排水工程', text: '一条笔记' }]
+  });
+
+  assert.ok(modReading.bookByFingerprint(s, fp.toUpperCase()), '指纹匹配应大小写不敏感');
+  assert.strictEqual(modReading.bookByFingerprint(s, 'zz'), null, '脏指纹不该命中任何书');
+  assert.strictEqual(modReading.bookByFingerprint(s, ''), null, '空指纹把老书互相认成一本就完了');
+  // 老书（没算过指纹）不该被空指纹认领
+  const withOld = modReading.addBook(s, { id: 'bk0', title: '老书', filePath: '/old/b.epub' });
+  assert.strictEqual(modReading.bookByFingerprint(withOld, ''), null);
+  assert.strictEqual(modReading.hasFingerprint(withOld, fp), true);
+
+  const r = modReading.relinkBook(s, 'bk1', {
+    filePath: '/new/改名后.epub', fileExt: '.EPUB', fileSize: 120, fingerprint: fp
+  });
+  const b = r.books.filter(function (x) { return x.id === 'bk1'; })[0];
+  assert.ok(b, '重新关联把书本身弄丢了');
+  assert.strictEqual(b.filePath, '/new/改名后.epub');
+  assert.strictEqual(b.fileExt, 'epub', '扩展名应归一成小写并去掉点');
+  assert.strictEqual(b.fileSize, 120);
+  assert.strictEqual(b.fingerprint, fp);
+  assert.strictEqual(r.notes.filter(function (n) { return n.bookId === 'bk1'; }).length, 1,
+    '笔记挂在 bookId 上，重新关联后不该失联');
+  assert.strictEqual(r.chapters.filter(function (c) { return c.bookId === 'bk1'; }).length, 1,
+    '章节挂在 bookId 上，重新关联后不该失联');
+  assert.strictEqual(r.books.length, s.books.length, '重新关联不该多出一本书（那正是重复登记的来源）');
+
+  // 失败边界：不存在的书 / 空路径 / 非法指纹，一律不动
+  assert.strictEqual(modReading.relinkBook(s, 'nope', { filePath: '/x.epub' }).books.length, s.books.length,
+    '不存在的书被凭空写了一条');
+  const emptyPatch = modReading.relinkBook(s, 'bk1', { filePath: '' });
+  assert.strictEqual(emptyPatch.books.filter(function (x) { return x.id === 'bk1'; })[0].filePath, '/old/a.epub',
+    '空路径把已有路径抹掉了');
+  const badFp = modReading.relinkBook(s, 'bk1', { filePath: '/n.epub', fingerprint: 'xx' });
+  assert.strictEqual(badFp.books.filter(function (x) { return x.id === 'bk1'; })[0].fingerprint, fp,
+    '非法指纹覆盖了已有身份');
+});
+
+test('v2', 'reading/导入：只补不改，并如实报出这批数据里有多少条引用落空', function () {
+  const base = modReading.normalize(modReading.addBook(modReading.empty(), { id: 'bk1', title: '活着' }));
+  // 备份里带着指向「没跟过来」的书 / 主题的笔记、章节、书签：合并后全是断链
+  const incoming = modReading.normalize({
+    notes: [{ id: 'nX', bookId: 'bkGhost', bookTitle: '失踪的书', text: '孤儿笔记' }],
+    chapters: [{ id: 'cX', bookId: 'bkGhost', title: '第一章' }],
+    bookmarks: [{ id: 'mX', bookId: 'bkGhost', anchor: '0:0.5', label: 'p.3' }],
+    books: [{ id: 'bkY', title: '主题没了的书', themeId: 'thGhost' }]
+  });
+  const out = modReading.mergeSection(base, incoming);
+  assert.strictEqual(out.added, 4, '四类都该补进来');
+  assert.strictEqual(out.report.danglingNotes, 1);
+  assert.strictEqual(out.report.danglingChapters, 1);
+  assert.strictEqual(out.report.danglingBookmarks, 1);
+  assert.strictEqual(out.report.danglingBooks, 1);
+  assert.strictEqual(out.report.clean, false, '有落空引用却报 clean');
+  assert.strictEqual(out.report.samples.length, 1, '明细应只列落空的笔记，不带整条正文');
+  assert.strictEqual(out.report.samples[0].bookTitle, '失踪的书');
+  // 关键：报告归报告，合并绝不替人删数据
+  assert.ok(out.state.notes.some(function (n) { return n.id === 'nX'; }), '合并把落空的笔记吞了');
+  // 干净的合并 report.clean 为真，且二次合并仍是幂等
+  assert.strictEqual(modReading.mergeSection(base, base).report.clean, true);
+  assert.strictEqual(modReading.mergeSection(out.state, incoming).added, 0, '二次合并必须幂等');
+});
+
+test('v2', 'reading/回写：行尾带〔rd:id〕可反查，前缀不动、截断不切、无 id 不硬造', function () {
+  const note = { id: 'nt-1', mode: 'theme', bookTitle: '给水排水工程', page: 42, text: '混凝沉淀要控 pH', tags: ['给水'] };
+  const line = modReading.noteToDiaryLine(note);
+  assert.strictEqual(line.indexOf('【读书·主题阅读】'), 0, '检索前缀被标记挤掉了');
+  assert.strictEqual(line.slice(-9), '〔rd:nt-1〕', '标记必须钉在行尾');
+  assert.strictEqual(modReading.noteToDiaryLine(note), line, '同一笔记两次生成必须逐字节一致');
+
+  assert.deepStrictEqual(modReading.refIdsIn('a 〔rd:x1〕 b 〔rd:x2〕 〔rd:x1〕'), ['x1', 'x2'],
+    '一行多个标记应全取到且去重');
+  assert.deepStrictEqual(modReading.refIdsIn('〔rd:〕 〔rd:带 空格 id〕'), [], '脏标记不该当成引用');
+  assert.deepStrictEqual(modReading.refIdsIn(line), ['nt-1']);
+  assert.strictEqual(modReading.stripRefMarks('正文 〔rd:x1〕'), '正文', '人读文本不该多出空格');
+  assert.strictEqual(modReading.stripRefMarks(line).indexOf('〔'), -1);
+
+  // 老数据 / 手写笔记没有 id：不伪造一个假标记（假 id 反查回去是空的）
+  assert.strictEqual(modReading.noteToDiaryLine({ bookTitle: '活着', text: 'x' }).indexOf('〔rd:'), -1);
+  // 超长正文先截断再挂标记，不能把标记切掉
+  const long = modReading.noteToDiaryLine({ id: 'nt-2', bookTitle: 'x', text: 'a'.repeat(1000) });
+  assert.ok(long.length <= 300, '回写行超长：' + long.length);
+  assert.strictEqual(long.slice(-9), '〔rd:nt-2〕', '截断把标记切没了');
+});
+
+test('v2', 'reading/体检：五项只报告不自动改，修复只清悬空字段且能原样撤销', function () {
+  const fp = 'cd'.repeat(32);
+  // 断链只能靠「原始数据」造出来：走 addChapter / addBookmark 会先做存在性校验，
+  // 而真实断链是「书删了，指向它的行还留着」——那正是要体检出来的东西。
+  const s = modReading.normalize({
+    themes: [{ id: 'th1', title: '污水处理工艺' }],
+    books: [
+      { id: 'b1', title: '给水排水工程', themeId: 'th1' },
+      { id: 'b2', title: '活着' },
+      { id: 'b3', title: '主题没了的书', themeId: 'thGhost' },
+      { id: 'b4', title: '重登的书', filePath: '/x/1.epub', fingerprint: fp },
+      { id: 'b5', title: '重登的书', filePath: '/x/2.epub', fingerprint: fp }
+    ],
+    chapters: [{ id: 'c1', bookId: 'bGhost', title: '悬空章' }],
+    notes: [
+      { id: 'n1', bookId: 'b1', bookTitle: '给水排水工程', text: '正常笔记' },
+      { id: 'n2', bookId: 'bGhost', bookTitle: '已删的书', text: '悬空笔记' },
+      { id: 'n3', mode: 'theme', themeId: 'thGhost', text: '悬空主题笔记' }
+    ],
+    bookmarks: [{ id: 'm1', bookId: 'bGhost', anchor: '0:0.5', label: 'p.3' }]
+  });
+
+  const a = modReading.audit(s);
+  assert.strictEqual(a.counts.danglingNotes, 2, '悬空笔记数不对（书没了 + 主题没了各一条）');
+  assert.strictEqual(a.counts.danglingChapters, 1);
+  assert.strictEqual(a.counts.danglingBookmarks, 1);
+  assert.strictEqual(a.counts.danglingBooks, 1);
+  assert.strictEqual(a.counts.dupFingerprints, 1, '同指纹两条应报重复登记');
+  assert.strictEqual(a.counts.dupTitles, 1, '同名但指向两个文件应报同名重复');
+  assert.strictEqual(a.counts.notesNoSource, 0);
+  assert.strictEqual(a.dupFingerprints[0].books.length, 2);
+  // 只读：再查一遍数字不变
+  assert.strictEqual(modReading.audit(s).counts.danglingNotes, 2, '体检自己改了数据');
+
+  const rep = modReading.repairDangling(s);
+  assert.strictEqual(rep.fixed, 3, '应修 2 条笔记的悬空引用 + 1 本书的悬空主题');
+  assert.strictEqual(rep.changes.length, 3);
+  const a2 = modReading.audit(rep.state);
+  assert.strictEqual(a2.counts.danglingNotes, 0);
+  assert.strictEqual(a2.counts.danglingBooks, 0);
+  assert.strictEqual(a2.counts.books, 5, '修复把书删了');
+  assert.strictEqual(a2.counts.notes, 3, '修复把笔记删了');
+
+  const back = modReading.restoreDangling(rep.state, rep.changes);
+  const a3 = modReading.audit(back);
+  assert.strictEqual(a3.counts.danglingNotes, 2, '撤销没把引用写回去');
+  assert.strictEqual(a3.counts.danglingBooks, 1);
+  assert.deepStrictEqual(modReading.restoreDangling(rep.state, []), modReading.normalize(rep.state),
+    '空改动清单不该动数据');
+  // 没有断链时不能报一个假 fixed
+  assert.strictEqual(modReading.repairDangling(modReading.empty()).fixed, 0);
+});
+
+test('v2', 'reading/检索合流：书 / 主题 / 笔记摊成一张行表，关键词与拼音共用同一套匹配', function () {
+  let s = modReading.empty();
+  s = modReading.addTheme(s, { id: 'th1', title: '污水处理工艺', note: 'A2O 与 MBR 对比' });
+  s = modReading.addBook(s, { id: 'b1', title: '给水排水工程', author: '严煦世', themeId: 'th1', total: 300, done: 120 });
+  s = modReading.addBook(s, { id: 'b2', title: '活着', author: '余华' });
+  s = modReading.addNote(s, {
+    id: 'n1', mode: 'theme', themeId: 'th1', bookId: 'b1', bookTitle: '给水排水工程',
+    type: 'highlight', text: '混凝沉淀池的设计要点', tags: ['规范']
+  });
+
+  const rows = modReading.searchIndex(s);
+  assert.deepStrictEqual(rows.map(function (r) { return r.type; }).sort(), ['book', 'book', 'note', 'theme'],
+    '五张表应摊成书 / 主题 / 笔记三类行');
+  const rb = rows.filter(function (r) { return r.type === 'book' && r.id === 'b1'; })[0];
+  assert.strictEqual(rb.progressText, '120/300 页', '书行没带进度，图书馆列表渲染不出来');
+  assert.strictEqual(rb.pct, 40);
+  assert.strictEqual(rb.hasFile, false, '没文件的书写成有文件，点开就是空的');
+
+  assert.deepStrictEqual(modSearch.indexSearch(rows, '混凝').map(function (r) { return r.id; }), ['n1'],
+    '笔记正文没进索引');
+  assert.deepStrictEqual(modSearch.indexSearch(rows, '严煦世').map(function (r) { return r.id; }), ['b1'],
+    '作者没进索引');
+  assert.deepStrictEqual(modSearch.indexSearch(rows, 'MBR').map(function (r) { return r.id; }), ['th1'],
+    '主题备注没进索引');
+  assert.deepStrictEqual(modSearch.indexSearch(rows, '规范').map(function (r) { return r.id; }), ['n1'],
+    '标签没进索引');
+  assert.deepStrictEqual(modSearch.indexSearch(rows, ''), [], '空关键词应返回空数组');
+  // 拼音首字母：打 hz 能找到《活着》，与日记检索同一套 initials
+  assert.deepStrictEqual(modSearch.indexPinyin(rows, 'hz').map(function (r) { return r.id; }), ['b2']);
+  assert.deepStrictEqual(modSearch.indexPinyin(rows, ''), [], '空拼音应返回空数组');
+  // 脏行不该把检索带崩
+  assert.deepStrictEqual(modSearch.indexSearch([null, 1, 'x'], 'a'), []);
+});
+
+test('v2', 'reading/再曝光：近 7 天摘录 + 30 天没翻过的在读，只读不写', function () {
+  const NOW = Date.parse('2026-11-16T10:00:00+08:00');
+  const day = 86400000;
+  let s = modReading.empty();
+  s = modReading.addBook(s, { id: 'b1', title: '在读但荒了', status: 'reading', total: 300, done: 30, lastReadAt: NOW - 40 * day });
+  s = modReading.addBook(s, { id: 'b2', title: '从没翻过', status: 'reading', total: 100, done: 0 });
+  s = modReading.addBook(s, { id: 'b3', title: '昨天刚读', status: 'reading', total: 200, done: 100, lastReadAt: NOW - day });
+  s = modReading.addBook(s, { id: 'b4', title: '读完了', status: 'done', total: 100 });
+  s = modReading.addNote(s, { id: 'n1', bookId: 'b1', bookTitle: '在读但荒了', text: '三天前', createdAt: NOW - 3 * day });
+  s = modReading.addNote(s, { id: 'n2', bookId: 'b3', bookTitle: '昨天刚读', text: '十天前', createdAt: NOW - 10 * day });
+
+  const r = modReading.resurface(s, NOW);
+  assert.deepStrictEqual(r.recent.map(function (n) { return n.id; }), ['n1'], '7 天外的摘录不该算「最近摘的」');
+  assert.strictEqual(r.recentCount, 1);
+  assert.strictEqual(r.readingCount, 3, '读完的书不该算在读');
+  assert.deepStrictEqual(r.stale.map(function (x) { return x.id; }), ['b2', 'b1'],
+    '从没翻过的该排最前，其余越久没读越靠前');
+  assert.strictEqual(r.stale[0].days, -1, '从没读过应是 -1，不是 0（0 会被读成「今天刚读」）');
+  assert.strictEqual(r.stale[1].days, 40);
+  assert.strictEqual(r.stale[1].pct, 10);
+  assert.strictEqual(r.stale[1].progressText, '30/300 页');
+  assert.deepStrictEqual(modReading.resurface(s, NOW), r, '再曝光必须只读');
+  // 时间源由调用方传：同一个 state 换一个「今天」，结果就该跟着变
+  const later = modReading.resurface(s, NOW + 40 * day);
+  assert.ok(later.stale.some(function (x) { return x.id === 'b3'; }), '过了 30 天，昨天刚读的也该进「荒了」');
+});
+
+test('v2', 'reading/迁移核对：旧 md_growth 书单逐条对账，两边都不写', function () {
+  let s = modReading.empty();
+  s = modReading.addTheme(s, { id: 'gth-th1', title: '污水处理工艺' });
+  s = modReading.addBook(s, { id: 'gthbk-th1-g1', title: '已迁的书', themeId: 'gth-th1' });
+  const legacy = [
+    { themeId: 'th1', themeTitle: '污水处理工艺', bookId: 'g1', title: '已迁的书' },
+    { themeId: 'th1', themeTitle: '污水处理工艺', bookId: 'g2', title: '还没迁的书' }
+  ];
+  const g = modReading.growthAudit(s, legacy);
+  assert.strictEqual(g.legacyBooks, 2);
+  assert.strictEqual(g.migratedBooks, 1);
+  assert.strictEqual(g.pendingBooks, 1, '迁移欠账算错了，界面上就看不见该迁的');
+  assert.strictEqual(g.legacyThemes, 1);
+  assert.strictEqual(g.pending[0].migratesTo, 'gthbk-th1-g2', '迁移后的 id 规则要与 importGrowthThemes 一致');
+  assert.strictEqual(g.pending[0].title, '还没迁的书');
+  assert.strictEqual(modReading.growthAudit(s, null).legacyBooks, 0, '没有旧书单时不该报欠账');
+  assert.strictEqual(modReading.growthAudit(s, [null, 1, 'x']).legacyBooks, 0, '脏行应被跳过而不是抛');
+  // 核对是只读：跑两遍 state 不变
+  assert.strictEqual(modReading.growthAudit(s, legacy).pendingBooks, 1);
+});
+
+test('v2', 'reading/notesQuery：主题书 / 主题没了也算孤儿，不再只查休闲书', function () {
+  let s = modReading.empty();
+  s = modReading.addTheme(s, { id: 'th1', title: '污水处理工艺' });
+  s = modReading.addBook(s, { id: 'b1', title: '主题书', themeId: 'th1' });
+  s = modReading.addBook(s, { id: 'b2', title: '休闲书' });
+  s = modReading.addNote(s, { id: 'n1', mode: 'theme', themeId: 'th1', bookId: 'b1', bookTitle: '主题书', text: 'A' });
+  s = modReading.addNote(s, { id: 'n2', bookId: 'b2', bookTitle: '休闲书', text: 'B' });
+  assert.deepStrictEqual(modReading.notesQuery(s, {}).items.filter(function (n) { return n.orphan; }), [],
+    '都还在的书不该被标孤儿');
+
+  const s2 = modReading.removeBook(s, 'b1');
+  const orphan1 = modReading.notesQuery(s2, {}).items.filter(function (n) { return n.orphan; })
+    .map(function (n) { return n.id; });
+  assert.deepStrictEqual(orphan1, ['n1'], '主题书的笔记在书被删后仍显得正常，等于把断链藏起来了');
+
+  const s3 = modReading.removeTheme(s2, 'th1');
+  const orphan2 = modReading.notesQuery(s3, {}).items.filter(function (n) { return n.orphan; })
+    .map(function (n) { return n.id; });
+  assert.ok(orphan2.indexOf('n1') >= 0, '主题没了也算孤儿');
+  assert.ok(orphan2.indexOf('n2') < 0, '好好的休闲笔记不该被标孤儿');
+});
+
+test('v2', 'reading/接线：新通道全过白名单、旧 themeBooks 下线、反查与清任务都接上', function () {
+  const apiSrc = fs.readFileSync(path.resolve(__dirname, '../../src/core/api-layer.js'), 'utf8');
+  ['reading.relinkBook', 'reading.audit', 'reading.repairDangling', 'reading.restoreDangling',
+    'reading.growthAudit', 'reading.refs', 'reading.pushAction', 'reading.resurface', 'search.library'
+  ].forEach(function (n) {
+    assert.ok(apiSrc.indexOf("'" + n + "'") >= 0, '新通道没登记进 DOMAIN_WHITELIST：' + n);
+  });
+  assert.ok(apiSrc.indexOf("'reading.themeBooks'") < 0,
+    '旧的 themeBooks 通道还在（单一事实源没落到底）');
+
+  const mainSrc = fs.readFileSync(path.resolve(__dirname, '../../src/main/main-v2.js'), 'utf8');
+  const rm = mainSrc.slice(mainSrc.indexOf("'reading.removeNote'"), mainSrc.indexOf("'reading.markPushed'"));
+  assert.ok(rm.indexOf("('rd:' + key)") >= 0, '删笔记没按 rd: 前缀找它生成的任务');
+  assert.ok(rm.indexOf("status !== 'done'") >= 0, '删笔记把已完成的任务也清了（做过的事被抹掉）');
+
+  const la = mainSrc.slice(mainSrc.indexOf("'search.linksAll'"), mainSrc.indexOf("'tags.read'"));
+  assert.ok(la.indexOf('refIdsIn') >= 0 && la.indexOf("type: 'reading'") >= 0,
+    'linksAll 没把〔rd:〕行当成一种内链吐出来');
+  const pa = mainSrc.slice(mainSrc.indexOf("'reading.pushAction'"), mainSrc.indexOf("'reading.resurface'"));
+  assert.ok(pa.indexOf("'rd:' + id") >= 0 && pa.indexOf('duplicated') >= 0,
+    '#行动 落收件箱必须按 source 幂等，否则点两次两条任务');
+});
+
+// ------------------------------------------------------------
+// P2（2026-11-16）：虚拟书架 / 书目清单 / 目录口径 / 书库根目录
+// ------------------------------------------------------------
+test('v2', 'reading/标签：一套归一化（去 # / 去重 / 上限 8），加删都幂等', function () {
+  let s = modReading.addBook(modReading.empty(), { id: 'b1', title: '给水排水工程' });
+  s = modReading.addBookTag(s, 'b1', '#污水处理');
+  s = modReading.addBookTag(s, 'b1', '污水处理');
+  s = modReading.addBookTag(s, 'b1', '  ');
+  assert.deepStrictEqual(s.books[0].tags, ['污水处理'], '# 前缀没去掉，或重复标签叠了两条');
+  for (let i = 0; i < 12; i += 1) s = modReading.addBookTag(s, 'b1', 't' + i);
+  assert.strictEqual(s.books[0].tags.length, 8, '标签上限没守住');
+  s = modReading.removeBookTag(s, 'b1', 't0');
+  assert.strictEqual(s.books[0].tags.length, 7);
+  assert.deepStrictEqual(modReading.removeBookTag(s, 'b1', '不存在的'), modReading.normalize(s),
+    '删不存在的标签不该改内容');
+  assert.deepStrictEqual(modReading.addBookTag(s, 'nope', 'x'), modReading.normalize(s),
+    '不存在的书不该被加标签');
+  // 整组设置：脏值一律丢弃，与笔记那套 normTags 同一口径
+  const set = modReading.setBookTags(s, 'b1', ['#a', 'a', '', 'b', 1, null, 'c']);
+  assert.deepStrictEqual(set.books[0].tags, ['a', 'b', '1', 'c'],
+    '整组设置要去 # / 去重 / 丢空值（数字会按既有 clean 口径转成字符串）');
+});
+
+test('v2', 'reading/虚拟书架：规则集合只派生 id，改一本书状态全场同刻跟着变', function () {
+  const now = Date.parse('2026-11-16T10:00:00+08:00');
+  const day = 86400000;
+  let s = modReading.empty();
+  s = modReading.normalize({
+    books: [
+      { id: 'b1', title: '在读的', status: 'reading', total: 100, done: 40, lastReadAt: now - 5 * day },
+      { id: 'b2', title: '读完的', status: 'done', total: 100 },
+      { id: 'b3', title: '只有笔记的', status: 'todo', total: 100 },
+      { id: 'b4', title: '很久没读的', status: 'reading', total: 100, lastReadAt: now - 200 * day }
+    ],
+    notes: [{ id: 'n1', bookId: 'b3', bookTitle: '只有笔记的', text: '一条' }]
+  });
+  s = modReading.addBookTag(s, 'b1', '污水处理');
+  s = modReading.addBookTag(s, 'b4', '污水处理');
+  const bd = modReading.board(s);
+  const byKey = {};
+  bd.shelves.forEach(function (x) { byKey[x.key] = x; });
+  assert.deepStrictEqual(byKey.reading.ids, ['b1', 'b4'], '在读集合错了（b4 是 reading 状态，只是很久没翻）');
+  assert.deepStrictEqual(byKey.done.ids, ['b2']);
+  assert.deepStrictEqual(byKey.todo.ids, ['b3']);
+  assert.deepStrictEqual(byKey.noted.ids, ['b3'], '有笔记的集合没算上');
+  assert.deepStrictEqual(byKey.nofile.ids.map(function (x) { return x; }).sort(), ['b1', 'b2', 'b3', 'b4'],
+    '没有文件的都该进「只有笔记」');
+  assert.deepStrictEqual(byKey['tag:污水处理'].ids, ['b1', 'b4'], '标签集合没派生出来');
+  assert.strictEqual(byKey.reading.count, 2);
+  // 只给 id，不复制记录：集合成员必须是 id 字符串，不是书对象
+  byKey.reading.ids.forEach(function (id) { assert.strictEqual(typeof id, 'string'); });
+  // 改状态后同一份 state 重算：书架立刻跟着变（因为它是派生，不是副本）
+  const s2 = modReading.setBookStatus(s, 'b1', 'done');
+  const byKey2 = {};
+  modReading.board(s2).shelves.forEach(function (x) { byKey2[x.key] = x; });
+  assert.deepStrictEqual(byKey2.done.ids.sort(), ['b1', 'b2'], '书架没跟着状态变——说明存了一份副本');
+});
+
+test('v2', 'reading/书库根：登记即纳入老书，换根一次重算，删根只解绑不删书', function () {
+  const BS = '\\';
+  const root = 'D:' + BS + 'Books';
+  let s = modReading.normalize({
+    books: [
+      { id: 'b1', title: '甲', filePath: root + BS + 'ws' + BS + 'a.epub' },
+      { id: 'b2', title: '乙', filePath: root + BS + 'ws' + BS + 'b.epub' },
+      { id: 'b3', title: '丙', filePath: 'E:' + BS + 'elsewhere' + BS + 'c.pdf' }
+    ]
+  });
+  // 登记根 → 老书自动补 rootId / relPath（零手工纳入），根外的书不动
+  s = modReading.addRoot(s, { id: 'rt1', label: '书库', path: root });
+  assert.strictEqual(s.books[0].rootId, 'rt1');
+  assert.strictEqual(s.books[0].relPath, 'ws/a.epub', '相对路径必须存正斜杠（备份要跨系统读得懂）');
+  assert.strictEqual(s.books[2].rootId, '', '根外的书不该被认领');
+  assert.strictEqual(s.books[2].relPath, '');
+  // 同一个目录不重复登记
+  assert.strictEqual(modReading.addRoot(s, { id: 'rt2', path: root }).roots.length, 1);
+  // 换根 = 整库搬家：一条改完，所有挂在它下面的书路径跟着走，id 一个不变
+  const moved = modReading.relocateRoot(s, 'rt1', 'F:' + BS + 'Library');
+  assert.strictEqual(moved.books[0].filePath, 'F:' + BS + 'Library' + BS + 'ws' + BS + 'a.epub');
+  assert.strictEqual(moved.books[1].filePath, 'F:' + BS + 'Library' + BS + 'ws' + BS + 'b.epub');
+  assert.strictEqual(moved.books[2].filePath, 'E:' + BS + 'elsewhere' + BS + 'c.pdf', '根外的书被顺手改了');
+  assert.deepStrictEqual(moved.books.map(function (b) { return b.id; }), ['b1', 'b2', 'b3']);
+  // 归一化幂等：再 normalize 一次不会把路径拼成两遍
+  assert.deepStrictEqual(modReading.normalize(moved), moved, 'roots 解析不幂等');
+  // 删根只解绑：书一本不少，filePath 保持原样（书还在原地，只是不再跟着根搬）
+  const off = modReading.removeRoot(moved, 'rt1');
+  assert.strictEqual(off.books.length, 3, '删根把书删了');
+  assert.strictEqual(off.roots.length, 0);
+  assert.strictEqual(off.books[0].rootId, '');
+  assert.strictEqual(off.books[0].relPath, '');
+  assert.strictEqual(off.books[0].filePath, moved.books[0].filePath, '删根把绝对路径抹了');
+  // 上限 6
+  let many = modReading.empty();
+  for (let i = 0; i < 9; i += 1) many = modReading.addRoot(many, { path: 'Z:' + BS + 'r' + i });
+  assert.strictEqual(many.roots.length, modReading.MAX_ROOTS);
+});
+
+test('v2', 'reading/书库根：roots 在每一种写操作后都不丢（漏一次整库就失忆）', function () {
+  const BS = '\\';
+  const base = modReading.normalize({
+    roots: [{ id: 'rt1', path: 'D:' + BS + 'Books' }],
+    books: [{ id: 'b1', title: '甲', rootId: 'rt1', relPath: 'a.epub' }]
+  });
+  const steps = {
+    addBook: function (s) { return modReading.addBook(s, { id: 'b2', title: '乙' }); },
+    updateBook: function (s) { return modReading.updateBook(s, 'b1', { author: '某人' }); },
+    setBookStatus: function (s) { return modReading.setBookStatus(s, 'b1', 'reading'); },
+    advanceBook: function (s) { return modReading.advanceBook(s, 'b1', 5, '2026-11-16'); },
+    touchBook: function (s) { return modReading.touchBook(s, 'b1', 1); },
+    setBookGroup: function (s) { return modReading.setBookGroup(s, 'b1', '污水'); },
+    setBookFavorite: function (s) { return modReading.setBookFavorite(s, 'b1', true); },
+    addBookTag: function (s) { return modReading.addBookTag(s, 'b1', 'x'); },
+    relinkBook: function (s) { return modReading.relinkBook(s, 'b1', { filePath: 'D:' + BS + 'Books' + BS + 'a.epub' }); },
+    addTheme: function (s) { return modReading.addTheme(s, { id: 'th1', title: '主题' }); },
+    addChapter: function (s) { return modReading.addChapter(s, 'b1', { title: '章' }); },
+    addNote: function (s) { return modReading.addNote(s, { id: 'n1', bookId: 'b1', bookTitle: '甲', text: '笔记' }); },
+    addBookmark: function (s) { return modReading.addBookmark(s, { id: 'm1', bookId: 'b1', anchor: '0:0.5' }); },
+    removeBookmark: function (s) { return modReading.removeBookmark(s, 'm1'); },
+    removeChapter: function (s) { return modReading.removeChapter(s, 'c-x'); },
+    mergeSection: function (s) { return modReading.mergeSection(s, modReading.empty()).state; },
+    repairDangling: function (s) { return modReading.repairDangling(s).state; }
+  };
+  Object.keys(steps).forEach(function (name) {
+    const out = steps[name](base);
+    assert.strictEqual(out.roots.length, 1, '写操作「' + name + '」把书库根弄丢了');
+    assert.strictEqual(out.roots[0].id, 'rt1');
+    assert.strictEqual(out.books[0].filePath, 'D:' + BS + 'Books' + BS + 'a.epub',
+      '写操作「' + name + '」之后书的解析路径变了');
+  });
+});
+
+test('v2', 'reading/清单导出：CSV 带 BOM 且转义正确，JSON 不含正文，OPDS 只给真文件挂链接', function () {
+  let s = modReading.normalize({
+    books: [
+      { id: 'b1', title: '含"引号"的书', author: '某人', status: 'reading', total: 300, done: 120, group: '污水' },
+      { id: 'b2', title: '有文件的书', status: 'done', total: 100, filePath: 'D:/Books/b2.epub', fileExt: 'epub' }
+    ],
+    notes: [{ id: 'n1', bookId: 'b1', bookTitle: '含"引号"的书', text: '这段正文不该出现在清单里' }]
+  });
+  s = modReading.addBookTag(s, 'b1', '规范');
+
+  const csv = modReading.exportList(s, 'csv');
+  assert.strictEqual(csv.format, 'csv');
+  assert.strictEqual(csv.ext, 'csv');
+  assert.strictEqual(csv.rows, 2);
+  assert.strictEqual(csv.text.charCodeAt(0), 0xFEFF, 'CSV 没带 UTF-8 BOM（Excel 打开会乱码）');
+  assert.strictEqual(csv.text.trimEnd().split('\n').length, 3, 'CSV 应有表头 + 2 行');
+  assert.ok(csv.text.indexOf('"含""引号""的书"') >= 0, 'CSV 引号没转义（会把一列撑成两列）');
+  assert.ok(csv.text.indexOf('这段正文不该出现') < 0, 'CSV 里混进了笔记正文');
+
+  const json = modReading.exportList(s, 'json');
+  const obj = JSON.parse(json.text);
+  assert.strictEqual(obj.schema, 'jiuge.books/v1');
+  assert.strictEqual(obj.count, 2);
+  assert.ok(obj.note.indexOf('不含书籍正文') >= 0, 'JSON 没写清自己不含正文');
+  assert.deepStrictEqual(obj.books[0].tags, ['规范']);
+  assert.strictEqual(obj.books[0].noteCount, 1);
+  assert.ok(json.text.indexOf('这段正文不该出现') < 0, 'JSON 里混进了笔记正文');
+
+  const opds = modReading.exportList(s, 'opds');
+  assert.strictEqual(opds.ext, 'xml');
+  assert.ok(/^<\?xml/.test(opds.text), 'OPDS 缺 XML 声明');
+  assert.ok(opds.text.indexOf('<feed xmlns="http://www.w3.org/2005/Atom"') >= 0, 'OPDS 根元素不对');
+  assert.strictEqual((opds.text.match(/<entry>/g) || []).length, 2, 'OPDS 条目数不对');
+  assert.strictEqual((opds.text.match(/acquisition/g) || []).length, 1,
+    '只有有文件的那本才该有 acquisition 链接');
+  assert.ok(opds.text.indexOf('&quot;') >= 0 || opds.text.indexOf('含"引号"') < 0,
+    'OPDS 没转义引号，XML 会坏');
+  assert.ok(opds.text.indexOf('</feed>') >= 0, 'OPDS 没闭合');
+
+  // 脏格式名不抛，退回 csv
+  assert.strictEqual(modReading.exportList(s, 'xml').format, 'csv');
+  assert.strictEqual(modReading.exportList(s, null).format, 'csv');
+});
+
+test('v2', 'reading/目录口径：章节锚点归一成 ch-<节序>，非法值丢弃，能清空', function () {
+  let s = modReading.normalize({
+    books: [{ id: 'b1', title: '书' }],
+    chapters: [
+      { id: 'c1', bookId: 'b1', title: '第一章', anchor: 'ch-3' },
+      { id: 'c2', bookId: 'b1', title: '第二章', anchor: '第4节' },
+      { id: 'c3', bookId: 'b1', title: '第三章', anchor: 'ch-' },
+      { id: 'c4', bookId: 'b1', title: '第四章' }
+    ]
+  });
+  assert.strictEqual(s.chapters[0].anchor, 'ch-3');
+  assert.strictEqual(s.chapters[1].anchor, '', '非法锚点没被丢掉（会让「跳哪一节」变成猜）');
+  assert.strictEqual(s.chapters[2].anchor, '');
+  assert.strictEqual(s.chapters[3].anchor, '');
+  assert.strictEqual(modReading.chapterSeq('ch-7'), 7);
+  assert.strictEqual(modReading.chapterSeq('ch-'), -1);
+  assert.strictEqual(modReading.chapterSeq(''), -1);
+  // 加章节时能带锚点；改章节能改锚点，也能清回纯大纲
+  let s2 = modReading.addChapter(s, 'b1', { id: 'c5', title: '第五章', anchor: 'ch-5' });
+  assert.strictEqual(s2.chapters.filter(function (c) { return c.id === 'c5'; })[0].anchor, 'ch-5');
+  s2 = modReading.updateChapter(s2, 'c5', { anchor: '' });
+  assert.strictEqual(s2.chapters.filter(function (c) { return c.id === 'c5'; })[0].anchor, '');
+  // 归一化幂等：锚点不会被反复加前缀
+  assert.deepStrictEqual(modReading.normalize(s2), s2);
+});
+
+test('v2', 'reading/体检：根被删了但书还挂着它的 id，要报出来但不当急病处理', function () {
+  const s = modReading.normalize({
+    books: [{ id: 'b1', title: '甲', rootId: 'rt-gone', relPath: 'a.epub', filePath: 'D:/Books/a.epub' }]
+  });
+  const a = modReading.audit(s);
+  assert.strictEqual(a.counts.danglingRoots, 1, '根没了却没报（「这书该跟着根走」会静默失效）');
+  assert.strictEqual(a.dangling.roots[0].rootId, 'rt-gone');
+  // 修复不动它：根可以再登记回来，届时同一本书会自动重新挂上
+  const rep = modReading.repairDangling(s);
+  assert.strictEqual(rep.fixed, 0, '修断链顺手把根引用清了（会让书再也挂不回根）');
+  // 根登记回来，书自动重新挂上
+  const back = modReading.addRoot(s, { id: 'rt-gone', path: 'D:' + String.fromCharCode(92) + 'Books' });
+  assert.strictEqual(back.books[0].rootId, 'rt-gone');
+  assert.strictEqual(modReading.audit(back).counts.danglingRoots, 0);
+});
+
+test('v2', '家庭亲子/归一化：脏数据不炸、幂等、历史归属不被成员表擦掉', function () {
+  const raw = {
+    members: [
+      { id: 'm1', name: ' 小满 ', role: 'child', birthday: '2021-03-05', school: '中班' },
+      { id: 'm1', name: '重复 id', role: 'child' },
+      { name: '', role: 'child' }
+    ],
+    moments: [
+      { id: 'x1', date: '2026-11-16', memberIds: ['m1', 'm-gone'], kind: 'play', minutes: 40, text: '拼完恐龙拼图' },
+      { id: 'x2', date: '2026-13-40', memberIds: [], kind: '不存在的类型', minutes: 99999, text: '日期非法' }
+    ],
+    milestones: [{ id: 'g1', date: '2026-11-15', memberIds: ['m1'], kind: 'first', title: '第一次自己穿鞋' }]
+  };
+  const s = modFamily.normalize(raw);
+  assert.strictEqual(s.members.length, 1, '重复 id / 空名成员没被清掉');
+  assert.strictEqual(s.members[0].name, '小满');
+  // 成员已删的 id 在归一化时保留：那天陪的是谁，不能因为删了档案就说不清
+  assert.deepStrictEqual(s.moments.filter(function (m) { return m.id === 'x1'; })[0].memberIds, ['m1', 'm-gone'],
+    '归一化按成员表裁剪了历史时刻的归属');
+  const bad = s.moments.filter(function (m) { return m.id === 'x2'; })[0];
+  assert.strictEqual(bad.kind, 'company', '非法类型没回落到「陪伴」');
+  assert.strictEqual(bad.minutes, 1440, '时长没按一天封顶');
+  assert.deepStrictEqual(modFamily.normalize(s), s, 'normalize 不是幂等的');
+});
+
+test('v2', '家庭亲子/成员：生日算年龄，三岁以内到月，非法生日当没填', function () {
+  assert.strictEqual(modFamily.ageOf('2021-03-05', '2026-11-16').text, '5 岁');
+  assert.strictEqual(modFamily.ageOf('2025-08-20', '2026-11-16').text, '1 岁 2 个月');
+  assert.strictEqual(modFamily.ageOf('2026-01-10', '2026-11-16').text, '10 个月');
+  assert.strictEqual(modFamily.ageOf('2026-13-40', '2026-11-16').text, '', '非法生日被当成有效日期');
+  const s = modFamily.normalize({ members: [{ id: 'm1', name: '小满', birthday: '2026-13-40' }] });
+  assert.strictEqual(s.members[0].birthday, '', '非法生日没被丢掉');
+});
+
+test('v2', '家庭亲子/时刻：正文必填、成员上限、已删成员不接受新记录', function () {
+  let s = modFamily.empty();
+  s = modFamily.addMember(s, { name: '小满' });
+  s = modFamily.addMember(s, { name: '小满妈', role: 'partner' });
+  const ids = s.members.map(function (m) { return m.id; });
+  s = modFamily.addMoment(s, { text: '', memberIds: ids });
+  assert.strictEqual(s.moments.length, 0, '空正文也建了一条时刻');
+  s = modFamily.addMoment(s, { text: '一起读绘本', memberIds: ids.concat(['ghost']) });
+  assert.strictEqual(s.moments.length, 1);
+  assert.deepStrictEqual(s.moments[0].memberIds, ids, '新记录挂到了不存在的成员上');
+  const many = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+  s = modFamily.addMoment(s, { text: '太多人', memberIds: many });
+  assert.ok(s.moments[0].memberIds.length <= 6, '成员数没有上限');
+});
+
+test('v2', '家庭亲子/周窗口：周日归上一周，周一才是新一周', function () {
+  // 2026-11-16 是周一
+  const w1 = modFamily.weekWindow('2026-11-16');
+  assert.strictEqual(w1.start, '2026-11-16');
+  assert.strictEqual(w1.end, '2026-11-22');
+  const w2 = modFamily.weekWindow('2026-11-22'); // 周日
+  assert.strictEqual(w2.start, '2026-11-16', '周日被算进了下一周（当天统计会忽然归零）');
+});
+
+test('v2', '家庭亲子/派生：本周覆盖与未覆盖只数事实，删成员不删历史', function () {
+  let s = modFamily.empty();
+  s = modFamily.addMember(s, { name: '小满' });
+  s = modFamily.addMember(s, { name: '小满妈', role: 'partner' });
+  const kid = s.members[0].id;
+  const mom = s.members[1].id;
+  s = modFamily.addMoment(s, { date: '2026-11-16', memberIds: [kid], minutes: 40, text: '拼图' });
+  s = modFamily.addMoment(s, { date: '2026-11-17', memberIds: [kid, mom], minutes: 20, text: '一起散步' });
+  const b = modFamily.board(s, '2026-11-17');
+  assert.strictEqual(b.weekStats.moments, 2);
+  assert.strictEqual(b.weekStats.minutes, 60);
+  assert.strictEqual(b.weekStats.covered, 2);
+  assert.strictEqual(b.weekStats.days, 2);
+  assert.strictEqual(b.streak, 2, '连续记录天数算错');
+  assert.deepStrictEqual(b.weekStats.untouched, []);
+  // 删掉妈妈：历史时刻仍在，归属 id 不被擦掉，但「覆盖成员」按现存成员算
+  s = modFamily.removeMember(s, mom);
+  const b2 = modFamily.board(s, '2026-11-17');
+  assert.strictEqual(b2.counts.members, 1);
+  assert.strictEqual(b2.counts.moments, 2, '删成员把历史时刻一起删了');
+  assert.strictEqual(b2.moments.filter(function (m) { return m.text === '一起散步'; })[0].memberIds.length, 2,
+    '删成员把历史时刻的归属擦掉了');
+  assert.strictEqual(b2.weekStats.covered, 1);
+});
+
+test('v2', '家庭亲子/跨机合并：只补不改、按 id 去重、可反复导入', function () {
+  let mine = modFamily.empty();
+  mine = modFamily.addMember(mine, { name: '小满' });
+  // addMember 不吃外部 id（防止撞 id），所以拿回来的 id 才是真 id
+  const mineId = mine.members[0].id;
+  mine = modFamily.addMoment(mine, { text: '我的记录', date: '2026-11-16' });
+  const other = modFamily.normalize({
+    members: [{ id: mineId, name: '改名了' }, { id: 'm2', name: '小满妈' }],
+    moments: [{ id: 'z1', text: '对面的记录', date: '2026-11-15' }]
+  });
+  const once = modFamily.mergeSection(mine, other);
+  assert.strictEqual(once.added, 2, '新增条目数不对（成员 1 + 时刻 1）');
+  assert.strictEqual(once.state.members.filter(function (m) { return m.id === mineId; })[0].name, '小满',
+    '合并覆盖了本机已有成员的名字（只补不改）');
+  const twice = modFamily.mergeSection(once.state, other);
+  assert.strictEqual(twice.added, 0, '同一份备份导入两次又加了一遍');
+  assert.deepStrictEqual(twice.state, once.state, '重复导入不改内容却不是幂等');
+});
+
+test('v2', '家庭亲子/农历生日：公历↔农历互推、闰月缺失退回普通月、幂等', function () {
+  const lunar = require(path.resolve(__dirname, '../../src/family/lunar.js'));
+  // 三个已知春节锚点：换算错一天，纪念日就会提醒错一天
+  assert.deepStrictEqual(lunar.solarToLunar(2024, 2, 10), { year: 2024, month: 1, day: 1, leap: false });
+  assert.deepStrictEqual(lunar.solarToLunar(2025, 1, 29), { year: 2025, month: 1, day: 1, leap: false });
+  assert.deepStrictEqual(lunar.solarToLunar(2026, 2, 17), { year: 2026, month: 1, day: 1, leap: false });
+  assert.deepStrictEqual(lunar.lunarToSolar(2026, 1, 1, false), { year: 2026, month: 2, day: 17 });
+  assert.deepStrictEqual(lunar.lunarToSolar(2024, 8, 15, false), { year: 2024, month: 9, day: 17 },
+    '中秋换算不对');
+  // 表外年份明确返回 null，不猜
+  assert.strictEqual(lunar.lunarToSolar(1899, 1, 1, false), null);
+  assert.strictEqual(lunar.lunarToSolar(2050, 1, 1, false), null);
+  // 闰月不存在时退回普通月，并标记 shifted
+  const shifted = lunar.resolveLunar(2026, 6, 1, true);
+  assert.strictEqual(shifted.shifted, true, '没有闰月却没退回普通月');
+  assert(!!shifted.date, '退回后应该有可用的公历日期');
+});
+
+test('v2', '家庭亲子/纪念日：阳历与农历都能算下一次，未勾选不进提醒', function () {
+  let s = modFamily.empty();
+  s = modFamily.addMember(s, { name: '阳历宝', birthday: '2018-11-20', anniversaryOn: true });
+  s = modFamily.addMember(s, {
+    name: '农历宝', calendarType: 'lunar', birthYear: 2018, lunarMonth: 8, lunarDay: 15, anniversaryOn: true
+  });
+  s = modFamily.addMember(s, { name: '不提醒', birthday: '2018-11-20', anniversaryOn: false });
+  const b = modFamily.board(s, '2026-11-16');
+  // 默认窗口 30 天：这里只有阳历那条在窗口内；农历那条要放宽窗口才看得到。
+  assert.strictEqual(b.anniversaries.length, 1, '未勾纪念日的成员不该进提醒');
+  const all = modFamily.anniversariesOf(s, '2026-11-16', 400);
+  assert.strictEqual(all.length, 2, '未勾纪念日的成员不该进提醒');
+  const solar = all.filter(function (a) { return a.kind === 'solar'; })[0];
+  const lunarOne = all.filter(function (a) { return a.kind === 'lunar'; })[0];
+  assert.strictEqual(solar.date, '2026-11-20', '阳历生日没算到今年');
+  assert.strictEqual(solar.daysUntil, 4, '距生日天数不对');
+  assert(lunarOne.date > '2026-11-16', '农历生日没有顺延到下一次');
+  assert(modFamily.lunarLabel(s.members[1]).indexOf('农历八月十五') >= 0, '农历生日文案不对');
+  assert(modFamily.ageLunarOf(s.members[1], '2026-11-16').text.indexOf('岁') >= 0, '农历年龄没算出来');
+  assert.deepStrictEqual(modFamily.normalize(s), s, '新增历法字段后 normalize 不再幂等');
 });
 
 console.log('');

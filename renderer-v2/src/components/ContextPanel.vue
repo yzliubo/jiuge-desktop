@@ -30,6 +30,9 @@ import InspireContext from './context/InspireContext.vue';
 import ReadingContext from './context/ReadingContext.vue';
 import FinanceContext from './context/FinanceContext.vue';
 import ExploreContext from './context/ExploreContext.vue';
+import FamilyContext from './context/FamilyContext.vue';
+import LeisureContext from './context/LeisureContext.vue';
+import RelationContext from './context/RelationContext.vue';
 import SettingsContext from './context/SettingsContext.vue';
 
 const props = defineProps<{
@@ -67,7 +70,7 @@ const emit = defineEmits<{
 const HINTS: Record<string, string> = {
   today: '', insight: '', timeline: '', review: '', capsule: '', free: '',
   habit: '', dream: '', data: '', bin: '', inspire: '', settings: '',
-  life: '', relation: '', connect: '', long: '', reading: '', finance: ''
+  life: '', relation: '', connect: '', long: '', reading: '', finance: '', family: '', leisure: ''
 };
 
 const headTitle = computed(() => {
@@ -77,7 +80,8 @@ const headTitle = computed(() => {
     today: '今天', timeline: '时间轴', review: '回顾', capsule: '胶囊', free: '自由记录',
     habit: '坚持', dream: '梦想', data: '数据中心', bin: '封存箱',
     inspire: '语料库', settings: '设置', life: '时间纵深',
-    relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本'
+    relation: '关系经营', connect: '内容连接', long: '长期形状', reading: '图书馆', finance: '家庭账本',
+    family: '家庭亲子', leisure: '休闲娱乐'
   }[props.view] || '');
 });
 
@@ -108,8 +112,10 @@ const { active: writingActive } = useWritingCheck();
     <TodayOptions
       v-if="view === 'today'"
       :record="record"
+      :tick="tick"
       @save="emit('save', $event)"
       @notify="emit('notify', $event)"
+      @changed="emit('changed')"
     />
     <!-- 工作格单独一栏：任务详情可写（只写选中的那一条）+ 清单健康 + 每周回顾 -->
     <WorkContext
@@ -182,8 +188,29 @@ const { active: writingActive } = useWritingCheck();
     <!-- T17：时间纵深 / 内容连接 / 关系经营 / 长期形状 原来都掉进 SettingsContext 的
          通用兜底，右栏只有「当前配置 + 数据与合规」两张与页面无关的卡，白占 300px。
          现在按页换成真实数据（只读 + 每行可跳转），正文仍只在主栏写。 -->
+    <!-- 家庭亲子：本周陪伴 / 还没记到的人 / 最近足迹。只做加法，不评分 -->
+    <FamilyContext
+      v-else-if="view === 'family'"
+      :tick="tick"
+      @changed="emit('changed')"
+      @notify="emit('notify', $event)"
+    />
+    <!-- 关系经营：通讯录进右栏（可写），主栏只写正文与流水 -->
+    <RelationContext
+      v-else-if="view === 'relation'"
+      :tick="tick"
+      @changed="emit('changed')"
+      @notify="emit('notify', $event)"
+    />
+    <!-- 休闲娱乐：当日阅读账 + 今天的笔记条数 + 打开图书馆入口（只读） -->
+    <LeisureContext
+      v-else-if="view === 'leisure'"
+      :tick="tick"
+      :date="record.date"
+      @navigate="emit('navigate', $event)"
+    />
     <ExploreContext
-      v-else-if="view === 'life' || view === 'relation' || view === 'connect' || view === 'long'"
+      v-else-if="view === 'life' || view === 'connect' || view === 'long'"
       :view="view"
       @navigate="emit('navigate', $event)"
     />

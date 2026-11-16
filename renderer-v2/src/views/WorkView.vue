@@ -936,8 +936,9 @@ async function actCopy(): Promise<void> {
   say(ok ? '已复制：' + line : '复制失败——当前环境不给剪贴板权限');
 }
 
-// 转发到当天记录：写进「自由记录」格而不是「工作推进」格。
-// 工作推进格里正开着编辑窗，从菜单里再写一次会和正在敲的字打架；自由记录这一页没人编辑。
+// 转发到当天记录：2026-11-16 起落「自由记录」的闪念（md_freewrite 的只留原文条目），
+// 不再往 cells.free 里拼一行。九格第 9 格读的就是这份摘要，所以转发完立刻能在格子里看到。
+// 工作推进格里正开着编辑窗，从菜单里再写一次会和正在敲的字打架；自由记录这一侧没有编辑窗。
 async function actDiary(): Promise<void> {
   const t = menuTask.value;
   closeMenu();
@@ -945,11 +946,9 @@ async function actDiary(): Promise<void> {
   const rec = props.record;
   if (!rec || !rec.cells) { say('今天的记录还没读出来，稍后再试'); return; }
   const line = '· ' + t.title + (t.project ? '（' + t.project + '）' : '') + (t.dueDate ? ' · 到期 ' + t.dueDate : '');
-  const prev = rec.cells.free || '';
-  const free = prev.replace(/\s+$/, '');
-  const cells = Object.assign({}, rec.cells, { free: free ? free + '\n' + line : line });
-  emit('save', Object.assign({}, rec, { cells: cells }));
-  say('已转发到今天的「自由记录」格');
+  const res = await callDomain<{ item?: unknown } | null>('free.noteAdd', null, line, rec.date);
+  if (!res || !res.item) { say('没转发成，稍后再试'); return; }
+  say('已转发到自由记录');
 }
 
 function actKid(): void {

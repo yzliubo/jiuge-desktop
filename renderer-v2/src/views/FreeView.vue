@@ -105,10 +105,13 @@ const feed = computed<FeedRow[]>(function () {
     });
   });
   board.value.flashes.forEach(function (f) {
+    // 「只留原文」的条目（速记 / 九格格内快记 / 任务转发，source 以 nt: 开头）
+    // 本来就不进收件箱，不能标成「已同步」——那是另一条通路的说法。
+    const quiet = String(f.source || '').indexOf('nt:') === 0;
     rows.push({
       key: 'f-' + f.id, kind: '闪念', at: f.date || fmtDate(f.createdAt),
-      tag: f.sync === 'ok' ? '已同步收件箱' : '待重试',
-      tagClass: f.sync === 'ok' ? 'fw-tag-blue' : 'fw-tag-amber',
+      tag: quiet ? '仅留原文' : (f.sync === 'ok' ? '已同步收件箱' : '待重试'),
+      tagClass: quiet ? 'fw-tag-gray' : (f.sync === 'ok' ? 'fw-tag-blue' : 'fw-tag-amber'),
       text: f.text, meta: '原文保留在自由记录 · ' + f.source, dim: false
     });
   });
@@ -213,7 +216,7 @@ function sentClass(s: WSentence): string {
   <section class="free-view">
     <header class="fw-head">
       <h2>自由记录 · 三合一</h2>
-      <p>胶囊、闪念、长文汇到一条时间轴。胶囊原文只在 diary-store 一份，这里只读派生。</p>
+      <p>胶囊、闪念、长文汇到一条时间轴。这里是自由记录的唯一写入口，九格第 9 格只显示当天的闪念与长文摘要。胶囊原文只在 diary-store 一份，这里只读派生。</p>
     </header>
 
     <div class="fw-tabs" role="tablist" aria-label="自由记录三种功能">
@@ -271,10 +274,10 @@ function sentClass(s: WSentence): string {
             <p>{{ f.text }}</p>
             <span class="fw-note">{{ f.date }} · {{ f.source }}</span>
           </div>
-          <span class="fw-chip" :class="f.sync === 'ok' ? 'fw-tag-blue' : 'fw-tag-amber'">
-            {{ f.sync === 'ok' ? '已同步' : '待重试' }}
+          <span class="fw-chip" :class="f.source.indexOf('nt:') === 0 ? 'fw-tag-gray' : (f.sync === 'ok' ? 'fw-tag-blue' : 'fw-tag-amber')">
+            {{ f.source.indexOf('nt:') === 0 ? '仅留原文' : (f.sync === 'ok' ? '已同步' : '待重试') }}
           </span>
-          <button v-if="f.sync !== 'ok'" class="fw-btn fw-mini" @click="retryFlash(f)">重试</button>
+          <button v-if="f.sync !== 'ok' && f.source.indexOf('nt:') !== 0" class="fw-btn fw-mini" @click="retryFlash(f)">重试</button>
           <button class="fw-btn fw-mini" @click="removeFlash(f)">删除</button>
         </div>
         <p v-if="!board.flashes.length" class="fw-note">还没有闪念。先记一句试试。</p>

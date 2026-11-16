@@ -27,17 +27,13 @@ interface BookRow {
 interface ThemeGroup {
   themeId: string; themeTitle: string; note: string; rows: BookRow[];
 }
-interface ThemeBook {
-  themeId: string; themeTitle: string; bookId: string; title: string; author: string;
-  total: number; done: number; unit: string; status: string; pct: number; quoteCount: number;
-}
 interface NoteRow {
   id: string; mode: string; bookId: string; themeId: string; bookTitle: string;
   type: string; quote: string; text: string; page: number; tags: string[];
   chapterId: string; createdAt: number; pushedAt: number; pushedCell: string;
   typeLabel?: string; modeLabel?: string; pushed?: boolean; orphan?: boolean;
 }
-interface ChapterRow { id: string; bookId: string; title: string; parentId: string; order: number }
+interface ChapterRow { id: string; bookId: string; title: string; parentId: string; order: number; anchor?: string }
 interface Stats {
   books: number; themeBooks?: number; notes: number; highlights: number; ideas: number; pushed: number;
   leisureNotes: number; themeNotes: number; tagCount: number; thisMonth: number;
@@ -46,9 +42,12 @@ interface BoardData {
   stats: Stats; books: BookRow[];
   // V3.13：书架只取 leisureBooks（主题书不混进休闲书架）；books 仍是全部，供别处只读引用
   leisureBooks?: BookRow[];
-  themeBooks: ThemeBook[]; themeGroups: ThemeGroup[];
+  // P0-1：themeBooks 已从 board() 删除——旧 growth 书单不再进视图，主题书只看 themeGroups
+  themeGroups: ThemeGroup[];
   // 分组清单（派生值，不是独立表）与收藏总数
   groups: Array<{ name: string; count: number }>; favoriteCount: number;
+  // P2-1：虚拟书架（规则集合 + 标签集合）。只有 id 列表，书仍是上面那一份。
+  shelves?: Array<{ key: string; kind: string; label: string; count: number; ids: string[] }>;
   recent: NoteRow[]; tagTop: Array<{ tag: string; count: number }>;
 }
 interface NotesResult {
@@ -57,6 +56,27 @@ interface NotesResult {
   byType: Array<{ type: string; count: number }>;
   byMonth: Array<{ month: string; count: number }>;
 }
+// 书库体检报告（P0-4）：对标 calibre check_library，只报告不自动改数据。
+// counts 是给人看的四项数字，其余是展开看「具体是哪几条」。
+interface AuditReport {
+  counts: {
+    books: number; notes: number; themes: number;
+    danglingNotes: number; danglingChapters: number; danglingBookmarks: number; danglingBooks: number;
+    dupFingerprints: number; dupTitles: number; notesNoSource: number;
+    missingFiles: number; booksNoFingerprint: number;
+  };
+  dangling: {
+    notes: Array<{ id: string; bookId: string; themeId: string; bookTitle: string }>;
+    chapters: Array<{ id: string; bookId: string; title: string }>;
+    bookmarks: Array<{ id: string; bookId: string; label: string }>;
+    books: Array<{ id: string; themeId: string; title: string }>;
+  };
+  missingFiles: Array<{ id: string; title: string; filePath: string }>;
+  dupFingerprints: Array<{ fingerprint: string; books: Array<{ id: string; title: string; filePath: string }> }>;
+  dupTitles: Array<{ title: string; books: Array<{ id: string; title?: string; filePath: string }> }>;
+}
+// 一次「修复断链」的改动凭据：撤销就是把它原样回放
+interface RepairChange { coll: 'notes' | 'books'; id: string; field: string; from: string }
 interface ActiveBook {
   mode: 'leisure' | 'theme'; bookId: string; themeId: string; title: string; total: number; done: number;
 }
@@ -66,7 +86,7 @@ interface ActiveBook {
 // 不给 scope 时（例如早先的内嵌用法）完全按自己的记忆走，行为不变。
 const props = defineProps<{
   record: DiaryRecord; today: string; backfill?: boolean;
-  scope?: { kind: 'leisure' | 'theme' | 'notes'; group?: string; themeId?: string } | null;
+  scope?: { kind: 'leisure' | 'theme' | 'notes' | 'shelf'; group?: string; themeId?: string; shelfKey?: string } | null;
   // V3.14：嵌进独立窗口时收起大标题与统计头——左栏品牌区已经有「图书馆」，
   // 右栏也已经把本数 / 在读 / 笔记摆成四格，中栏再重复一遍只是白占一屏高度。
   embedded?: boolean;
@@ -93,6 +113,8 @@ const busy = ref(false);
 
 // 章节大纲（本地两层树，不是 AI 生成的思维导图）
 const newChapter = ref('');
+// P2-3：加章节时顺手填「书内第几节」（可空）。空着就是纯大纲。
+const newChapterSeq = ref('');
 // 笔记表单：摘录 + 自己的话 + 页码 + #tag
 const noteType = ref('highlight');
 const noteQuote = ref('');
@@ -108,6 +130,14 @@ const newThemeNote = ref('');
 const newThemeBook = ref('');       // 主题下手工加书（无本机文件的书）
 const themeSel = ref('');            // 当前展开的主题 id
 const importingTheme = ref('');      // 正在导入文件的主题 id
+// ---- P0-2 / P0-4：书籍身份与书库体检 ----
+// 体检报告整份放内存，不落库（它是派生值，每次点开现算）。
+const auditOpen = ref(false);
+const auditBusy = ref(false);
+const auditReport = ref<AuditReport | null>(null);
+// 修复的撤销凭据：只活在这一次窗口会话里。关窗即失效——不为撤销再开一个数据键。
+const repairUndo = ref<RepairChange[]>([]);
+const relinking = ref('');
 // 读书笔记库筛选
 const kw = ref('');
 const fMode = ref('');
@@ -143,6 +173,9 @@ const GROUP_FAV = '__fav__';
 const GROUP_NONE = '\u0000none';
 const GROUP_KEY = 'jiuge.reading.groupFilter';
 const groupFilter = ref<string>(GROUP_ALL);
+// 虚拟书架筛选：空 = 不筛。与 groupFilter 是两条独立的轴（规则集合 vs 分组），
+// 但同屏只允许一条生效——两条一起用会得到一个谁也说不清的空列表。
+const shelfFilter = ref('');
 const groups = computed<Array<{ name: string; count: number }>>(() => board.value?.groups || []);
 // 与左栏「未分组」同一口径：只数休闲书里 group 为空的那几本（books 已经是 leisure 清单）
 const ungroupedCount = computed(() => books.value.filter((b) => !b.group).length);
@@ -186,7 +219,19 @@ const allBooks = computed<BookRow[]>(() => board.value?.books || []);
 // 只在渲染层过滤，不动库：搜索是「看一眼」，不是一次写操作。
 const shelfBooks = computed<BookRow[]>(() => {
   const k = shelfKw.value.trim().toLowerCase();
-  let list = books.value;
+  // 虚拟书架的范围是「整库」：规则集合里可能同时有休闲书与主题书，
+  // 只从 leisureBooks 起筛会让左栏数字比中栏多，看着像丢书。
+  const sk = shelfFilter.value;
+  let list = sk ? allBooks.value : books.value;
+  // P2-1 虚拟书架：左栏点一个规则集合，中栏只留这一摞。
+  // 规则在本机派生（board.shelves 给 id 列表），这里按 id 筛——不复制书籍记录。
+  if (sk) {
+    const hit = (board.value?.shelves || []).filter((s) => s.key === sk)[0];
+    const ids = hit ? hit.ids : [];
+    const seen: Record<string, boolean> = {};
+    ids.forEach((id) => { seen[id] = true; });
+    list = list.filter((b) => !!seen[b.id]);
+  }
   // 分组 / 收藏夹先筛，再走关键词；两者都是「看一眼」，库里一本都不动
   const g = groupFilter.value;
   if (g === GROUP_FAV) list = list.filter((b) => !!b.favorite);
@@ -221,8 +266,11 @@ const shelfBooks = computed<BookRow[]>(() => {
   return list.slice().sort((a, b) => (dir * cmp(a, b)) || ((a.order || 0) - (b.order || 0)));
 });
 // 搜索态 / 分组筛选态都不许拖：看不见的书会被挤出可见区，等于替用户改了没打算改的顺序
-const canDrag = computed(() => sortMode.value === 'manual' && !shelfKw.value.trim() && groupFilter.value === GROUP_ALL);
-const themeBooks = computed<ThemeBook[]>(() => board.value?.themeBooks || []);
+const canDrag = computed(() => sortMode.value === 'manual' && !shelfKw.value.trim()
+  && groupFilter.value === GROUP_ALL && !shelfFilter.value);
+// P0-1：这里原先还有一个 themeBooks computed（board.themeBooks 的镜像）。
+// 那个数组从来没被模板用过（模板只读 stats.themeBooks 这个数字），却让「同一份书单」
+// 在 IPC 里来回传了两份。board() 现在不返回它，这里也不再有这个「幽灵变量」。
 // V2.14：主题书格局 md_reading.books 派生（每行是 BookRow，有 id 可直接开阅读窗）
 const themeGroups = computed<ThemeGroup[]>(() => board.value?.themeGroups || []);
 // V3.15：主题默认展开，三角只管「这一摞先不看」。折叠状态不写盘——
@@ -393,11 +441,19 @@ function onDragEnd(): void { dragId.value = ''; dragOverId.value = ''; }
 // ---- V3.5 分组 / 收藏 ----
 function setGroupFilter(g: string): void {
   groupFilter.value = g;
+  // 手动点分组 = 主动离开虚拟书架；两条筛选不叠加
+  shelfFilter.value = '';
   groupAdding.value = false;
   groupRenaming.value = false;
   groupDeleteConfirm.value = false;
   try { localStorage.setItem(GROUP_KEY, g); } catch { /* 隐私模式下只在本轮生效 */ }
 }
+// P2-1：当前生效的虚拟书架叫什么（找不到就说「已失效」，别假装还在筛）
+const shelfLabel = computed(() => {
+  const hit = (board.value?.shelves || []).filter((s) => s.key === shelfFilter.value)[0];
+  return hit ? hit.label : '已失效';
+});
+function clearShelfFilter(): void { shelfFilter.value = ''; }
 function groupLabel(): string {
   return groupFilter.value === GROUP_ALL ? '全部'
     : groupFilter.value === GROUP_FAV ? '收藏夹'
@@ -409,6 +465,14 @@ function applyScope(): void {
   const s = props.scope;
   if (!s) return;
   if (s.kind === 'notes') { tab.value = 'notes'; return; }
+  // P2-1：虚拟书架也走「书架」页签，只是多一条 id 筛选；
+  // 分组筛选同时清回「全部」，避免两条筛选叠成一个空列表。
+  if (s.kind === 'shelf') {
+    tab.value = 'shelf';
+    shelfFilter.value = s.shelfKey || '';
+    if (s.shelfKey) groupFilter.value = GROUP_ALL;
+    return;
+  }
   if (s.kind === 'theme') {
     tab.value = 'theme';
     if (s.themeId !== undefined) {
@@ -419,6 +483,8 @@ function applyScope(): void {
     return;
   }
   tab.value = 'shelf';
+  // 左栏点「休闲阅读 / 分组」= 退出虚拟书架筛选，回到按分组看
+  shelfFilter.value = '';
   groupFilter.value = s.group || GROUP_ALL;
 }
 watch(() => props.scope, applyScope, { deep: true });
@@ -698,6 +764,55 @@ async function revealFile(b: BookRow): Promise<void> {
   await callDomain<unknown>('reading.revealBook', null, b.id);
 }
 
+// ---- P0-2：重新关联 ----
+// 文件被改名 / 搬到别的盘之后，路径断了。旧版本只能「移出 → 重新添加」，
+// 那会造出一个新 bookId，笔记 / 章节 / 书签 / 按书筛选全静默失联。
+// 这里保持 id 不变，只把路径换掉；是不是同一本由主进程按指纹判定。
+async function relinkBook(b: BookRow): Promise<void> {
+  if (relinking.value) return;
+  relinking.value = b.id;
+  try {
+    const picked = await pickBookFiles();
+    if (!picked || picked.canceled || !picked.paths.length) return;
+    const r = await callDomain<{ ok: boolean; reason?: string; changedSize?: boolean } | null>(
+      'reading.relinkBook', null, b.id, picked.paths[0]);
+    if (!r || !r.ok) { say((r && r.reason) || '重新关联失败'); return; }
+    await reload();
+    say('已重新关联到新位置，书的 id 没变——' + (b.noteCount || 0) + ' 条笔记、章节与书签都还在');
+  } finally {
+    relinking.value = '';
+  }
+}
+
+// ---- P0-4：书库体检 ----
+// 报告先摆出来，人看过再决定修不修。修复只清「指向不存在的东西」的那一个字段，
+// 不删书、不删笔记；撤销靠 changes 回放，不靠第二份快照。
+async function openAudit(): Promise<void> {
+  auditOpen.value = true;
+  auditBusy.value = true;
+  try {
+    auditReport.value = await callDomain<AuditReport | null>('reading.audit', null);
+  } finally {
+    auditBusy.value = false;
+  }
+}
+async function repairDangling(): Promise<void> {
+  const r = await callDomain<{ fixed: number; changes: RepairChange[] } | null>('reading.repairDangling', null);
+  repairUndo.value = (r && r.changes) || [];
+  await openAudit();
+  await reload();
+  say(!r || !r.fixed ? '没有需要修的断链' : '已清掉 ' + r.fixed + ' 处断链，可撤销');
+}
+async function undoRepair(): Promise<void> {
+  if (!repairUndo.value.length) return;
+  await callDomain<{ restored: number } | null>('reading.restoreDangling', null, repairUndo.value);
+  const n = repairUndo.value.length;
+  repairUndo.value = [];
+  await openAudit();
+  await reload();
+  say('已撤销上次修复（' + n + ' 处引用已还原）');
+}
+
 function say(text: string): void { emit('notify', text); }
 
 // ---- 休闲娱乐阅读：书只从本机电子书来（V3.14 起不再手写书名） ----
@@ -763,13 +878,12 @@ async function importThemes(): Promise<void> {
     : '没有需要迁移的旧主题书单');
 }
 
-function openBook(mode: 'leisure' | 'theme', row: BookRow | ThemeBook): void {
-  const b = row as BookRow;
+function openBook(mode: 'leisure' | 'theme', row: BookRow): void {
+  // P0-1：旧 ThemeBook 形状已从数据契约里删掉，主题书与休闲书都是 BookRow，主键都是 id
   active.value = {
     mode,
-    // V2.14：主题书在 books 表里，主键是 id；旧 ThemeBook 走 bookId 兼容
-    bookId: mode === 'leisure' ? (row as BookRow).id : (b.id || (row as ThemeBook).bookId),
-    themeId: mode === 'theme' ? (b.themeId || (row as ThemeBook).themeId || '') : '',
+    bookId: row.id,
+    themeId: mode === 'theme' ? (row.themeId || '') : '',
     title: row.title,
     total: row.total,
     done: row.done
@@ -783,9 +897,30 @@ async function addChapter(): Promise<void> {
   if (!active.value || active.value.mode !== 'leisure') return;
   const title = newChapter.value.trim();
   if (!title) return;
-  await callDomain<unknown>('reading.addChapter', null, active.value.bookId, { title });
+  // P2-3：锚点与阅读窗同一口径 ch-<节序>；没填就留空（纯大纲，不假装知道位置）
+  const seq = Number(newChapterSeq.value.trim());
+  const anchor = Number.isFinite(seq) && seq > 0 ? 'ch-' + Math.trunc(seq) : '';
+  await callDomain<unknown>('reading.addChapter', null, active.value.bookId, { title, anchor });
   newChapter.value = '';
+  newChapterSeq.value = '';
   await reload();
+}
+
+// 'ch-7' → 7；没有锚点或格式不合规 → 0
+function chapterSeqOf(anchor: string): number {
+  const m = /^ch-(\d{1,4})$/.exec(String(anchor || ''));
+  return m ? Number(m[1]) : 0;
+}
+// 章节行的「第几节」可改可清：清空 = 退回纯大纲。
+// 用 change 而不是 input 触发：输入过程中的中间值不该一次次落库。
+async function setChapterAnchor(c: ChapterRow, ev: Event): Promise<void> {
+  const el = ev.target as HTMLInputElement;
+  const n = Number((el.value || '').trim());
+  const anchor = Number.isFinite(n) && n > 0 ? 'ch-' + Math.trunc(n) : '';
+  if ((c.anchor || '') === anchor) return;
+  await callDomain<unknown>('reading.updateChapter', null, c.id, { anchor });
+  await reload();
+  say(anchor ? '「' + c.title + '」已锚到第 ' + chapterSeqOf(anchor) + ' 节，阅读窗左栏「我的大纲」里能一跳到位' : '「' + c.title + '」不再锚定书内位置');
 }
 
 async function removeChapter(id: string): Promise<void> {
@@ -885,12 +1020,13 @@ async function saveFlash(): Promise<void> {
     page: 0, tags: ['闪念'], chapterId: ''
   };
   await callDomain<unknown>('reading.addNote', null, patch);
-  // 即时想法：一键同时进数据库与九格，不要求用户再点一次「→ 九格」
-  const line = await callDomain<string>('reading.diaryLine', '', Object.assign({}, patch, { tags: ['闪念'] }));
-  const cell = await appendLine(flashCell.value, line || text);
-  flash.value = '';
+  // 先落库拿到真实 id，再生成回写行：行尾的〔rd:id〕必须指向真笔记，
+  // 否则「从日记点回原句」这条反查就断在第一步（P0-3）。
   const q = await callDomain<NotesResult | null>('reading.notes', null, { keyword: text });
   const hit = q?.items?.find((n) => n.text === text && !n.pushedAt);
+  const line = await callDomain<string>('reading.diaryLine', '', hit || Object.assign({}, patch, { tags: ['闪念'] }));
+  const cell = await appendLine(flashCell.value, line || text);
+  flash.value = '';
   if (hit) await callDomain<unknown>('reading.markPushed', null, hit.id, cell, Date.now());
   await reload();
   say('闪念已进读书笔记，并写进九格「' + (CELL_LABEL[cell] || cell) + '」');
@@ -899,6 +1035,20 @@ async function saveFlash(): Promise<void> {
 async function removeNote(id: string): Promise<void> {
   await callDomain<unknown>('reading.removeNote', null, id);
   await reload();
+}
+
+// P1-3：阅读里的「行动」要能落地。
+// 打了 #行动 的笔记原先只在学习右栏显示一下，没有任务、没有提醒、没有下落；
+// 这里照「闪念 → 收件箱」那条既有幂等链路（fl: 前缀）换成 rd: 前缀，
+// 重复点不叠加，删笔记时主进程连带清掉未完成的那条。
+async function pushActionNote(n: NoteRow): Promise<void> {
+  const r = await callDomain<{ ok: boolean; duplicated?: boolean; reason?: string } | null>(
+    'reading.pushAction', null, n.id);
+  if (!r || !r.ok) { say((r && r.reason) || '没能生成任务'); return; }
+  say(r.duplicated ? '这条已经生成过任务了（不会重复加）' : '已放进「工作推进」的收件箱，等厘清');
+}
+function isActionNote(n: NoteRow): boolean {
+  return (n.tags || []).indexOf('行动') >= 0;
 }
 
 async function importQuotes(): Promise<void> {
@@ -918,10 +1068,15 @@ function pickTag(t: string): void { fTag.value = fTag.value === t ? '' : t; void
 // 弹窗打开时焦点可能还在背后的书架按钮上（没点进输入框），这时 keydown 的
 // 目标是 body，事件不会经过弹窗节点，节点上的 @keydown.esc 收不到。
 function onEscClose(ev: KeyboardEvent): void {
-  if (ev.key !== 'Escape' || !editing.value) return;
-  ev.preventDefault();
-  ev.stopPropagation();
-  editing.value = null;
+  if (ev.key !== 'Escape') return;
+  // 先关最上面那层：编辑弹窗盖在体检报告之上，Esc 不该一次把两层都收掉
+  if (editing.value) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    editing.value = null;
+    return;
+  }
+  if (auditOpen.value) auditOpen.value = false;
 }
 
 onMounted(() => {
@@ -985,7 +1140,61 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
           {{ shelfBooks.length }} / {{ books.length }} 本<template v-if="canDrag && !embedded"> · 拖书行可调整顺序</template><template v-else-if="sortMode === 'recent' && !embedded"> · 按翻开时间倒序</template>
         </span>
       </template>
+      <!-- P0-4：书库体检放在页签行常驻，任何一栏都能点（断链不只发生在书架上） -->
+      <button class="rd-mini rd-audit-btn" :aria-pressed="auditOpen" title="查断链 / 指纹重复 / 同名异路径 / 找不到的文件" @click="openAudit">书库体检</button>
     </nav>
+
+    <!-- 体检报告：先摆事实，再决定动不动数据。修复可撤销，撤销凭据只在本次会话内。 -->
+    <section v-if="auditOpen" class="rd-audit" aria-label="书库体检">
+      <header class="rd-audit-head">
+        <h2 class="rd-h3">书库体检</h2>
+        <span class="rd-hint">只报告，不自动改数据</span>
+        <span class="rd-spacer"></span>
+        <button class="rd-mini" :disabled="auditBusy" @click="openAudit">{{ auditBusy ? '正在查…' : '重新查' }}</button>
+        <button class="rd-mini" :disabled="auditBusy || !(auditReport && (auditReport.counts.danglingNotes || auditReport.counts.danglingBooks))" title="只清掉指向不存在的那个字段，不删书也不删笔记" @click="repairDangling">修复断链</button>
+        <button v-if="repairUndo.length" class="rd-mini" @click="undoRepair">撤销上次修复（{{ repairUndo.length }}）</button>
+        <button class="rd-mini rd-mini-quiet" @click="auditOpen = false">收起</button>
+      </header>
+      <p v-if="auditBusy && !auditReport" class="rd-hint">正在核对五张表…</p>
+      <template v-else-if="auditReport">
+        <div class="rd-audit-grid">
+          <div class="rd-audit-kpi"><span>断链笔记</span><b>{{ auditReport.counts.danglingNotes }}</b></div>
+          <div class="rd-audit-kpi"><span>断链章节 / 书签</span><b>{{ auditReport.counts.danglingChapters + auditReport.counts.danglingBookmarks }}</b></div>
+          <div class="rd-audit-kpi"><span>找不到的文件</span><b>{{ auditReport.counts.missingFiles }}</b></div>
+          <div class="rd-audit-kpi"><span>指纹重复</span><b>{{ auditReport.counts.dupFingerprints }}</b></div>
+          <div class="rd-audit-kpi"><span>同名异路径</span><b>{{ auditReport.counts.dupTitles }}</b></div>
+          <div class="rd-audit-kpi"><span>还没有指纹</span><b>{{ auditReport.counts.booksNoFingerprint }}</b></div>
+        </div>
+        <p v-if="!auditReport.counts.danglingNotes && !auditReport.counts.danglingBooks && !auditReport.counts.danglingChapters && !auditReport.counts.danglingBookmarks && !auditReport.counts.missingFiles && !auditReport.counts.dupFingerprints && !auditReport.counts.dupTitles" class="rd-hint">
+          五项全清：没有断链、没有重复、没有找不到的文件。
+        </p>
+        <div v-if="auditReport.dangling.notes.length" class="rd-audit-list">
+          <h3 class="rd-h3">断链笔记（{{ auditReport.counts.danglingNotes }}）</h3>
+          <p v-for="n in auditReport.dangling.notes.slice(0, 6)" :key="n.id" class="rd-note-line">
+            《{{ n.bookTitle || '未记书名' }}》<span class="rd-hint">{{ n.bookId || n.themeId }}</span>
+          </p>
+        </div>
+        <div v-if="auditReport.missingFiles.length" class="rd-audit-list">
+          <h3 class="rd-h3">找不到的文件（{{ auditReport.counts.missingFiles }}）</h3>
+          <p v-for="m in auditReport.missingFiles.slice(0, 5)" :key="m.id" class="rd-note-line">
+            《{{ m.title }}》<span class="rd-hint">{{ m.filePath }}</span>
+          </p>
+          <p class="rd-hint">书架上那几本带「原件不在」标记的，用行尾的「重新关联」指到新位置即可，笔记不会丢。</p>
+        </div>
+        <div v-if="auditReport.dupFingerprints.length" class="rd-audit-list">
+          <h3 class="rd-h3">指纹重复（{{ auditReport.counts.dupFingerprints }}）</h3>
+          <p v-for="d in auditReport.dupFingerprints.slice(0, 3)" :key="d.fingerprint" class="rd-note-line">
+            {{ d.books.map((b) => '《' + b.title + '》').join(' / ') }}<span class="rd-hint">同一份文件被登记了两次</span>
+          </p>
+        </div>
+        <div v-if="auditReport.dupTitles.length" class="rd-audit-list">
+          <h3 class="rd-h3">同名异路径（{{ auditReport.counts.dupTitles }}）</h3>
+          <p v-for="d in auditReport.dupTitles.slice(0, 3)" :key="d.title" class="rd-note-line">
+            《{{ d.title }}》<span class="rd-hint">{{ d.books.length }} 条记录</span>
+          </p>
+        </div>
+      </template>
+    </section>
 
     <!-- ============ 休闲娱乐阅读 ============ -->
     <div v-if="tab === 'shelf'" class="rd-pane">
@@ -1019,6 +1228,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
 
       <!-- V3.5 分组 / 收藏夹：只是筛选视图，不是另一份书单；分组名就写在书自己身上 -->
       <div class="rd-groups" aria-label="书架分组">
+        <!-- P2-1：虚拟书架筛选生效时先说清楚「现在只显示这一摞」，
+             否则用户会以为书丢了。取消按钮回到全部。 -->
+        <span v-if="shelfFilter" class="rd-gchip rd-gchip-on rd-shelfchip" :aria-pressed="true">
+          虚拟书架 · {{ shelfLabel }}
+          <button class="rd-shelfchip-x" aria-label="取消虚拟书架筛选" @click="clearShelfFilter">×</button>
+        </span>
         <button class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_ALL }" :aria-pressed="groupFilter === GROUP_ALL" @click="setGroupFilter(GROUP_ALL)">全部 {{ books.length }}</button>
         <button class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_FAV }" :aria-pressed="groupFilter === GROUP_FAV" @click="setGroupFilter(GROUP_FAV)">★ 收藏夹 {{ favoriteCount }}</button>
         <button v-if="ungroupedCount" class="rd-gchip" :class="{ 'rd-gchip-on': groupFilter === GROUP_NONE }" :aria-pressed="groupFilter === GROUP_NONE" title="没有归到任何分组的书（左栏同一项）" @click="setGroupFilter(GROUP_NONE)">未分组 {{ ungroupedCount }}</button>
@@ -1101,6 +1316,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
             <button class="rd-mini rd-fav" :class="{ 'rd-fav-on': b.favorite }" :aria-pressed="!!b.favorite" :title="b.favorite ? '移出收藏夹' : '收进收藏夹'" @click="toggleFavorite(b)">{{ b.favorite ? '★' : '☆' }}</button>
             <button class="rd-mini" title="记 10 个单位的进度" @click="advanceLeisure(b.id, 10)">＋</button>
             <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在中栏记笔记'" @click="startBook(b)">翻开读</button>
+            <!-- P0-2：文件被移走 / 改名时，这里换路径而不是「移出再添加」——后者会造出新 id，笔记全丢 -->
+            <button
+              v-if="b.fileMissing" class="rd-mini rd-mini-warn"
+              :title="'原文件不在 ' + b.filePath + '：选它的新位置，书的 id 不变，' + b.noteCount + ' 条笔记与书签都跟着回来'"
+              :disabled="relinking === b.id" @click.stop="relinkBook(b)"
+            >重新关联</button>
             <button class="rd-mini" title="改书名 / 作者 / 封面，或标记读完、再读一遍" @click="openEdit(b)">编辑</button>
             <button class="rd-mini rd-mini-quiet" title="移出书架（笔记保留）" @click="removeBook(b.id)">✕</button>
           </span>
@@ -1165,12 +1386,23 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
             <div class="rd-chapters">
               <p v-for="c in activeChapters" :key="c.id" class="rd-chapter" :class="{ 'rd-chapter-sub': !!c.parentId }">
                 {{ c.parentId ? '↳ ' : '· ' }}{{ c.title }}
+                <!-- P2-3：这一章对应书里的第几节。填了就能在阅读窗左栏「我的大纲」里一跳到位；
+                     留空就是纯大纲，不假装知道它在书里的位置。 -->
+                <input
+                  class="rd-cseq" type="text" inputmode="numeric" maxlength="4"
+                  :value="c.anchor ? String(chapterSeqOf(c.anchor)) : ''"
+                  :aria-label="'《' + c.title + '》对应书内第几节'"
+                  title="对应书内第几节（可空）"
+                  placeholder="节"
+                  @change="setChapterAnchor(c, $event)"
+                />
                 <button class="rd-x" :aria-label="'删除章节 ' + c.title" @click="removeChapter(c.id)">×</button>
               </p>
               <p v-if="!activeChapters.length" class="rd-hint">还没分章。读到哪儿顺手记一个章节名即可。</p>
             </div>
             <div class="rd-inline-add">
               <input v-model="newChapter" class="rd-input" placeholder="加一个章节" aria-label="新章节名" @keyup.enter="addChapter" />
+              <input v-model="newChapterSeq" class="rd-cseq rd-cseq-new" type="text" inputmode="numeric" maxlength="4" placeholder="第几节" aria-label="这一章对应书内第几节（可空）" />
               <button class="rd-mini" @click="addChapter">＋</button>
             </div>
           </div>
@@ -1272,6 +1504,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
               <button class="rd-mini" @click="rereadFromEdit">再读一遍</button>
               <button class="rd-mini rd-mini-quiet" @click="exportFromEdit">导出这本的笔记</button>
               <button v-if="editing.filePath" class="rd-mini rd-mini-quiet" @click="revealFromEdit">在文件夹里定位</button>
+              <!-- P0-2：换位置而不换身份。这一步点完，笔记 / 章节 / 书签 / 按书筛选全部照旧 -->
+              <button
+                v-if="editing.filePath" class="rd-mini rd-mini-quiet"
+                :disabled="relinking === editing.id"
+                @click="relinkBook(editing)"
+              >文件换了位置？重新关联</button>
             </div>
             <div class="rd-acts-main">
               <button class="rd-mini rd-mini-quiet" @click="editing = null">取消</button>
@@ -1372,6 +1610,11 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
             <span class="rd-td rd-td-act" @dblclick.stop>
               <button class="rd-mini" :title="'记 10 个' + b.unit + '的进度'" @click="advanceTheme(g.themeId, b.id, 10)">＋</button>
               <button class="rd-mini" :title="b.filePath ? '在独立阅读窗口打开：目录 / 正文 / 笔记三栏' : '手工登记的书，在右栏记笔记'" @click="startThemeBook(b)">翻开读</button>
+              <button
+                v-if="b.fileMissing" class="rd-mini rd-mini-warn"
+                :title="'原文件不在 ' + b.filePath + '：选它的新位置，书的 id 不变，笔记与书签都跟着回来'"
+                :disabled="relinking === b.id" @click.stop="relinkBook(b)"
+              >重新关联</button>
               <button class="rd-mini" title="改书名 / 作者 / 封面，或标记读完、再读一遍（与休闲阅读同一套）" @click="openEdit(b)">编辑</button>
               <button class="rd-mini rd-mini-quiet" title="移出书库（笔记保留）" @click="removeBook(b.id)">✕</button>
             </span>
@@ -1389,12 +1632,21 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
               <div class="rd-chapters">
                 <p v-for="c in activeChapters" :key="c.id" class="rd-chapter" :class="{ 'rd-chapter-sub': !!c.parentId }">
                   {{ c.parentId ? '↳ ' : '· ' }}{{ c.title }}
+                  <input
+                    class="rd-cseq" type="text" inputmode="numeric" maxlength="4"
+                    :value="c.anchor ? String(chapterSeqOf(c.anchor)) : ''"
+                    :aria-label="'《' + c.title + '》对应书内第几节'"
+                    title="对应书内第几节（可空）"
+                    placeholder="节"
+                    @change="setChapterAnchor(c, $event)"
+                  />
                   <button class="rd-x" :aria-label="'删除章节 ' + c.title" @click="removeChapter(c.id)">×</button>
                 </p>
                 <p v-if="!activeChapters.length" class="rd-hint">还没分章。读到哪儿顺手记一个章节名即可。</p>
               </div>
               <div class="rd-inline-add">
                 <input v-model="newChapter" class="rd-input" placeholder="加一个章节" aria-label="新章节名" @keyup.enter="addChapter" />
+                <input v-model="newChapterSeq" class="rd-cseq rd-cseq-new" type="text" inputmode="numeric" maxlength="4" placeholder="第几节" aria-label="这一章对应书内第几节（可空）" />
                 <button class="rd-mini" @click="addChapter">＋</button>
               </div>
             </div>
@@ -1475,6 +1727,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
         <div class="rd-note-foot">
           <span class="rd-hint">{{ n.tags.map(t => '#' + t).join(' ') }}</span>
           <span class="rd-spacer"></span>
+          <!-- P1-3：打了 #行动 的笔记要有下落。按 source 幂等，重复点不会叠出两条。 -->
+          <button v-if="isActionNote(n)" class="rd-mini" title="这条打了 #行动：放进「工作推进」的收件箱，等厘清" @click="pushActionNote(n)">→ 收件箱</button>
           <button v-if="!n.pushedAt" class="rd-mini" @click="pushNote(n)">→ 九格</button>
           <span v-else class="rd-pushed">已入九格 · {{ fmtDate(n.pushedAt) }}</span>
           <button class="rd-mini rd-mini-quiet" :aria-label="'删除笔记'" @click="removeNote(n.id)">删除</button>
@@ -1516,6 +1770,27 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
 .rd-mini { padding: 4px 9px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border); border-radius: var(--radius-md); background: var(--surface-panel); color: var(--surface-text); cursor: pointer; white-space: nowrap; }
 .rd-mini:hover { border-color: var(--palette-border); }
 .rd-mini-quiet { color: var(--surface-muted); }
+/* 「原件不在 / 该怎么修」这类按钮要点出来：它是用户此刻最该点的那个 */
+.rd-mini-warn { border-color: var(--palette-border); color: var(--palette-primary); }
+
+/* ---- P0-4 书库体检：一格一个数，展开才看明细 ---- */
+.rd-audit-btn { margin-left: auto; flex: 0 0 auto; }
+.rd-audit {
+  margin: 0 0 var(--space-2); padding: var(--space-2) var(--space-3);
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-lg);
+  background: var(--surface-panel);
+}
+.rd-audit-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rd-audit-head h2 { margin: 0; }
+.rd-audit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 6px; margin-top: 8px; }
+.rd-audit-kpi {
+  background: var(--surface-raised); border: 0.5px solid var(--surface-border);
+  border-radius: var(--radius-md); padding: 6px 8px;
+}
+.rd-audit-kpi span { display: block; font-size: var(--text-xs); color: var(--surface-muted); }
+.rd-audit-kpi b { display: block; font-size: var(--text-h2); font-weight: 500; line-height: 1.4; }
+.rd-audit-list { margin-top: var(--space-2); }
+.rd-audit-list h3 { margin: 0 0 2px; }
 .rd-empty, .rd-notice { font-size: var(--text-sm); color: var(--surface-muted); padding: 12px; border: 0.5px dashed var(--surface-border); border-radius: var(--radius-md); line-height: 1.7; }
 .rd-notice { display: flex; align-items: center; gap: 10px; justify-content: space-between; border-style: solid; background: var(--palette-soft); }
 .rd-shelf { display: flex; flex-direction: column; gap: 8px; }
@@ -1585,6 +1860,13 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
 .rd-chapters { min-height: 60px; max-height: 170px; overflow: auto; }
 .rd-chapter { font-size: var(--text-sm); margin: 0 0 4px; color: var(--surface-text); }
 .rd-chapter-sub { padding-left: 12px; color: var(--surface-muted); }
+/* P2-3 章节锚点：一个只有四个字符宽的小格子，不喧宾夺主 */
+.rd-cseq {
+  width: 4.2em; margin-left: 4px; padding: 1px 3px; font-size: var(--text-xs);
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-bg); color: var(--surface-text); text-align: center;
+}
+.rd-cseq-new { width: 6em; margin-left: 0; }
 .rd-x { border: 0; background: transparent; color: var(--surface-muted); cursor: pointer; }
 .rd-prompts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
 .rd-prompt { padding: 4px 9px; font-size: var(--text-xs); border: 0.5px solid var(--surface-border); border-radius: 999px; background: var(--surface-raised); color: var(--surface-text); cursor: pointer; }
@@ -1696,6 +1978,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onEscClose); });
 .rd-gchip-on { background: var(--palette-primary); border-color: var(--palette-primary); color: #fff; }
 .rd-gcount { font-size: var(--text-xs); opacity: .72; }
 .rd-gchip-on .rd-gcount { color: #fff; opacity: .85; }
+/* P2-1 虚拟书架：筛选态本身也是一枚 chip，带一个取消按钮 */
+.rd-shelfchip { gap: 4px; padding-right: 4px; }
+.rd-shelfchip-x {
+  border: 0; background: transparent; color: #fff; cursor: pointer;
+  font-size: var(--text-xs); line-height: 1; padding: 0 3px; opacity: .85;
+}
 .rd-gnew { flex: 0 1 150px; min-width: 96px; }
 .rd-gsel { min-width: 0; }
 .rd-fav { min-width: 26px; color: var(--surface-muted); }

@@ -40,9 +40,12 @@ const years = computed(() => {
 
 // 自由记录撤掉一级导航后，它的完整页只剩九格目录这一条入口（openCell('free') → view 'free'）。
 // 那时没有 cellKey，得让「自由」这一行自己亮，否则进了页面左栏一处高亮都没有。
+// 关系经营同理：2026-11-16 从「时间轴」二级目录并回九格，进去时高亮的是九格这一行。
 function modOn(key: string): boolean {
   if (props.active === 'cell') return props.cellKey === key;
-  return props.active === 'free' && key === 'free';
+  if (props.active === 'free' && key === 'free') return true;
+  if (props.active === 'family' && key === 'emotion') return true;
+  return props.active === 'relation' && key === 'relation';
 }
 </script>
 
@@ -88,12 +91,6 @@ function modOn(key: string): boolean {
             :aria-current="active === 'connect' ? 'page' : undefined"
             @click="emit('navigate', 'connect')"
           >└ 内容连接</button>
-          <button
-            class="nav-sub-item nav-relation"
-            :class="{ 'sub-on': active === 'relation' }"
-            :aria-current="active === 'relation' ? 'page' : undefined"
-            @click="emit('navigate', 'relation')"
-          >└ 关系经营</button>
           <button
             class="nav-sub-item nav-long"
             :class="{ 'sub-on': active === 'long' }"
@@ -171,7 +168,7 @@ function modOn(key: string): boolean {
 .nav-list {
   display: flex;
   flex-direction: column;
-  /* T13：一级 7 项 + 九格 9 项 + 时间轴 4 项 + 数据中心 2 项 + 设置，
+  /* T13：一级 7 项 + 九格 9 项 + 时间轴 3 项 + 数据中心 2 项 + 设置，
      23 个按钮在 1440×900 下原本 654px 内容 / 609px 可视（1.07 倍），
      设置虽已 sticky 但整块仍要滚一下。收紧行距与一级按钮上下留白即可
      省下约 76px，把 vRatio 压到 1.0 以内；不动字号也不动命中区高度。 */

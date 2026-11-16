@@ -33,6 +33,11 @@ interface DreamTrail {
 interface NowRead {
   id: string; title: string; pct: number; progressText: string; status: string; lastReadAt: number;
 }
+// P1-4 阅读再曝光：最近一周留下的摘录 + 30 天没碰的在读书。
+// 借用 Readwise 的 Daily Review 思路——不靠用户想起书，让书自己回来找你。
+interface SurfNote { id: string; bookId: string; bookTitle: string; quote: string; text: string; createdAt: number }
+interface SurfStale { id: string; title: string; pct: number; progressText: string; days: number }
+interface Resurface { recent: SurfNote[]; recentCount: number; readingCount: number; stale: SurfStale[]; staleCount: number }
 
 const past = ref<PastRow[]>([]);
 const pastLoading = ref(true);
@@ -200,6 +205,8 @@ const trailLoading = ref(true);
 const weekDone = ref(0);
 const leafNext = ref(0);
 const nowRead = ref<NowRead | null>(null);
+// P1-4：再曝光数据（服务端/主进程派生，这里只摆）
+const surf = ref<Resurface | null>(null);
 
 const allGoals = computed<GoalRow[]>(function () {
   const rows = (trail.value && trail.value.rows) || [];
@@ -234,12 +241,14 @@ async function loadTrail(): Promise<void> {
   trailLoading.value = true;
   try {
     const today = localDate();
-    const [db, gb, rb] = await Promise.all([
+    const [db, gb, rb, sf] = await Promise.all([
       callDomain<DreamTrail | null>('dream.board', null, today),
       callDomain<{ stats?: { doneThisWeek?: number; leafNext?: number } } | null>('gtd.board', null, today),
-      callDomain<{ books?: NowRead[] } | null>('reading.board', null)
+      callDomain<{ books?: NowRead[] } | null>('reading.board', null),
+      callDomain<Resurface | null>('reading.resurface', null, Date.now())
     ]);
     trail.value = db;
+    surf.value = sf;
     const st = (gb && gb.stats) || {};
     weekDone.value = Number(st.doneThisWeek) || 0;
     leafNext.value = Number(st.leafNext) || 0;
@@ -339,6 +348,36 @@ watch(function () { return props.tick; }, function () { void loadSoon(); void lo
     </div>
   </section>
 
+  <!-- P1-4 阅读再曝光：把「读过的」摆回今天眼前。
+       两条通道：最近留下的摘录（再读一遍那句话）、搁太久没翻的在读书（提醒回去）。
+       零写操作、零估算——没有数据就直说没有，不摆 0 充数。 -->
+  <section class="ctx-card tc-surf" aria-label="阅读再曝光">
+    <h2 class="ctx-title">
+      读过的
+      <span v-if="surf && surf.recentCount" class="ctx-tag">近 7 天 {{ surf.recentCount }} 条</span>
+      <span v-else-if="surf && surf.staleCount" class="ctx-tag ctx-tag-warn">{{ surf.staleCount }} 本搁着</span>
+    </h2>
+    <button
+      v-for="n in (surf ? surf.recent.slice(0, 2) : [])" :key="n.id"
+      class="tc-surf-row" :aria-label="'去图书馆看《' + n.bookTitle + '》的这条摘录'"
+      @click="emit('navigate', 'reading')"
+    >
+      <span class="tc-surf-main">{{ n.quote || n.text }}</span>
+      <span class="tc-surf-side">《{{ n.bookTitle }}》</span>
+    </button>
+    <button
+      v-for="b in (surf ? surf.stale.slice(0, 2) : [])" :key="'stale-' + b.id"
+      class="tc-surf-row tc-surf-stale" :aria-label="'《' + b.title + '》' + (b.days < 0 ? '还没翻开过' : b.days + ' 天没读了')"
+      @click="emit('navigate', 'reading')"
+    >
+      <span class="tc-surf-main">《{{ b.title }}》</span>
+      <span class="tc-surf-side">{{ b.days < 0 ? '还没翻开过' : b.days + ' 天没读' }} · {{ b.pct }}%</span>
+    </button>
+    <p v-if="surf && !surf.recentCount && !surf.staleCount" class="ctx-muted">
+      最近没有新摘录，也没有搁太久的在读。翻开一本，这里就会有东西。
+    </p>
+  </section>
+
   <section class="ctx-card ctx-soon-card">
     <h2 class="ctx-title">
       未来 7 天
@@ -419,6 +458,22 @@ watch(function () { return props.tick; }, function () { void loadSoon(); void lo
   color: var(--surface-muted);
 }
 .tc-week { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+
+/* P1-4 阅读再曝光：一行「一句话 + 出处」，两行封顶，300px 里不塌 */
+.tc-surf-row {
+  display: block; width: 100%; box-sizing: border-box;
+  margin-top: 6px; padding: 5px 8px; text-align: left; cursor: pointer;
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-raised); color: var(--surface-text);
+}
+.tc-surf-row:hover { border-color: var(--palette-border); background: var(--palette-soft); }
+.tc-surf-main {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: var(--text-sm); line-height: 1.55;
+  border-left: 2px solid var(--palette-border); padding-left: 6px;
+}
+.tc-surf-side { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--surface-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-surf-stale .tc-surf-main { border-left-color: transparent; padding-left: 0; font-weight: 500; }
 .tc-week-cell {
   display: block; padding: 5px 8px; text-align: left; cursor: pointer;
   border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);

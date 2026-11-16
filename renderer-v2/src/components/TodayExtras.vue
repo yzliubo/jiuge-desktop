@@ -7,10 +7,12 @@ import { callDomain } from '../composables/useDomain';
 import { useWeather } from '../composables/useWeather';
 import { GRID_KEYS, GRID_LABELS, localDate, type DiaryBase, type DiaryRecord } from '../types';
 
-const props = defineProps<{ record: DiaryRecord; flat?: boolean }>();
+const props = defineProps<{ record: DiaryRecord; flat?: boolean; tick?: number }>();
 const emit = defineEmits<{
   (e: 'save', record: DiaryRecord): void;
   (e: 'notify', text: string): void;
+  // 「一键留一句」只写 md_freewrite，不改日记正文 → save 不会来，得单独报一声让外壳刷九格摘要
+  (e: 'changed'): void;
 }>();
 
 // 与 diary-store.js BASE_FIELDS 逐字一致：落盘是中文字符串，不是数字下标
@@ -60,7 +62,26 @@ const previousText = ref('往年今天还没有记录');
 const prompts = ref<Record<string, string>>({});
 const quickLine = ref('');
 
-const filled = computed(() => GRID_KEYS.filter((k) => !!props.record.cells[k]).length);
+// 第 9 格算不算写过：以三合一里的当天内容为准（和九格那边同一口径），
+// 否则右栏说「已填 8 / 9」、九格说「9 / 9」，同一个数字两处不一样最招人怀疑。
+const freeCount = ref(0);
+async function loadFree(): Promise<void> {
+  const day = props.record.date || localDate();
+  const d = await callDomain<{ counts?: { flash: number; doc: number; capsule: number } } | null>(
+    'free.day', null, day);
+  const c = (d && d.counts) || { flash: 0, doc: 0, capsule: 0 };
+  freeCount.value = c.flash + c.doc + c.capsule;
+}
+onMounted(function () { void loadFree(); });
+watch(() => props.record.date, function () { void loadFree(); });
+watch(() => props.tick, function () { void loadFree(); });
+
+const filled = computed(function () {
+  const n = GRID_KEYS.filter((k) => !!props.record.cells[k]).length;
+  // cells.free 有值时第 9 格已经算进 n 了；只有「正文是空的、三合一里有内容」才补这一格
+  if (props.record.cells.free) return n;
+  return freeCount.value > 0 ? n + 1 : n;
+});
 const baseSet = computed(() => !!(base.value.weather || base.value.body || base.value.mood || base.value.anniversary));
 
 function persist(patch: Partial<DiaryRecord>): void {
@@ -87,14 +108,20 @@ function saveAll(): void {
   emit('notify', '今日记录已保存');
 }
 
-function addQuickLine(): void {
+// 「一键留一句」：2026-11-16 起落自由记录（md_freewrite），不再写 cells.free。
+// 一句当日记号不该顺带生成收件箱任务，所以走 noteAdd（只留原文）。
+async function addQuickLine(): Promise<void> {
   const text = quickLine.value.trim();
   if (!text) return;
-  const cells = Object.assign({}, props.record.cells);
-  cells.free = (cells.free || '') + (cells.free ? '\n' : '') + text;
-  persist({ cells });
+  const res = await callDomain<{ item?: unknown } | null>('free.noteAdd', null, text, props.record.date);
+  if (!res || !res.item) {
+    emit('notify', '没存成，文本还在，再点一次');
+    return;
+  }
   quickLine.value = '';
-  emit('notify', '已记下 · 这也算一篇');
+  await loadFree();
+  emit('changed');
+  emit('notify', '已记进自由记录 · 这也算一篇');
 }
 
 async function endFirstWeek(): Promise<void> {

@@ -215,6 +215,15 @@ check('数据中心唯一入口：其它视图不得直接发起导入/导出备
       if (text.indexOf('finance.exportCsv') < 0) return true;
       return (text.match(/saveExport\s*\(/g) || []).length !== 1;
     }
+    // P2-2 语义扩展（同 V1.3 / V2.3 先例）：图书馆导出的是「书目清单」
+    // ——CSV / JSON / OPDS，只含元数据与路径，没有正文，也不是备份/迁移。
+    // 仍然只走同一个 v1/file:save。条件：只许一次调用、必须点名 reading.exportList、
+    // 不得夹带备份 / 迁移 / 图片能力。
+    if (base === 'LibraryWindow.vue') {
+      if (/importBackup|exportBackup|exportText|exportMarkdown|createMigrator|toDataURL/.test(text)) return true;
+      if (text.indexOf('reading.exportList') < 0) return true;
+      return (text.match(/saveExport\s*\(/g) || []).length !== 1;
+    }
     return forbidden.test(text);
   });
   assert(offenders.length === 0, '存在第二入口: ' + offenders.map(function (f) { return path.basename(f); }).join(', '));
@@ -294,18 +303,38 @@ check('九格一律四字名，且数据键一个不动', function () {
   const types = read('renderer-v2/src/types.ts');
   const want = {
     work: '工作推进', money: '金钱收支', health: '身心健康', relation: '关系经营',
-    future: '今日六条', emotion: '情绪觉察', dream: '休闲娱乐', growth: '学习成长', free: '自由记录'
+    future: '今日六条', emotion: '家庭亲子', dream: '休闲娱乐', growth: '学习成长', free: '自由记录'
   };
   Object.keys(want).forEach(function (k) {
     assert(new RegExp(k + ": '" + want[k] + "'").test(types), '九格名不是四字或缺失：' + k + ' 应为 ' + want[k]);
   });
+  // 2026-11-16：第 6 格整格换成「家庭亲子」（原「情绪觉察」）。
+  // 数据键仍是 emotion：历史 cells.emotion 正文、导出、检索、备份一个字节都不动。
+  assert(/emotion: '家庭亲子'/.test(types), '第 6 格显示名不是「家庭亲子」');
   // 键顺序仍是「九格」原顺序（改标签不许动数据契约）
   assert(/'work', 'money', 'health', 'relation', 'future',/.test(types), 'GRID_KEYS 键顺序被改动');
   // 2026-11-13 整改（T6/Q6）：渲染层第 7 键 leisure 与冻结领域层 dream 不一致，
   // 曾导致「休闲娱乐」格写进去的内容被 save() 静默丢弃。键回归 dream，只换显示名。
   assert(/'emotion', 'dream', 'growth', 'free'/.test(types), 'GRID_KEYS 第 7 键没回归 dream');
-  assert(!/'leisure'/.test(types), '渲染层又出现 leisure 键（会再次静默丢字）');
+  // leisure 现在是「休闲娱乐专属页」的 ViewKey，不是九格数据键；只在 GRID_KEYS 块里禁它。
+  const gridBlock = (types.match(/export const GRID_KEYS[\s\S]*?\] as const/) || [''])[0];
+  assert(!/'leisure'/.test(gridBlock), '九格数据键里又出现 leisure（会再次静默丢字）');
   assert(/dream: '休闲娱乐'/.test(types), 'dream 键的显示名不是「休闲娱乐」');
+});
+
+check('家庭亲子：界面文案与引导语不再残留「情绪觉察」', function () {
+  const settings = read('renderer-v2/src/components/SettingsView.vue');
+  const locales = read('renderer-v2/src/i18n/locales.json');
+  const dict = read('renderer-v2/src/i18n/dict.json');
+  const prompts = read('renderer-v2/src/composables/promptLibrary.ts');
+  const ui = read('renderer-v2/src/views/FamilyView.vue') + read('renderer-v2/src/components/context/FamilyContext.vue');
+  assert(/id: 'emotion', name: '家庭亲子'/.test(settings), '设置页模板仍挂旧名「情绪觉察」');
+  assert(!/情绪觉察/.test(locales) && !/情绪觉察/.test(dict), '多语言词典仍有旧名「情绪觉察」');
+  assert(/成长足迹/.test(ui) && /亲子时刻/.test(ui) && /本周陪伴/.test(ui), '家庭亲子三块/右栏文案缺失');
+  // 引导语：第 6 格不随模板变，旧 emotion 模板的情绪问法不许再喂给家庭亲子
+  assert(/if \(key === 'emotion'\)[\s\S]{0,260}return FAMILY_PROMPTS\[i\]/.test(prompts),
+    'gridPrompt 没把第 6 格固定到家庭亲子题组');
+  assert(/if \(key === 'emotion'\) return FAMILY_PROMPTS\[0\]/.test(prompts), '兜底用语没换成亲子题');
 });
 
 check('职责单一：时间轴=日记 / 回顾=复盘 / 全局概览并入单格洞察下方', function () {
@@ -917,9 +946,19 @@ check('学习成长三块：考试 / 技能 / 阅读各自成表，进度不折�
   assert(/growth\.importLegacy/.test(view), '没有旧学习库导入入口');
 
   const ctx = read('renderer-v2/src/components/context/StudyContext.vue');
-  ['growth.addSubject', 'growth.toggleMilestone', 'growth.addQuote'].forEach(function (n) {
+  ['growth.addSubject', 'growth.toggleMilestone'].forEach(function (n) {
     assert(ctx.indexOf(n) >= 0, '右栏三套详情表单不齐：缺 ' + n);
   });
+  // P0-1（2026-11-16）：成长右栏不再写书单。
+  // 书单的唯一写入方是图书馆（md_reading.books），这里再多写一遍就是「第二份真相」。
+  // 旧条目仍只读展示，且必须给出去图书馆的入口与迁移欠账提示。
+  ['growth.addBook', 'growth.advanceBook', 'growth.setBookStatus', 'growth.removeBook',
+    'growth.addQuote', 'growth.removeQuote'].forEach(function (n) {
+    assert(ctx.indexOf(n) < 0, '学习右栏仍在写 md_growth 书单（应与图书馆单源）：' + n);
+  });
+  assert(ctx.indexOf("emit('navigate', 'reading')") >= 0,
+    '学习右栏没有「去图书馆维护书单」的出口');
+  assert(ctx.indexOf("'reading.growthAudit'") >= 0, '学习右栏没有接旧书单迁移核对（欠账看不见）');
 });
 
 check('今日六点：只存指针、只在可执行里挑、跨天不结转', function () {
@@ -1258,10 +1297,17 @@ check('V2 三个新视图接入主窗与左栏，且右栏文案跟着换', func
     assert(app.indexOf("view === '" + v + "'") >= 0, 'App 缺少 ' + v + ' 视图分支');
   });
   const nav = read('renderer-v2/src/components/NavSidebar.vue');
-  ['relation', 'connect', 'long'].forEach(function (v) {
+  ['connect', 'long'].forEach(function (v) {
     assert(nav.indexOf('nav-' + v) >= 0, '左栏缺少 nav-' + v);
     assert(nav.indexOf("emit('navigate', '" + v + "')") >= 0, '左栏 ' + v + ' 未发出 navigate');
   });
+  // 2026-11-16：关系经营从「时间轴」二级目录并回九格第 4 格。
+  // 左栏不许再有第二行同名入口；九格这一行点进去就是关系台，且要能高亮。
+  assert(nav.indexOf('nav-relation') < 0, '时间轴下还留着关系经营二级入口（与九格重复）');
+  assert(nav.indexOf('└ 关系经营') < 0, '时间轴下还画着「└ 关系经营」');
+  assert(/props\.active === 'relation' && key === 'relation'/.test(nav), '九格关系行没有接上关系台高亮');
+  assert(/if \(key === 'relation'\) \{ navigate\('relation'\); return; \}/.test(app),
+    '九格关系格未直通关系台（仍会落到通用单格页）');
   const panel = read('renderer-v2/src/components/ContextPanel.vue');
   ['relation:', 'connect:', 'long:'].forEach(function (k) {
     assert(panel.indexOf(k) >= 0, '右栏 HINTS 缺少 ' + k);
@@ -1829,8 +1875,11 @@ check('V3.6 学习成长右栏：在读书 / 主题学习状态 + 快捷访问',
   assert(ctx.indexOf("'growth.board'") >= 0 && ctx.indexOf("'reading.board'") >= 0,
     '右栏没同时读学习库与图书馆两份派生数据');
   assert(/Promise\.all\(\[/.test(ctx), '两份数据应并发取，别串成两次等');
-  assert(ctx.indexOf("b.status !== 'reading'") >= 0 && ctx.indexOf('seen[') >= 0,
-    '在读书没做状态过滤与跨源去重');
+  assert(ctx.indexOf("b.status !== 'reading'") >= 0, '在读书没做状态过滤');
+  // P0-1（2026-11-16）：书单已收敛到 md_reading.books 单一事实源，
+  // 视图层不再按书名做「双源补丁」式去重。这里反过来钉住：seen[ 必须已删掉。
+  assert(ctx.indexOf('seen[') < 0,
+    '学习右栏仍在视图层做跨源去重（双源补丁应已随 P0-1 删除）');
   assert(ctx.indexOf("'reading.readerOpen'") >= 0 && api.indexOf("'reading.readerOpen'") >= 0,
     '继续读没接独立阅读窗通道，或白名单漏登记');
   assert(ctx.indexOf("emit('navigate', 'reading')") >= 0, '缺「去图书馆」快捷入口');
@@ -2441,6 +2490,72 @@ check('自由记录：胶囊降顶栏 / 三 tab / 新键六处接线 / 闪念同
     '新键领域层缺 normalize / mergeSection');
   assert(board.indexOf('DOC_BODY_MAX = 20000') >= 0, '长文上限被改小或写死');
   assert(main.indexOf('gtd.addTask(s, {') >= 0, '主进程未做闪念 → 收件箱同步');
+
+  // 2026-11-16 打通：三合一是唯一写入口，九格第 9 格只显示当天摘要。
+  // 三处速记入口（顶栏速记 / 一键留一句 / 任务转发）全部改落 md_freewrite，
+  // 不再往 cells.free 拼一行——否则「格子里有、三合一里没有」的老毛病会换个方向再来一次。
+  assert(main.indexOf("'free.day'") >= 0, '主进程缺 free.day 当天摘要路由');
+  assert(main.indexOf("'free.noteAdd'") >= 0, '主进程缺 free.noteAdd（只留原文、不生成收件箱任务）');
+  assert(api.indexOf("'free.day'") >= 0 && api.indexOf("'free.noteAdd'") >= 0, '白名单缺 free.day / free.noteAdd');
+  const ge = read('renderer-v2/src/components/GridEditor.vue');
+  assert(ge.indexOf("'free.day'") >= 0 && ge.indexOf("'free.noteAdd'") >= 0, '九格第 9 格未接当天摘要 / 快记');
+  assert(ge.indexOf('cf-list') >= 0 && ge.indexOf('cf-add') >= 0 && ge.indexOf('cf-open') >= 0,
+    '九格自由格缺摘要 / 快记 / 打开入口三块结构');
+  assert(!/v-model="draft\.cells\['free'\]"/.test(ge), '九格自由格又变回独立正文（会出现两份事实源）');
+  assert(read('renderer-v2/src/App.vue').indexOf("'free.noteAdd'") >= 0, '速记未落自由记录（仍在写 cells.free）');
+  assert(read('renderer-v2/src/components/TodayExtras.vue').indexOf("'free.noteAdd'") >= 0, '一键留一句未落自由记录');
+  assert(read('renderer-v2/src/views/WorkView.vue').indexOf("'free.noteAdd'") >= 0, '任务转发未落自由记录');
+});
+
+check('家庭亲子：主栏记录窗 + 右栏登记三块 / md_family 六处接线 / 历史 cells.emotion 一个字节不动', function () {
+  const types = read('renderer-v2/src/types.ts');
+  const app = read('renderer-v2/src/App.vue');
+  const view = read('renderer-v2/src/views/FamilyView.vue');
+  const ctx = read('renderer-v2/src/components/context/FamilyContext.vue');
+  const panel = read('renderer-v2/src/components/ContextPanel.vue');
+  const nav = read('renderer-v2/src/components/NavSidebar.vue');
+  const board = read('src/family/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const yml = read('electron-builder-v2.yml');
+
+  assert(types.indexOf("'family'") >= 0, 'ViewKey 缺少 family');
+  assert(app.indexOf("import FamilyView from './views/FamilyView.vue'") >= 0, 'App 未接入 FamilyView');
+  assert(app.indexOf("view === 'family'") >= 0, 'App 缺少 family 视图分支');
+  assert(/if \(key === 'emotion'\) \{ navigate\('family'\); return; \}/.test(app),
+    '第 6 格未直通家庭亲子页（会落到通用单格页）');
+  assert(/props\.active === 'family' && key === 'emotion'/.test(nav), '家庭亲子进页后九格这一行没有选中态');
+
+  // 2026-11-16：成员登记整块移到右栏，主栏只留「今天 · 亲子时刻 / 成长足迹」+ 一段正文。
+  ['今天 · 亲子时刻', '成长足迹'].forEach(function (t) {
+    assert(view.indexOf(t) >= 0, '家庭亲子缺 tab：' + t);
+  });
+  assert(ctx.indexOf('家庭成员') >= 0, '右栏未接家庭成员登记块');
+  assert(view.indexOf('CellRecordEditor') >= 0 && view.indexOf('cell-key="emotion"') >= 0,
+    '主栏缺记录窗口（或没写回 cells.emotion）');
+  ['family.board', 'family.addMember', 'family.addMoment', 'family.addMilestone'].forEach(function (k) {
+    assert((view + ctx).indexOf(k) >= 0, '家庭亲子视图未接 ' + k);
+  });
+  assert(!/v-html|fetch\(|https?:\/\//.test(view), '家庭亲子视图出现越权 / 联网');
+  assert(panel.indexOf('FamilyContext') >= 0 && ctx.indexOf('family.board') >= 0, '右栏未接入家庭亲子上下文');
+  // 这一格仍是日记正文：历史情绪记录在 cells.emotion 里，视图不许绕开 save() 直写
+  assert(!/cells\.emotion\s*=/.test(view + app), '家庭亲子视图越权改写日记正文');
+
+  assert(main.indexOf("makeDomainStore('md_family', familyMod)") >= 0, '缺 md_family 单键');
+  assert(main.indexOf('obj.family = familyStore.read()') >= 0, '备份未注入 family 段');
+  assert(main.indexOf("['family', familyStore, familyMod]") >= 0, '备份导入未接 family 段');
+  ['family.meta', 'family.board', 'family.addMember', 'family.updateMember',
+    'family.removeMember', 'family.addMoment', 'family.removeMoment',
+    'family.addMilestone', 'family.removeMilestone'].forEach(function (k) {
+    assert(api.indexOf("'" + k + "'") >= 0, '白名单缺 ' + k);
+  });
+  assert(yml.indexOf('src/family/**/*') >= 0, '打包清单漏 family 领域层');
+  assert(board.indexOf('function normalize') >= 0 && board.indexOf('function mergeSection') >= 0,
+    'family 领域层缺 normalize / mergeSection');
+  assert(board.indexOf('function board') >= 0 && board.indexOf('function ageOf') >= 0,
+    'family 领域层缺派生 / 年龄');
+  // 删成员不删历史：归一化时不许按成员表过滤 memberIds
+  assert(board.indexOf('normMoment(m, null)') >= 0, '归一化仍在按成员表裁剪历史时刻的归属');
 });
 
 check('V3.8 今天页成长主线：三源只读派生 + 证据回流 + 成效侧指标口径', function () {
@@ -2680,6 +2795,200 @@ check('V3.17 PDF 可选中可搜索：透明文本层 / 划选摘录 / 命中标
   // ⑥ 顺手的两处：Ctrl+F 落到书内搜索；标注在页重画后还原
   assert(rd.indexOf("e.key === 'f' || e.key === 'F'") >= 0, 'Ctrl+F 没落到书内搜索');
   assert(rd.indexOf('if (isPdf) { paintPdfMarks(); return; }') >= 0, 'PDF 标注还原没接上文本层');
+});
+
+// ------------------------------------------------------------
+// P2（2026-11-16）：虚拟书架 / 书目清单 / 目录口径 / 书库根目录
+// ------------------------------------------------------------
+check('P2-1 虚拟书架：标签是书上的字段，规则集合只派生 id，不另建表', function () {
+  const board = read('src/reading/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const lib = read('renderer-v2/src/views/LibraryWindow.vue');
+  const rv = read('renderer-v2/src/views/ReadingView.vue');
+
+  // 标签挂在书上（多值），归一化沿用笔记那套 normTags —— 一套标签规则不写两遍
+  assert(/tags:\s*normTags\(o\.tags\)/.test(board), '书籍没有多值标签字段，或没走统一归一化');
+  assert(board.indexOf('if (!t || b.tags.length >= MAX_TAGS') >= 0, '加标签没守 8 个上限');
+  // 规则集合必须是派生：只给 id 列表，绝不复制书籍记录
+  assert(board.indexOf('shelves: shelves.slice(') >= 0, 'board 没有返回虚拟书架');
+  assert(/ids:\s*ids\s*\}/.test(board), '规则集合没带 id 列表（界面就拿不到成员）');
+  ['reading.setBookTags', 'reading.addBookTag', 'reading.removeBookTag'].forEach(function (n) {
+    assert(api.indexOf("'" + n + "'") >= 0, '标签写通道没过白名单：' + n);
+    assert(main.indexOf("'" + n + "'") >= 0, '标签写通道没接线：' + n);
+  });
+  // 界面：左栏两级（规则 + 标签）、中栏按 id 筛、筛选态可取消
+  assert(lib.indexOf('虚拟书架') >= 0, '左栏没有虚拟书架节点');
+  assert(lib.indexOf('ruleShelves') >= 0 && lib.indexOf('tagShelves') >= 0, '左栏没分成「规则」与「标签」两组');
+  assert(lib.indexOf("kind: 'shelf'") >= 0 && lib.indexOf('shelfKey') >= 0, '左栏没把虚拟书架接到 scope 上');
+  assert(rv.indexOf('shelfFilter') >= 0, '中栏没有虚拟书架筛选');
+  assert(rv.indexOf('clearShelfFilter') >= 0, '中栏的虚拟书架筛选没法取消');
+  // 标签编辑入口在右栏（LibraryWindow），不在阅读器里各写一份
+  assert(lib.indexOf('@keydown.enter.prevent="addTag"') >= 0, '右栏没有加标签的入口');
+  assert(lib.indexOf('dropTag(t)') >= 0, '右栏没法去掉标签');
+});
+
+check('P2-2 书目清单：三种格式共用一张行表，只出元数据与路径', function () {
+  const board = read('src/reading/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const lib = read('renderer-v2/src/views/LibraryWindow.vue');
+
+  assert(board.indexOf('function listRows(') >= 0, '没有统一的清单行表（三种格式会各写一套）');
+  ['json', 'opds'].forEach(function (f) {
+    assert(board.indexOf("'" + f + "'") >= 0, '导出缺格式：' + f);
+  });
+  // 三种格式都从 rows 出发，且行表里不含任何笔记正文
+  assert(board.indexOf('const rows = listRows(s)') >= 0, '导出没从统一行表出发');
+  assert(board.indexOf('function listRows') >= 0 && board.indexOf('noteCount: noteCount[b.id]') >= 0,
+    '行表没带笔记数（却可能去数正文）');
+  // CSV 必须带 BOM（Excel 打开中文不乱码），JSON 要自证「不含正文」
+  assert(board.indexOf("'\\ufeff' + header") >= 0, 'CSV 没带 UTF-8 BOM');
+  assert(board.indexOf('只含书目元数据与路径，不含书籍正文') >= 0, 'JSON 没写清这份清单不含正文');
+  // OPDS 只给真有的文件挂 acquisition 链接
+  assert(board.indexOf('http://opds-spec.org/acquisition') >= 0, 'OPDS 缺 acquisition 链接');
+  assert(board.indexOf("r.filePath\n                ? '    <link rel=\"http://opds-spec.org/acquisition\"") >= 0,
+    '没有文件的书也挂了打不开的链接');
+  // 通道与落盘
+  assert(api.indexOf("'reading.exportList'") >= 0 && main.indexOf("'reading.exportList'") >= 0, '清单导出通道没接上');
+  assert(lib.indexOf('reading.exportList') >= 0, '界面没接清单导出');
+});
+
+check('P2-3 目录口径：自填章节与书内目录分开，只靠 ch-<节序> 对齐', function () {
+  const board = read('src/reading/board.js');
+  const rd = read('renderer-v2/reader/reader.js');
+  const rv = read('renderer-v2/src/views/ReadingView.vue');
+
+  assert(board.indexOf('anchor: normChapterAnchor(o.anchor)') >= 0, '章节没有锚点字段');
+  assert(/function normChapterAnchor[\s\S]{0,200}ch-/.test(board), '锚点没统一成 ch-<节序>');
+  assert(board.indexOf('anchor: p.anchor') >= 0, '新增章节时锚点进不去');
+  // 阅读窗：我的大纲与书自带目录分成两段渲染，各自独立
+  assert(rd.indexOf('myOutline') >= 0, '阅读窗没有接「我的大纲」');
+  assert(rd.indexOf('我的大纲') >= 0 && rd.indexOf('书里的目录') >= 0, '两套目录没有分开标注');
+  assert(rd.indexOf("setAttribute('data-mine', '1')") >= 0, '我的大纲条目没打标记');
+  assert(rd.indexOf("getAttribute('data-mine') === '1'") >= 0, '我的大纲也会被当前章节高亮（两处高亮）');
+  assert(rd.indexOf("domain('reading.read', [])") >= 0, '阅读窗没读章节表');
+  // 界面：章节行能填/清「第几节」
+  assert(rv.indexOf('setChapterAnchor') >= 0, '章节行没法锚定书内位置');
+  assert(rv.indexOf("'ch-' + Math.trunc(n)") >= 0, '锚点没按 ch-<节序> 生成');
+});
+
+check('P2-4 书库根目录：根 + 相对路径，换机只改一条，删根不删书', function () {
+  const board = read('src/reading/board.js');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+  const lib = read('renderer-v2/src/views/LibraryWindow.vue');
+
+  // 数据：roots 是表内一张表，books 上存 rootId + relPath
+  assert(board.indexOf('roots: roots,') >= 0, 'normalize 没带上 roots');
+  assert(board.indexOf('rootId: clean(o.rootId, ID_MAX)') >= 0, '书没有归属根字段');
+  assert(board.indexOf('relPath: relPathOf(o.relPath)') >= 0, '书没有相对路径字段（存正斜杠的那半边）');
+  // 路径解析只在 normalize 一处：① 现拼 ② 老库自动纳入
+  assert(board.indexOf('b.filePath = joinRoot(root.path, b.relPath)') >= 0, '有根时没按 relPath 现拼绝对路径');
+  assert(board.indexOf('const rel = underRoot(b.filePath, roots[i].path)') >= 0, '老书没自动纳入已登记的根');
+  // 换机 = 改一条根，所有书跟着走；删根只解绑
+  assert(/function relocateRoot[\s\S]{0,900}joinRoot\(path, b\.relPath\)/.test(board), '换根没有重算所有书的路径');
+  assert(/function removeRoot[\s\S]{0,700}rootId: '', relPath: ''/.test(board), '删根没有解绑');
+  assert(/function removeRoot[\s\S]{0,700}s\.books\.filter\(function \(r\)/.test(board) === false,
+    '删根竟然过滤了 books（会丢书）');
+  // rebuild 的 roots 一个都不能漏（漏一次整库的根就没了）。
+  // 用「收尾形态」判：任何一次重建都不允许在 themes 处收尾，且必须有把它拼在末尾的调用。
+  assert(board.indexOf('s.themes);') < 0, '有 rebuild 调用在 themes 处收尾，漏了 roots');
+  const rooted = (board.match(/return rebuild\([^;]*?s\.themes, (s\.roots|roots)/g) || []).length;
+  assert(rooted >= 20, '带 roots 的重建少于预期（写操作可能被回退）：' + rooted);
+  assert(board.indexOf('s.themes.concat([raw]), s.roots') >= 0, '加书签的重建漏了 roots');
+  assert(board.indexOf('s.themes, s.roots.concat([raw])') >= 0, '加根的重建没把自己写进去');
+  // 通道
+  ['reading.roots', 'reading.pickRoot', 'reading.addRoot', 'reading.relocateRoot', 'reading.removeRoot']
+    .forEach(function (n) {
+      assert(api.indexOf("'" + n + "'") >= 0, '书库根通道没过白名单：' + n);
+      assert(main.indexOf("'" + n + "'") >= 0, '书库根通道没接线：' + n);
+    });
+  // 主进程落库前必须验目录：否则整库路径会一起指到空气里
+  assert(/reading\.relocateRoot[\s\S]{0,700}fs\.statSync\(dir\)\.isDirectory\(\)/.test(main), '换根没验目录存在');
+  assert(lib.indexOf('书库根') >= 0 && lib.indexOf('relocateRootDir') >= 0, '左栏没有书库根那一块');
+});
+
+// 2026-11-16 实测踩坑：LibraryWindow 里一条注释开头写 <!--、结尾写成 */，
+// 注释永远不闭合，把后面 23 行（含反向关联卡整块）吞成注释节点。
+// 编译不报错、类型检查不报错、页面只是「少了一块」，只有 asar 探针在打包后才抓到。
+// 这条门禁把问题提前到 view:check：模板注释必须成对，且注释体内不许出现 C 风格结尾。
+check('模板注释成对闭合：<!-- 配 -->，注释体内不出现 */（写错会整块静默不渲染）', function () {
+  const bad = [];
+  function scan(label, body) {
+    const open = (body.match(/<!--/g) || []).length;
+    const close = (body.match(/-->/g) || []).length;
+    if (open !== close) { bad.push(label + '（<!-- ' + open + ' 个 / --> ' + close + ' 个）'); return; }
+    const re = /<!--([\s\S]*?)-->/g;
+    let m;
+    while ((m = re.exec(body))) {
+      if (m[1].indexOf('*/') >= 0) { bad.push(label + '（注释体内出现 */）'); return; }
+    }
+  }
+  allVue().forEach(function (f) {
+    const t = fs.readFileSync(f, 'utf8');
+    const m = t.match(/<template>([\s\S]*)<\/template>/);
+    if (m) scan(path.relative(root, f), m[1]);
+  });
+  ['renderer-v2/index.html', 'renderer-v2/finance.html', 'renderer-v2/library.html', 'renderer-v2/reader/index.html'].forEach(function (rel) {
+    const p = path.join(root, rel);
+    if (fs.existsSync(p)) scan(rel, fs.readFileSync(p, 'utf8'));
+  });
+  assert(bad.length === 0, '注释写错会让整块 UI 静默消失：' + bad.join('；'));
+});
+
+check('2026-11-16 扩展：休闲页 / 关系右栏 / 农历纪念日 / 九格事项回写', function () {
+  const app = read('renderer-v2/src/App.vue');
+  const types = read('renderer-v2/src/types.ts');
+  const leisure = read('renderer-v2/src/views/LeisureView.vue');
+  const digest = read('renderer-v2/src/composables/readingDigest.ts');
+  const reader = read('renderer-v2/reader/reader.js');
+  const relView = read('renderer-v2/src/views/RelationView.vue');
+  const relCtx = read('renderer-v2/src/components/context/RelationContext.vue');
+  const panel = read('renderer-v2/src/components/ContextPanel.vue');
+  const famCtx = read('renderer-v2/src/components/context/FamilyContext.vue');
+  const famBoard = read('src/family/board.js');
+  const lunar = read('src/family/lunar.js');
+  const reminder = read('renderer-v2/src/components/FamilyReminder.vue');
+  const grid = read('renderer-v2/src/components/GridEditor.vue');
+  const main = read('src/main/main-v2.js');
+  const api = read('src/core/api-layer.js');
+
+  // 第 7 格：专属页 + 当日阅读账（时长仍只在本机，不进 md_reading）
+  assert(types.indexOf("| 'leisure'") >= 0, 'ViewKey 缺休闲娱乐专属页');
+  assert(/if \(key === 'dream'\) \{ navigate\('leisure'\); return; \}/.test(app), '第 7 格未直通休闲页');
+  assert(leisure.indexOf('CellRecordEditor') >= 0 && leisure.indexOf("cell-key=\"dream\"") >= 0,
+    '休闲页主栏没写回 cells.dream');
+  assert(leisure.indexOf('reading.notes') >= 0 && digest.indexOf('jiuge-reader-day:') >= 0,
+    '休闲页没接当日笔记或阅读账');
+  assert(reader.indexOf("DAY_TIME_KEY = 'jiuge-reader-day:'") >= 0, '阅读窗没有按天记账');
+  assert(panel.indexOf('LeisureContext') >= 0, '右栏未接休闲阅读上下文');
+
+  // 关系经营：通讯录整块退到右栏，主栏留记录窗口
+  assert(relView.indexOf('CellRecordEditor') >= 0 && relView.indexOf("cell-key=\"relation\"") >= 0,
+    '关系经营主栏缺记录窗口');
+  assert(relView.indexOf('class="rel-book"') < 0, '通讯录还占着主栏');
+  assert(relCtx.indexOf('rel-ctx') >= 0 && relCtx.indexOf('relation.addContact') >= 0,
+    '右栏通讯录未接登记路由');
+  assert(panel.indexOf('RelationContext') >= 0, '右栏未接 RelationContext');
+
+  // 家庭亲子：登记与农历退到右栏，主栏写正文
+  assert(famCtx.indexOf('calendarType') >= 0 && famCtx.indexOf('anniversaryOn') >= 0,
+    '右栏缺阳历/农历与纪念日开关');
+  assert(require('fs').existsSync(path.join(root, 'src/family/lunar.js')), '缺农历换算模块');
+  assert(lunar.indexOf('LUNAR_INFO') >= 0 && lunar.indexOf('lunarToSolar') >= 0, '农历表/换算函数缺失');
+  assert(famBoard.indexOf('anniversariesOf') >= 0 && famBoard.indexOf('require(\'./lunar.js\')') >= 0,
+    'family 领域层没接纪念日派生');
+  assert(reminder.indexOf('family.board') >= 0 && app.indexOf('<FamilyReminder') >= 0,
+    '纪念日全局轻提醒没接上');
+
+  // 九格事项：source 回写位置 + 完成后原行标记 + 原始任务只读通道
+  assert(grid.indexOf('cell-task') >= 0 && grid.indexOf("'g9|'") >= 0,
+    '九格没有事项按钮或回写来源串');
+  assert(grid.indexOf('DONE_MARK') >= 0 && grid.indexOf('gtd.refs') >= 0,
+    '完成标记或原始任务回读缺失');
+  assert(main.indexOf("'gtd.refs'") >= 0 && api.indexOf("'gtd.refs'") >= 0,
+    'gtd.refs 路由/白名单缺失');
 });
 
 console.log('');

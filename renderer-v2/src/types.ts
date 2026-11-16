@@ -28,13 +28,14 @@ export const GRID_KEYS = [
 ] as const;
 
 // 九格统一四字名：两字名放进行目录里太轻，看不出「这一格是干什么的」；
-// 四个字正好说清动作（推进 / 收支 / 经营 / 觉察 / 记录），也还塞得进格子标题行。
+// 四个字正好说清动作（推进 / 收支 / 经营 / 陪伴 / 记录），也还塞得进格子标题行。
 // 2026-11-08 22:15 主理人要求：中栏「今日六点」横条合并进九格的「未来」格，该格改名「今日六条」。
 // 2026-11-08 23:16 主理人要求：九格一律四字命名。
-// 数据键全部不动：cells.work / cells.future 等历史正文、导出、检索、备份照旧，只改显示名。
+// 2026-11-16 主理人要求：「情绪觉察」整格换成「家庭亲子」，功能按家庭亲子重构。
+// 数据键仍叫 emotion：历史日记里的 cells.emotion 正文、导出、检索、备份一个字节都不动。
 export const GRID_LABELS: Record<string, string> = {
   work: '工作推进', money: '金钱收支', health: '身心健康',
-  relation: '关系经营', future: '今日六条', emotion: '情绪觉察',
+  relation: '关系经营', future: '今日六条', emotion: '家庭亲子',
   dream: '休闲娱乐', // 数据键与领域层一致；只换显示名，历史 cells.dream 正文原样保留
   growth: '学习成长', free: '自由记录'
 };
@@ -51,7 +52,9 @@ export const SKINS: Array<{ id: SkinId; label: string }> = [
 // 回看拆成「时间轴（日记）」+「回顾（概览 / 复盘）」，并新增一级「数据中心」。
 // insight 不进一级导航，由标题栏进入；inspire（语料库）挂在数据中心下，
 // 它是「问候 / 名言 / 运动提示」的数据管理，不是第 8 个功能模块。
-export type ViewKey = 'today' | 'insight' | 'cell' | 'timeline' | 'capsule' | 'review' | 'habit' | 'dream' | 'data' | 'bin' | 'inspire' | 'settings' | 'life' | 'relation' | 'connect' | 'long' | 'reading' | 'finance' | 'free';
+// leisure：九格第 7 格「休闲娱乐」的专属页（数据键仍是 dream，梦想板继续用 dream 这个 ViewKey）。
+// relation / family 分别是九格第 4、6 格的专属页；这三个都走「主栏写 + 右栏读」的同一骨架。
+export type ViewKey = 'today' | 'insight' | 'cell' | 'timeline' | 'capsule' | 'review' | 'habit' | 'dream' | 'data' | 'bin' | 'inspire' | 'settings' | 'life' | 'relation' | 'connect' | 'long' | 'reading' | 'finance' | 'free' | 'family' | 'leisure';
 // V1.3 正文待办汇总：只读行，勾选必须回原文（不在汇总页写正文）
 export interface TodoRow { date: string; cell: string; text: string; line: number; raw: string }
 export const NAV_ITEMS: Array<{ key: ViewKey; label: string }> = [

@@ -466,11 +466,30 @@ check('src/** 与根配置中无网络请求 / 远程 URL / 遥测 / appid 残�
     /<webview\b/, /dangerouslySetInnerHTML/, /\bappid\b/, /sitemap\.json/,
   ];
   const URL_RE = /['"`]https?:\/\/[^'"`\s]+['"`]/;
+  // OPDS 导出（P2-2）必须写 XML 命名空间，而命名空间是**标识符**不是**地址**：
+  // 它随文件落盘、由阅读器解释，本程序从不请求它。
+  // 这里用**逐字白名单**放行四个命名空间（不是把正则放宽），并且限制只能出现在
+  // src/reading/board.js——换任何别的 URL、或把它挪到别的文件，仍然会被拦下。
+  const NS_OK = [
+    'http://www.w3.org/2005/Atom',
+    'http://purl.org/dc/terms/',
+    'http://opds-spec.org/2010/catalog',
+    'http://opds-spec.org/acquisition'
+  ];
+  const NS_HOME = 'src\\reading\\board.js';
+  const stripNs = function (t) {
+    return NS_OK.reduce(function (acc, ns) { return acc.split(ns).join(''); }, t);
+  };
   const bad = [];
   files.forEach(function (f) {
     const t = readText(f);
     BATTERY.forEach(function (re) { if (re.test(t)) bad.push(path.relative(ROOT, f) + ' → ' + re.source); });
-    if (URL_RE.test(t)) bad.push(path.relative(ROOT, f) + ' → 远程 URL');
+    if (URL_RE.test(stripNs(t))) bad.push(path.relative(ROOT, f) + ' → 远程 URL');
+    if (path.relative(ROOT, f) !== NS_HOME) {
+      NS_OK.forEach(function (ns) {
+        if (t.indexOf(ns) >= 0) bad.push(path.relative(ROOT, f) + ' → XML 命名空间越界：' + ns);
+      });
+    }
   });
   return { ok: bad.length === 0, detail: files.length + ' 个文件，命中 ' + bad.length + (bad.length ? '：' + bad.join(' ; ') : '') };
 });

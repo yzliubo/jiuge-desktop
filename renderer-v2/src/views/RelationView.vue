@@ -6,7 +6,8 @@
 // 所有派生值（温度 / 上次联系 / 渠道分布）都由主进程读时算，本视图不存、不重算。
 import { ref, computed, onMounted } from 'vue';
 import { domainCall } from '../bridge';
-import { localDate } from '../types';
+import { localDate, type DiaryRecord } from '../types';
+import CellRecordEditor from '../components/CellRecordEditor.vue';
 
 /* ---------------- 类型：全部定义在文件内，script setup 块内不写 export ---------------- */
 interface Opt { value: string; label: string; weight?: number }
@@ -67,11 +68,15 @@ interface Analytics {
   channels: ChannelsView; giveFirst: GiveView; note: string;
 }
 
+// 2026-11-16：通讯录搬到右栏，主栏只留正文与流水。record/save 供主栏记录窗口写 cells.relation。
+defineProps<{ record?: DiaryRecord; today?: string }>();
 const emit = defineEmits<{
   (e: 'back'): void;
   (e: 'notify', msg: string): void;
   (e: 'go-date', date: string): void;
   (e: 'go-cell', key: string): void;
+  (e: 'save', record: DiaryRecord): void;
+  (e: 'changed'): void;
 }>();
 
 /* ---------------- 枚举兜底：一切以 relation.meta() 为准，meta 缺失时才用这份 ---------------- */
@@ -96,8 +101,9 @@ const FALLBACK_DEPTHS: Opt[] = [
 ];
 
 /* ---------------- 状态 ---------------- */
-type Tab = 'book' | 'logs' | 'analytics';
-const tab = ref<Tab>('book');
+type Tab = 'logs' | 'analytics';
+// 通讯录已进右栏，主栏默认就是流水；进来先看「最近联系过谁」比先看空通讯录有用。
+const tab = ref<Tab>('logs');
 const notice = ref('');
 const errMsg = ref('');
 
@@ -381,7 +387,6 @@ function openNew(): void {
   draft.value = emptyDraft();
   detailLogs.value = [];
   detailTemp.value = null;
-  tab.value = 'book';
 }
 async function saveContact(): Promise<void> {
   const d = draft.value;
@@ -481,6 +486,7 @@ async function submitLog(): Promise<void> {
     const n = logContactIds.value.length;
     logOpen.value = false;
     say('已记一次 · ' + n + ' 人。列表与温度已按新记录重算。');
+    emit('changed'); // 右栏通讯录的温度也跟着重算
     await Promise.all([loadList(), loadRead(), loadAnalytics()]);
     if (selectedId.value) await loadDetail(selectedId.value);
     if (logFilterId.value) await loadLogsFor();
@@ -556,11 +562,24 @@ const formulaDepths = computed<string>(() => depthOptions.value.map(function (o)
     <header class="rel-head">
       <button class="rel-back" @click="emit('back')">← 返回</button>
       <h1 class="rel-h1">关系经营</h1>
-      <button class="rel-link" @click="emit('go-cell', 'relation')">去九格 · 关系经营格写一句 →</button>
+      <span class="rel-hint">通讯录在右栏 · 主栏只写正文与流水</span>
+      <button class="rel-link" @click="openLog()">+ 记一次联系</button>
     </header>
 
+    <!-- 主栏记录窗口：与其他模块一致，正文写 cells.relation（历史正文原样带出） -->
+    <CellRecordEditor
+      v-if="record"
+      :record="record"
+      cell-key="relation"
+      label="关系经营"
+      placeholder="今天和谁聊了什么、答应了谁什么，写一句…"
+      prompt-key="relation"
+      hint="右栏管通讯录，这里只管当天写下的话。"
+      @save="emit('save', $event)"
+      @notify="emit('notify', $event)"
+    />
+
     <div class="rel-tabs" role="tablist">
-      <button class="rel-tab" :class="{ 'rel-tab-on': tab === 'book' }" role="tab" :aria-selected="tab === 'book'" @click="switchTab('book')">通讯录</button>
       <button class="rel-tab" :class="{ 'rel-tab-on': tab === 'logs' }" role="tab" :aria-selected="tab === 'logs'" @click="switchTab('logs')">联系流水</button>
       <button class="rel-tab" :class="{ 'rel-tab-on': tab === 'analytics' }" role="tab" :aria-selected="tab === 'analytics'" @click="switchTab('analytics')">关系分析</button>
       <span class="rel-spacer"></span>
@@ -615,122 +634,8 @@ const formulaDepths = computed<string>(() => depthOptions.value.map(function (o)
       </div>
     </section>
 
-    <!-- ==================== tab 1 通讯录 ==================== -->
-    <section v-if="tab === 'book'" class="rel-panel" aria-label="通讯录">
-      <div class="rel-filters">
-        <select class="rel-input" v-model="filterCircle" @change="loadList">
-          <option value="">全部来源圈层</option>
-          <option v-for="o in circleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
-        <select class="rel-input" v-model="filterTier" @change="loadList">
-          <option value="">全部亲密度</option>
-          <option v-for="o in tierOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-        </select>
-        <input class="rel-input rel-search" v-model="query" @input="loadList" placeholder="搜姓名 / 单位 / 备注…" />
-        <button class="rel-btn rel-btn-primary" @click="openNew">+ 新增联系人</button>
-      </div>
-
-      <div class="rel-book">
-        <div class="rel-list">
-          <div class="rel-listhead">
-            <span class="rel-col-name">姓名</span>
-            <span class="rel-col-circle">圈层</span>
-            <span class="rel-col-tier">亲密度</span>
-            <span class="rel-col-last">上次联系</span>
-            <span class="rel-col-temp">温度</span>
-          </div>
-          <div v-if="listLoading" class="rel-empty">正在读取通讯录…</div>
-          <div v-else-if="!contacts.length" class="rel-empty">还没有联系人。</div>
-          <button
-            v-for="c in contacts" :key="c.id"
-            class="rel-row" :class="{ 'rel-row-on': selectedId === c.id }"
-            @click="selectContact(c)"
-          >
-            <span class="rel-col-name rel-ellip">{{ c.name }}</span>
-            <span class="rel-col-circle">{{ labelOf(circleOptions, c.circle) }}</span>
-            <span class="rel-col-tier">{{ labelOf(tierOptions, c.tier) }}</span>
-            <span class="rel-col-last">{{ lastText(c) }}</span>
-            <span class="rel-col-temp rel-temp" :class="tempClass(c.temperature)">{{ tempText(c.temperature) }}</span>
-          </button>
-        </div>
-
-        <!-- 右栏：可编辑详情 + 两个分开的入口 + 该人流水与温度拆解 -->
-        <div class="rel-detail">
-          <div v-if="!hasDraft" class="rel-empty">选一行查看详情。</div>
-          <template v-else>
-            <div class="rel-panelhead">
-              <h2 class="rel-h2">{{ editingNew ? '新增联系人' : '编辑 · ' + (draft.name || '未命名') }}</h2>
-              <span class="rel-temp rel-temp-big" :class="tempClass(detailTemp)">{{ tempText(detailTemp) }}</span>
-            </div>
-            <div class="rel-formgrid">
-              <label class="rel-field"><span class="rel-label">姓名 <em class="rel-req">必填</em></span>
-                <input class="rel-input" :maxlength="limitOf('name', 24)" v-model="draft.name" placeholder="怎么称呼" />
-              </label>
-              <label class="rel-field"><span class="rel-label">来源圈层</span>
-                <select class="rel-input" v-model="draft.circle">
-                  <option v-for="o in circleOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-                </select>
-              </label>
-              <label class="rel-field"><span class="rel-label">亲密度</span>
-                <select class="rel-input" v-model="draft.tier">
-                  <option v-for="o in tierOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-                </select>
-              </label>
-              <label class="rel-field"><span class="rel-label">单位</span>
-                <input class="rel-input" :maxlength="limitOf('org', 40)" v-model="draft.org" />
-              </label>
-              <label class="rel-field"><span class="rel-label">职务</span>
-                <input class="rel-input" :maxlength="limitOf('title', 24)" v-model="draft.title" />
-              </label>
-              <label class="rel-field"><span class="rel-label">电话</span>
-                <input class="rel-input" :maxlength="limitOf('phone', 32)" v-model="draft.phone" />
-              </label>
-              <label class="rel-field"><span class="rel-label">微信</span>
-                <input class="rel-input" :maxlength="limitOf('wechat', 40)" v-model="draft.wechat" />
-              </label>
-              <label class="rel-field"><span class="rel-label">怎么认识的</span>
-                <input class="rel-input" :maxlength="limitOf('howMet', 60)" v-model="draft.howMet" />
-              </label>
-              <label class="rel-field rel-field-wide"><span class="rel-label">标签</span>
-                <input class="rel-input" v-model="draft.tagsText" placeholder="例：同城、读书会、老同事" />
-              </label>
-              <label class="rel-field rel-field-wide"><span class="rel-label rel-label-key">我能帮他什么</span>
-                <input class="rel-input" :maxlength="limitOf('giveFirst', 120)" v-model="draft.giveFirst" placeholder="只记这一栏，不做「他给过我什么」的对称账" />
-              </label>
-              <label class="rel-field rel-field-wide"><span class="rel-label">后续 / 答应过的事</span>
-                <input class="rel-input" v-model="draft.followUp" placeholder="答应过帮 TA 做的事" />
-              </label>
-              <label class="rel-field rel-field-wide"><span class="rel-label">备注</span>
-                <textarea class="rel-input rel-textarea" :maxlength="limitOf('note', 400)" v-model="draft.note"></textarea>
-              </label>
-            </div>
-
-            <div class="rel-actions">
-              <button class="rel-btn rel-btn-primary" @click="saveContact">保存</button>
-              <button class="rel-btn" :disabled="editingNew || !selectedId" @click="planCurrent">约一下（还没发生）</button>
-              <button class="rel-btn" @click="openLog()">记一次（已经发生）</button>
-              <button class="rel-btn rel-btn-danger" :disabled="editingNew || !selectedId" @click="archiveCurrent">归档（不硬删）</button>
-            </div>
-
-            <div class="rel-subblock">
-              <h3 class="rel-h3">TA 的联系流水 · 温度拆解</h3>
-              <p v-if="!detailLogs.length" class="rel-hint">还没有流水。</p>
-              <div v-for="l in detailLogs" :key="l.id" class="rel-breakdown">
-                <button class="rel-logdate" @click="emit('go-date', l.date)">{{ l.date }}</button>
-                <span class="rel-breakdown-main">{{ channelLabelOf(l) }} · {{ depthLabelOf(l) }}</span>
-                <span class="rel-breakdown-calc" v-if="l.contribution !== undefined">
-                  贡献 {{ l.contribution }} = {{ l.channelWeight }} × {{ l.depthWeight }} × 0.5^({{ l.daysAgo }}/90)
-                </span>
-                <span class="rel-breakdown-sum">{{ l.summary }}</span>
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
-    </section>
-
     <!-- ==================== tab 2 联系流水 ==================== -->
-    <section v-else-if="tab === 'logs'" class="rel-panel" aria-label="联系流水">
+    <section v-if="tab === 'logs'" class="rel-panel" aria-label="联系流水">
       <div class="rel-filters">
         <select class="rel-input" v-model="logFilterId" @change="loadLogsFor">
           <option value="">全部人的流水</option>

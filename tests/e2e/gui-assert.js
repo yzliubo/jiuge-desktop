@@ -150,6 +150,10 @@ const jsErrors = [];
 // 长套件偶发「整窗消失」时，用它把出问题的那一段单独复现出来，不用每次赔上五分钟。
 const ONLY = String(process.env.JIUGE_E2E_ONLY || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 
+// 关系经营的唯一入口：九格第 4 格（2026-11-16 从「时间轴」二级目录并回今天）。
+// 左栏时间轴下已经没有 .nav-relation 了，用例统一走九格这一行。
+const REL_ENTRY = '.nav-mod[aria-label="进入关系经营完整功能页"]';
+
 async function check(name, fn) {
   if (ONLY.length && !ONLY.some(function (p) { return name.indexOf(p) === 0; })) {
     skipped++;
@@ -271,9 +275,13 @@ async function waitStep(page, n) {
       assert(label.includes('休闲娱乐'), '第 7 格显示名不是「休闲娱乐」：' + label);
       assert(!label.includes('梦想'), '第 7 格还挂着「梦想」旧名：' + label);
     });
-    await check('12 每格都有可编辑的富文本区（contenteditable）', async () => {
-      assert.strictEqual(await page.locator('.cell .rt-body').count(), 9);
-      assert.strictEqual(await page.locator('.cell [contenteditable="true"]').count(), 9);
+    await check('12 每格都有可编辑的输入区（第 9 格是自由记录摘要 + 一句快记）', async () => {
+      // 2026-11-16：第 9 格不再是独立正文，改成「当天摘要 + 一句快记」，
+      // 所以富文本区从 9 个变 8 个；它自己的可编辑入口是 .cf-input。
+      assert.strictEqual(await page.locator('.cell .rt-body').count(), 8);
+      assert.strictEqual(await page.locator('.cell [contenteditable="true"]').count(), 8);
+      assert.strictEqual(await page.locator('.cell[data-cell="free"] .cf').count(), 1, '第 9 格没有自由记录摘要区');
+      assert.strictEqual(await page.locator('.cell[data-cell="free"] .cf-input').count(), 1, '第 9 格没有一句快记的输入框');
     });
     await check('13 九格仍是 3 列 3 排', async () => {
       const cols = await page.$eval('.grid', function (el) {
@@ -288,11 +296,14 @@ async function waitStep(page, n) {
       assert(head.includes('已写'), '页头统计被一起删了');
 
       // 九格占位提示各按模块取词，不再是同一句「随手一句，可写多行」
+      // （第 9 格换成了 .cf-input，占位语单独取，见下面那一行）
       const ph = await page.locator('.cell .rt-body').evaluateAll(function (els) {
         return els.map(function (el) { return el.getAttribute('data-placeholder') || ''; });
       });
-      assert.strictEqual(ph.length, 9, '没取到九格引导语');
-      assert.strictEqual(new Set(ph).size, 9, '引导语没按模块区分：' + ph.join(' | '));
+      assert.strictEqual(ph.length, 8, '没取到九格引导语');
+      assert.strictEqual(new Set(ph).size, 8, '引导语没按模块区分：' + ph.join(' | '));
+      ph.push(await page.locator('.cell[data-cell="free"] .cf-input').getAttribute('placeholder') || '');
+      assert.strictEqual(new Set(ph).size, 9, '第 9 格的占位语与别的格撞了：' + ph.join(' | '));
       assert(ph.every(function (t) { return !!t && t.indexOf('随手一句，可写多行') < 0; }),
         '仍显示统一占位语或空提示');
 
@@ -442,27 +453,28 @@ async function waitStep(page, n) {
       assert((await page.locator('.quick-input').getAttribute('class')).includes('input-on'));
       assert((await page.locator('.submit').getAttribute('class')).includes('submit-on'));
     });
-    await check('35 Enter 保存后浮窗关闭且内容写入自由格', async () => {
+    await check('35 Enter 保存后浮窗关闭且内容进自由记录（九格第 9 格同步显示）', async () => {
       await page.locator('.quick-input').press('Enter');
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(600);
       assert.strictEqual(await page.locator('.quick').count(), 0);
-      const free = await page.locator('.cell[data-cell="free"] .rt-body').innerText();
-      assert(free.includes('开会时随手记一句'));
+      // 2026-11-16 打通后第 9 格是只读摘要（.cf），速记落 md_freewrite，不再写 cells.free
+      const free = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(free.includes('开会时随手记一句'), '九格自由格没显示刚记的这句话：' + free);
     });
 
     await check('35a 速记四处分流：四个去处、记住上次、参考资料带 #资料 标记', async () => {
       await page.locator('.quick-btn').click();
       await page.waitForTimeout(200);
       assert.strictEqual(await page.locator('.target').count(), 4, '没有四个去处');
-      assert((await page.locator('.target-on').textContent()).includes('自由格'), '首次默认不是自由格');
+      assert((await page.locator('.target-on').textContent()).includes('自由记录'), '首次默认不是自由记录');
       await page.locator('.target').nth(3).click();
       assert((await page.locator('.target-on').textContent()).includes('参考资料'));
       await page.locator('.quick-input').fill('规范 5.3.2 条摘录');
       await page.locator('.quick-input').press('Enter');
       await page.waitForTimeout(550);
       assert.strictEqual(await page.locator('.quick').count(), 0);
-      const free = await page.locator('.cell[data-cell="free"] .rt-body').innerText();
-      assert(free.includes('#资料'), '参考资料没带 #资料 标记');
+      const free = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(free.includes('#资料'), '参考资料没带 #资料 标记：' + free);
       // 关掉再开：去处要记住上次选择，否则「回车即存」会存错地方
       await page.locator('.quick-btn').click();
       await page.waitForTimeout(250);
@@ -575,12 +587,31 @@ async function waitStep(page, n) {
       const chip = await page.locator('.ctx-card .chip').first().textContent();
       assert((chip || '').indexOf('晴') >= 0, '今天概览没跟上刚保存的天气：' + chip);
     });
-    await check('39 一键留一句追加到「自由」格', async () => {
+    await check('39 一键留一句写进自由记录，第 9 格摘要立刻显示', async () => {
       await page.locator('.quick-row input').fill('补一句也算一篇');
       await page.getByRole('button', { name: '留一句' }).click();
-      await page.waitForTimeout(350);
-      const free = await page.locator('.cell[data-cell="free"] .rt-body').innerText();
-      assert(free.includes('补一句也算一篇'));
+      await page.waitForTimeout(500);
+      // 写入的是 md_freewrite，第 9 格只是它的当天摘要：摘要不刷新就等于「没同步」
+      const free = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(free.includes('补一句也算一篇'), '第 9 格摘要没显示刚留的那句：' + String(free).slice(0, 90));
+      // 同一个数字两处必须一样：九格页头「已写 n / 9」与右栏「已填 n / 9」
+      const sub = await page.locator('.date-sub').innerText();
+      const rail = await page.locator('.today-opt .extras').innerText();
+      const a = /已写 (\d+) \/ 9/.exec(sub);
+      const b = /已填 (\d+) \/ 9/.exec(rail);
+      assert(a && b && a[1] === b[1], '九格与右栏的已填格数不一致：' + sub + ' | ' + (b ? b[0] : rail.slice(-40)));
+    });
+    await check('39b 九格第 9 格自己记一句：摘要与右栏格数当场跟上', async () => {
+      await page.locator('.cell[data-cell="free"] .cf-input').fill('在九格里直接记的一句');
+      await page.locator('.cell[data-cell="free"] .cf-btn').click();
+      await page.waitForTimeout(500);
+      const free = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(free.includes('在九格里直接记的一句'), '九格里的快记没进摘要：' + String(free).slice(0, 90));
+      const sub = await page.locator('.date-sub').innerText();
+      const rail = await page.locator('.today-opt .extras').innerText();
+      const a = /已写 (\d+) \/ 9/.exec(sub);
+      const b = /已填 (\d+) \/ 9/.exec(rail);
+      assert(a && b && a[1] === b[1], '格内快记后两处格数不一致：' + sub + ' | ' + (b ? b[0] : rail.slice(-40)));
     });
     await check('40 单格洞察已上移到标题栏，左栏不再有这一项', async () => {
       // 2026-11-08 23:16：单格洞察从左栏二级目录移到标题栏
@@ -606,7 +637,7 @@ async function waitStep(page, n) {
       assert.strictEqual(await mods.count(), 9);
       const labels = await mods.allTextContents();
       // 九格统一四字名
-      ['工作推进', '金钱收支', '身心健康', '关系经营', '今日六条', '情绪觉察', '休闲娱乐', '学习成长', '自由记录'].forEach(function (l, i) {
+      ['工作推进', '金钱收支', '身心健康', '关系经营', '今日六条', '家庭亲子', '休闲娱乐', '学习成长', '自由记录'].forEach(function (l, i) {
         assert(labels[i].includes(l), '第 ' + (i + 1) + ' 项应为 ' + l + '，实际 ' + labels[i]);
         assert(l.trim().replace(/\s/g, '').length === 4, '第 ' + (i + 1) + ' 项不是四字名：' + labels[i]);
       });
@@ -1766,21 +1797,33 @@ async function waitStep(page, n) {
     });
 
     await check('100 补记写入的是那一天，切回今天不串内容', async () => {
-      const cell = page.locator('.cell[data-cell="free"] .rt-body');
+      // 两步都要落在那一天：
+      // ① 正文照旧走富文本 + 保存（时间轴要真有这一「篇」，后面的封存 102~104 才有得挑）
+      const cell = page.locator('.cell[data-cell="health"] .rt-body');
       await cell.click();
       await page.keyboard.type('补记的一句话');
       await page.waitForTimeout(200);
       await page.locator('.save-btn').click();
       await page.waitForTimeout(800);
+      // ② 第 9 格改成「摘要 + 一句快记」之后，快记写的是 md_freewrite，日期取 draft.date 那一天
+      await page.locator('.cell[data-cell="free"] .cf-input').fill('补记的一句话');
+      await page.locator('.cell[data-cell="free"] .cf-btn').click();
+      await page.waitForTimeout(700);
+      assert((await page.locator('.cell[data-cell="free"] .cf').innerText()).includes('补记的一句话'),
+        '快记没落在那一天');
       await page.locator('.dn-today').click();
       await page.waitForTimeout(700);
       assert.strictEqual(await page.locator('.backfill-banner').count(), 0, '回到今天后横幅还在');
-      const todayFree = await page.locator('.cell[data-cell="free"] .rt-body').innerText();
-      assert(!todayFree.includes('补记的一句话'), '补记内容串到今天了');
+      const todayCell = await page.locator('.cell[data-cell="health"] .rt-body').innerText();
+      assert(!todayCell.includes('补记的一句话'), '补记的正文串到今天了');
+      const todayFree = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(!todayFree.includes('补记的一句话'), '补记的快记串到今天了');
       await page.locator('.dn-btn').first().click();
       await page.waitForTimeout(700);
-      const backFree = await page.locator('.cell[data-cell="free"] .rt-body').innerText();
-      assert(backFree.includes('补记的一句话'), '补记内容没落到那一天');
+      const backCell = await page.locator('.cell[data-cell="health"] .rt-body').innerText();
+      assert(backCell.includes('补记的一句话'), '补记的正文没落到那一天');
+      const backFree = await page.locator('.cell[data-cell="free"] .cf').innerText();
+      assert(backFree.includes('补记的一句话'), '补记的快记没落到那一天');
     });
 
     await check('101 补记态回到今天后，「后一天」按钮禁用（不能写未来）', async () => {
@@ -2251,18 +2294,44 @@ async function waitStep(page, n) {
       assert(!conText.includes('牺牲精度') && !conText.includes('诚实说明'), '耗时分区仍常驻解释文案');
     });
 
-    await check('120 关系经营：左栏二级进入，两个入口按时态分开且界面不堆解释', async () => {
-      await page.locator('.nav-relation').click();
+    await check('120 关系经营：主栏记录窗 + 右栏通讯录，两个入口按时态分开且界面不堆解释', async () => {
+      await page.locator(REL_ENTRY).click();
       await page.waitForSelector('.rel-wrap', { timeout: 5000 });
-      // 详情表单（含「我能帮他什么」与两个入口按钮）默认收起；点「新增联系人」只展开前端表单，不写文件
-      await page.locator('.rel-btn', { hasText: '新增联系人' }).click();
-      await page.waitForSelector('.rel-formgrid', { timeout: 5000 });
       const text = await page.locator('.rel-wrap').innerText();
-      assert(text.includes('约一下'), '缺「约一下」入口');
-      assert(text.includes('记一次'), '缺「记一次」入口');
-      assert(text.includes('我能帮他什么'), '缺「我能帮他什么」栏');
-      assert(text.includes('还没发生') && text.includes('已经发生'), '两个入口没按时态分开');
+      assert(text.includes('通讯录在右栏'), '主栏没标明通讯录去处');
+      assert(text.includes('记一次联系') && text.includes('已经发生'), '缺「记一次」入口');
+      assert.strictEqual(await page.locator('.rel-wrap .cell-record').count(), 1, '主栏缺记录窗口');
+      // 通讯录整块已搬到右栏：展开登记表，两个入口与「我能帮他什么」都在右栏
+      await page.locator('.relc-add').click();
+      await page.waitForSelector('.relc-form', { timeout: 5000 });
+      let rail = await page.locator('.rel-ctx').innerText();
+      assert(rail.includes('我能帮他什么'), '右栏缺「我能帮他什么」栏');
+      // 新增态下「约一下」本来就不显示（还没落库的人没法约）。存一位再点开，才检查这个入口。
+      await page.locator('.relc-form .relc-input').first().fill('GUI测试联系人');
+      await page.locator('.relc-save').click();
+      await page.waitForTimeout(600);
+      await page.locator('.relc-row').first().click();
+      await page.waitForSelector('.relc-form', { timeout: 5000 });
+      rail = await page.locator('.rel-ctx').innerText();
+      assert(rail.includes('约一下') && rail.includes('归档'), '右栏缺「约一下 / 归档」入口');
       assert(!text.includes('健康度评分') && !text.includes('心理学常数'), '关系视图仍常驻评分/公式解释');
+    });
+
+    await check('120b 家庭亲子：九格进入，三块内容齐全，右栏报本周陪伴', async () => {
+      await page.locator('.nav-mod[aria-label="进入家庭亲子完整功能页"]').click();
+      await page.waitForSelector('.fam-wrap', { timeout: 5000 });
+      const t = await page.locator('.fam-wrap').innerText();
+      assert(t.includes('亲子时刻') && t.includes('成长足迹'), '主栏两块内容不全');
+      assert(!t.includes('添加成员'), '成员登记还占着主栏');
+      assert(t.includes('时长是自己填的') && t.includes('不评分'), '没写清「时长自己填、不评分」的口径');
+      assert.strictEqual(await page.locator('.fam-wrap .cell-record').count(), 1, '主栏缺记录窗口');
+      const rail = await page.locator('.context').innerText();
+      assert(rail.includes('家庭成员') && rail.includes('登记成员'), '右栏没有家庭成员登记');
+      assert(rail.includes('本周陪伴'), '右栏没有本周陪伴');
+      assert(rail.includes('这周还没记到'), '右栏没有「还没记到的人」');
+      // 回今天，后续用例继续从今日页出发
+      await page.locator('.fam-back').click();
+      await page.waitForSelector('.cell[data-cell="free"]', { timeout: 5000 });
     });
 
     await check('121 长期形状：左栏二级进入，克制条款收起但加密免责即时可见', async () => {
@@ -2289,7 +2358,7 @@ async function waitStep(page, n) {
 
     await check('123 三个新视图都有回今天的入口', async () => {
       const views = [
-        { nav: '.nav-relation', root: '.rel-wrap', back: '.rel-back' },
+        { nav: REL_ENTRY, root: '.rel-wrap', back: '.rel-back' },
         { nav: '.nav-connect', root: '.con-root', back: '.con-back' },
         { nav: '.nav-long', root: '.lng-wrap', back: '.lng-back' }
       ];
@@ -2308,7 +2377,7 @@ async function waitStep(page, n) {
     await check('124 新视图里没有可写正本的越权入口', async () => {
       const views = [
         { nav: '.nav-connect', root: '.con-root' },
-        { nav: '.nav-relation', root: '.rel-wrap' },
+        { nav: REL_ENTRY, root: '.rel-wrap' },
         { nav: '.nav-long', root: '.lng-wrap' }
       ];
       for (const v of views) {
@@ -2321,6 +2390,12 @@ async function waitStep(page, n) {
           // 正文内链只读：连接视图里不该有 contenteditable 正本编辑区
           assert.strictEqual(await scope.locator('[contenteditable="true"]').count(), 0,
             '连接视图出现 contenteditable 正本编辑区');
+        }
+        if (v.root === '.rel-wrap') {
+          // 关系台 2026-11-16 起有主栏记录窗口：正文只能出现在这一个地方
+          const all = await scope.locator('[contenteditable="true"]').count();
+          const inRecord = await scope.locator('.cell-record [contenteditable="true"]').count();
+          assert.strictEqual(all, inRecord, '关系台出现记录窗口之外的正文编辑区');
         }
       }
     });
@@ -4678,6 +4753,77 @@ async function waitStep(page, n) {
       await page.evaluate(async (id) => {
         await window.jiugeBridge.invoke('v1/domain:call', { name: 'reading.removeBook', args: [id] });
       }, book.id);
+    });
+
+    await check('190 休闲娱乐：第 7 格专属页 + 主栏记录窗 + 右栏阅读账', async () => {
+      // 上一条用例停在长期形状页，先回今天
+      await page.locator('.nav-item').first().click();
+      await page.waitForSelector('.cell[data-cell="dream"]', { timeout: 5000 });
+      await page.locator('.cell[data-cell="dream"] .cell-label').click();
+      await page.waitForSelector('.leisure', { timeout: 5000 });
+      const t = await page.locator('.leisure').innerText();
+      assert(t.includes('今天在图书馆读了什么') && t.includes('今天记下的想法'), '休闲页缺阅读摘要或笔记区');
+      assert.strictEqual(await page.locator('.leisure .cell-record').count(), 1, '主栏缺记录窗口');
+      assert.strictEqual(await page.locator('.leisure .lz-back').count(), 1, '缺回今天的入口');
+      const rail = await page.locator('.context').innerText();
+      assert(rail.includes('休闲阅读') && rail.includes('打开图书馆'), '右栏没有阅读账入口');
+      await page.locator('.lz-back').click();
+      await page.waitForSelector('.cell[data-cell="free"]', { timeout: 5000 });
+    });
+
+    await check('191 九格事项：转下一步行动，完成后回原行标「已完成」', async () => {
+      const cell = page.locator('.cell[data-cell="health"] .rt-body');
+      await cell.click();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type('事项联动测试一行');
+      await page.locator('.save-btn').click();
+      await page.waitForTimeout(700);
+      await page.locator('.cell[data-cell="health"] .cell-task').click();
+      await page.waitForTimeout(900);
+      const refs = await page.evaluate(async () => {
+        const r = await window.jiugeBridge.invoke('v1/domain:call', { name: 'gtd.refs', args: ['g9|'] });
+        return r.data || [];
+      });
+      const hit = (refs || []).filter(function (x) {
+        return x.title && x.title.indexOf('事项联动测试一行') >= 0;
+      })[0];
+      assert(!!hit, '事项没进下一步行动清单');
+      assert(hit.status !== 'done', '刚建的事项不该已完成');
+      await page.evaluate(async (id) => {
+        await window.jiugeBridge.invoke('v1/domain:call', { name: 'gtd.complete', args: [id] });
+      }, hit.id);
+      // 刷新一下让九格重新读 gtd.refs，验证标记回写
+      await page.reload();
+      await page.waitForSelector('.cell[data-cell="health"] .rt-body', { timeout: 10000 });
+      await page.waitForTimeout(700);
+      const marked = await page.locator('.cell[data-cell="health"] .rt-body').innerText();
+      assert(marked.includes('事项联动测试一行') && marked.includes('〔已完成〕'),
+        '任务完成后原行没标完成：' + marked.slice(0, 80));
+    });
+
+    await check('192 家庭亲子：右栏可登记农历生日并设为纪念日', async () => {
+      await page.locator('.nav-mod[aria-label="进入家庭亲子完整功能页"]').click();
+      await page.waitForSelector('.fam-wrap', { timeout: 5000 });
+      await page.locator('.context .fam-add').click();
+      await page.waitForSelector('.fam-form', { timeout: 5000 });
+      // 主栏的亲子时刻也有一张 .fam-form，所有选择器都限定在右栏这一张里
+      const form = page.locator('.context .fam-form');
+      await form.locator('select').nth(1).selectOption('lunar');
+      assert.strictEqual(await form.locator('input[type="number"]').count(), 1, '农历没有出生年输入');
+      const formText = await form.innerText();
+      assert(formText.includes('闰月出生') && formText.includes('设为纪念日提醒'), '农历/提醒选项缺失');
+      await form.locator('input:not([type])').first().fill('农历宝');
+      await form.locator('input[type="number"]').fill('2018');
+      await form.locator('select').nth(2).selectOption('8');
+      await form.locator('select').nth(3).selectOption('15');
+      await form.locator('.fam-check input[type="checkbox"]').last().check();
+      await form.locator('.fam-save').click();
+      await page.waitForTimeout(800);
+      const rail = await page.locator('.context').innerText();
+      assert(rail.includes('农历宝') && rail.includes('农历八月十五'), '农历成员没登记上：' + rail.slice(0, 120));
+      assert(rail.includes('纪念日'), '没标出纪念日');
+      await page.locator('.fam-back').click();
+      await page.waitForSelector('.cell[data-cell="free"]', { timeout: 5000 });
     });
 
     await check('113 真实窗口无 JS 运行时异常', async () => {

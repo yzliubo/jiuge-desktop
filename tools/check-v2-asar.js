@@ -61,7 +61,7 @@ const probes = [
   // 各格主功能
   '单格工作台', '完整账本', '学习成长',
   // 模块目录 + 富文本 + 引导词
-  '工作推进', '金钱收支', '身心健康', '关系经营', '情绪觉察', '休闲娱乐', '学习成长', '自由记录',
+  '工作推进', '金钱收支', '身心健康', '关系经营', '家庭亲子', '休闲娱乐', '学习成长', '自由记录',
   '单格洞察', 'insight-btn', '格式工具栏', '插入为引用', '换一条', '清除格式', '引导词',
   // 右栏按模块联动（9 个子面板各自的专属标题）
   '清单健康', '本月收支', '本期指标', '月度分布', '复盘完成度',
@@ -89,13 +89,23 @@ const probes = [
   'gtd-side', 'gtd-colhead', 'side-proj', 'side-ctx', '任务详情', '清除筛选',
   'wc-detail', 'wc-save', 'wc-st-on', '拆一条能动手的子项', '待厘清',
   // 学习成长三块（考试考证 / 技能学习 / 主题阅读）
+  // P0-1（2026-11-16）：书单与摘录编辑整套搬进图书馆，右栏只留只读统计与出口，
+  // 原来的 gc-quote 摘录编辑卡已删——探针改为「去图书馆维护书单」这个新出口。
   '考试考证', '技能学习', '主题阅读', '导入旧学习库', 'g-tab', 'ch-bar', 'g-acts',
-  'gc-quote', '里程碑', '摘录', '该看一眼',
+  '去图书馆维护书单', '里程碑', '摘录', '该看一眼',
   // 语料库（名言 / 问候 / 运动提示）：三类可编辑、删内置只记隐藏
   '语料库', '名言警句', '问候语', '运动提示', '动一动', '恢复内置默认', '已移除', '三类语料',
   // 图书馆 / 读书笔记（V2.3）：两类阅读 + 行内批注 + 伴读三问 + 九格回写
   '图书馆', '休闲娱乐阅读', '读书笔记 · 数据库', '伴读三问', '批注贴着原文长',
   '闪念入格', '已入九格', '汇总旧摘录', 'reading.addNote', 'reading.importGrowthQuotes',
+  // 图书馆数据互通 P0/P1/P2（2026-11-16）：体检 / 重新关联 / 虚拟书架 / 书目清单 /
+  // 书库根 / 反向关联 / 再曝光 / 检索合流。这几条正是本轮改动的用户可见面，
+  // 打包后抽 asar 就能证明「新界面真的进包了」，不靠源码自查。
+  // 注：reading.searchIndex 只在主进程 search.library 内部调用，渲染层没有这个名字，
+  // 不能当探针（会长期报 NO）；反向验证用 search.library。
+  '书库体检', '重新关联', '虚拟书架', '书目清单', '书库根', '它后来去了哪', '最近留下的话',
+  'reading.audit', 'reading.relinkBook', 'reading.refs', 'reading.pushAction',
+  'reading.resurface', 'reading.exportList', 'search.library',
   // V2.14：主题阅读自建书单（权威源迁到 md_reading），与休闲功能一致
   '主题书单现在由这里维护', '导入学习成长的旧主题书单', '建主题', '主题新书名',
   'reading.themeAdd', 'reading.importGrowthThemes', '翻开读',
@@ -200,7 +210,14 @@ const probes = [
   'currentPdfSelection', 'pdfOffsetAt', 'copySelectionText', 'saveQuoteFromSelection',
   'pdfHitRanges', 'paintPdfHits', 'jumpPdfHit', 'pdfSearchToken',
   'data-act="copy"', 'data-act="quote"', '已摘录进读书笔记', '（PDF 原文）',
-  'user-select: text', 'color: transparent'
+  'user-select: text', 'color: transparent',
+  // 2026-11-16 三项打通：家庭亲子三块 / 第 9 格摘要写入口 / 关系经营并回九格
+  '成长足迹', '亲子时刻', '本周陪伴', '今天陪谁做了什么具体的事？',
+  '记一句，进自由记录…', '打开自由记录 · 三合一 →', '仅留原文', 'nt:',
+  // 2026-11-16 扩展：休闲页阅读账 / 关系右栏通讯录 / 农历登记 / 九格事项回写
+  '今天在图书馆读了什么', '今天记下的想法', '打开图书馆', 'jiuge-reader-day:',
+  '通讯录', '登记成员', '设为纪念日提醒',
+  '事项', '〔已完成〕', 'g9|'
 ];
 
 console.log('  asar: ' + asarPath);
@@ -218,6 +235,8 @@ console.log('  src/finance/board.js 在包内: ' + (entry('src/finance/board.js'
 const financeJs = jsEntries.filter(function (x) { return /\/finance-.*\.js$/.test(posix(x)); });
 console.log('  dist/assets/finance-*.js 在包内: ' + (financeJs.length ? 'YES (' + financeJs.map(posix).join(', ') + ')' : 'NO'));
 console.log('  src/free/board.js 在包内: ' + (entry('src/free/board.js') ? 'YES' : 'NO'));
+console.log('  src/family/board.js 在包内: ' + (entry('src/family/board.js') ? 'YES' : 'NO'));
+console.log('  src/family/lunar.js 在包内: ' + (entry('src/family/lunar.js') ? 'YES' : 'NO'));
 console.log('  src/writing/check.js 在包内: ' + (entry('src/writing/check.js') ? 'YES' : 'NO'));
 console.log('  packaged main: ' + JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8')).main);
 console.log('');

@@ -179,12 +179,14 @@ function bootCore() {
   const secureMod = require('../secure/vault.js');
   const attachMod = require('../attach/links.js');
   // 图书馆（休闲娱乐阅读 + 主题阅读）与「读书笔记」数据库：md_reading 单键。
-  // 【R-24 实测口径，2026-11-12】主题**本身**（themes）的权威源已迁到 md_reading；
-  // 但主题**书单**仍只从 md_growth 只读派生（见 themeBooksFlat），
-  // 而 reading.addBook 带 themeId 时写入的是 md_reading.books —— 两者并存，属已知双源。
-  // 收敛需要一次性迁移（把 md_reading 里带 themeId 的书并回 md_growth 或反之），
-  // 本轮**不动数据语义**，避免丢历史书单；只把注释改成与实现一致。
+  // 【P0-1 单一事实源，2026-11-16】主题（themes）与主题**书单**（books[].themeId）的
+  // 权威源都在 md_reading，二者没有第二份：board() 已不再接收 themeBooks 参数，
+  // 导出汇总的书名兜底也只读 md_reading.books。
+  // md_growth 里的旧书单只剩两个用途：① importGrowthThemes 的一次性迁移来源；
+  // ② growthAudit 的「迁没迁完」核对（themeBooksFlat 只读派生，不给任何视图当数据用）。
   const readingMod = require('../reading/board.js');
+  // 书籍指纹：大小 + 首 64KB SHA-256，用来在文件改名 / 换盘之后认出同一本书
+  const readingFp = require('../reading/fingerprint.js');
   // 本地电子书：只用 Node 内置 fs + zlib 读 EPUB 元数据 / 封面，零第三方依赖
   const readingEpub = require('../reading/epub.js');
   // 封面文件 → dataURL（CSP 只允许 img-src 'self' data:，只能主进程读盘转一次）
@@ -204,6 +206,9 @@ function bootCore() {
   const financeMod = require('../finance/board.js');
   // 自由记录（md_freewrite）：闪念 / 长文 / 偏好；胶囊只读派生，绝不复制正文。
   const freeMod = require('../free/board.js');
+  // 家庭亲子（md_family）：九格第 6 格的主功能（2026-11-16 由情绪觉察重构）。
+  // 成员档案 / 亲子时刻 / 成长足迹三段，全部本机，无联网、无评分。
+  const familyMod = require('../family/board.js');
   // 写作法体检：本地纯函数，只给定位与计数，不联网、不代写、不自动落库。
   const writingCheck = require('../writing/check.js');
   // 通用 store：normalize 幂等 + repo.set。新键必须显式包装进备份（见 exportBackup），
@@ -235,6 +240,9 @@ function bootCore() {
   const financeStore = makeDomainStore('md_finance', financeMod);
   // 自由记录：独立单键。长文正文不进 cells.free（当日日记 2000 字上限 + 每次全量写 record）。
   const freeStore = makeDomainStore('md_freewrite', freeMod);
+  // 家庭亲子：独立单键。成员档案与亲子时刻都不写日记的 cells.emotion——
+  // 那一格是「当天一句」，模块页才是结构化记录（与关系经营 / 梦想同一套分层）。
+  const familyStore = makeDomainStore('md_family', familyMod);
   // 本机时间源：日聚合 + 规则表，独立键（保留期与清空都能单独做）
   const worktimeStore = makeDomainStore('md_worktime', worktimeMod);
   // 首页天气：只存偏好（开关 / 模式 / 城市 / 坐标），缓存留在内存里。
@@ -248,6 +256,15 @@ function bootCore() {
   function isoDayNow() {
     const d = new Date();
     const p = function (n) { return n < 10 ? '0' + n : String(n); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  // 时间戳 → 本地日：闪念有 date 字段，长文只有 createdAt / updatedAt。
+  // 九格第 9 格要按「天」看，所以必须在主进程按本地日归集，渲染层不自己算。
+  function isoDayOf(ts) {
+    const n = Number(ts) || 0;
+    if (!n) return '';
+    const d = new Date(n);
+    const p = function (x) { return x < 10 ? '0' + x : String(x); };
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
 
@@ -326,8 +343,12 @@ function bootCore() {
     }
   };
 
-  // V2.14：主题书单权威源已迁到 md_reading.books（themeId 非空的记录）。
-  // themeBooksFlat() 保留为 md_growth 旧数据的只读派生，仅供一次性导入与向后兼容。
+  // V2.14：主题书单权威源在 md_reading.books（themeId 非空的记录）。
+  // 这个函数**不是**给视图取数用的——它只从 md_growth 读旧书单，用于两件事：
+  //   ① reading.importGrowthThemes 的一次性迁移（旧数据原样保留、可重复调用）；
+  //   ② reading.growthAudit 的迁移核对（哪几本还没迁进来）。
+  // 曾有 6 处把这个返回值当「主题书单」塞给视图，造成同一份书单三处说法不一；
+  // P0-1 已把这些透传全部删掉，只留上面两条只读用途（view:check 仍钉着本函数存在）。
   function themeBooksFlat() {
     const g = growthStore.read();
     const out = [];
@@ -427,6 +448,17 @@ function bootCore() {
       return gtdStore.mutate(function (s) { return gtd.clarify(s, id, status, patch || {}); });
     },
     'gtd.board': function (nowDate) { return gtd.board(gtdStore.read(), nowDate); },
+    // 九格「事项」回写用：gtd.board 的 done 组只留最近 7 天，这里直接读原始任务，
+    // 否则一周后原格里的「已完成」会被误清掉。只读、带前缀过滤，不暴露整张清单。
+    'gtd.refs': function (prefix) {
+      const s = gtdStore.read();
+      const p = String(prefix || 'g9|');
+      return (s.tasks || []).filter(function (t) {
+        return t && typeof t.source === 'string' && t.source.indexOf(p) === 0;
+      }).map(function (t) {
+        return { id: t.id, source: t.source, status: t.status, title: t.title, doneAt: t.doneAt || 0 };
+      }).slice(0, 1000);
+    },
     // ---- 今日六点：只存指针，跨天不结转 ----
     'gtd.focus': function (nowDate) { return gtd.focusOf(gtdStore.read(), nowDate); },
     'gtd.focusCandidates': function (nowDate) { return gtd.focusCandidates(gtdStore.read(), nowDate); },
@@ -782,6 +814,11 @@ function bootCore() {
           searchMod.parseLinks(text).forEach(function (l) {
             out.push({ date: r.date, cell: cell, raw: l.raw, target: l.target, type: l.type });
           });
+          // P0-3 反查：回写行尾的〔rd:<noteId>〕也是一种内链——
+          // 从日记这一侧能点回图书馆那条笔记，才算「关联是数据，不是一句给人看的文字」。
+          readingMod.refIdsIn(text).forEach(function (id) {
+            out.push({ date: r.date, cell: cell, raw: '〔rd:' + id + '〕', target: id, type: 'reading' });
+          });
         });
       });
       return out;
@@ -920,7 +957,7 @@ function bootCore() {
     'reading.addFiles': function (paths, themeId) {
       const list = Array.isArray(paths) ? paths : [];
       const tid = String(themeId || '');
-      let added = 0, skipped = 0;
+      let added = 0, skipped = 0, relinked = 0;
       const errors = [];
       list.slice(0, 20).forEach(function (raw) {
         const p = String(raw || '').trim();
@@ -932,6 +969,23 @@ function bootCore() {
         if (st.size > readingEpub.MAX_FILE_BYTES) { errors.push('超过 100MB：' + p); return; }
         let s = readingStore.read();
         if (readingMod.hasPath(s, p)) { skipped += 1; return; }
+        const fp = readingFp.fingerprintSafe(p);
+        // P0-2：先按内容指纹认书，再按路径去重。
+        // 指纹命中 = 同一本书被改名或搬到别处，**不是**新书：
+        //   旧路径还在 → 确实是重复文件，跳过；
+        //   旧路径没了 → 就地重新关联（relinkBook 保持 bookId 不变），
+        //                笔记 / 章节 / 书签 / 按书筛选全部原样跟着回来。
+        const same = fp ? readingMod.bookByFingerprint(s, fp) : null;
+        if (same) {
+          if (same.filePath && fs.existsSync(same.filePath)) { skipped += 1; return; }
+          const ext = readingEpub.extOf(p);
+          readingStore.write(readingMod.relinkBook(s, same.id, {
+            filePath: p, fileExt: ext, fileSize: st.size, fingerprint: fp,
+            format: ext.toUpperCase()
+          }));
+          relinked += 1;
+          return;
+        }
         const ext = readingEpub.extOf(p);
         let meta = null;
         try { meta = readingEpub.inspect(p); } catch (_) { meta = null; }
@@ -948,14 +1002,42 @@ function bootCore() {
         }
         s = readingMod.addBook(s, {
           id: id, themeId: tid, title: title, author: author,
-          filePath: p, fileExt: ext, fileSize: st.size,
+          filePath: p, fileExt: ext, fileSize: st.size, fingerprint: fp,
           format: ext.toUpperCase(), coverId: coverId, source: 'file',
           total: 100, unit: '章', status: 'todo', createdAt: Date.now()
         });
         readingStore.write(s);
         added += 1;
       });
-      return { added: added, skipped: skipped, errors: errors };
+      return { added: added, skipped: skipped, relinked: relinked, errors: errors };
+    },
+    // 重新关联（P0-2）：书换了位置，id 不动。
+    // 三道校验都在主进程做——领域层不读盘，渲染层拿不到 fs：
+    //   ① 文件必须真的存在且是文件；② 扩展名必须是支持的那几种；
+    //   ③ 若这本已有指纹，新文件的指纹必须一致（否则那是另一本书，应该走「添加」而不是「重新关联」）。
+    // 大小不一致但指纹一致是允许的（同一次下载多带了附录），只更新 size。
+    'reading.relinkBook': function (id, newPath) {
+      const key = String(id || '');
+      const p = String(newPath || '').trim();
+      const s = readingStore.read();
+      const b = s.books.filter(function (x) { return x.id === key; })[0];
+      if (!b) return { ok: false, code: 'NO_BOOK', reason: '书架上找不到这本书' };
+      if (!p) return { ok: false, code: 'NO_PATH', reason: '没有选择文件' };
+      let st;
+      try { st = fs.statSync(p); } catch (_) { return { ok: false, code: 'MISSING', reason: '这个文件不存在：' + p }; }
+      if (!st.isFile()) return { ok: false, code: 'NOT_FILE', reason: '选中的不是文件' };
+      if (!readingEpub.isAllowed(p)) return { ok: false, code: 'EXT', reason: '格式不支持（EPUB / PDF / TXT / MD / MOBI / AZW3）' };
+      if (st.size > readingEpub.MAX_FILE_BYTES) return { ok: false, code: 'TOO_BIG', reason: '超过 100MB' };
+      const fp = readingFp.fingerprintSafe(p);
+      if (b.fingerprint && fp && b.fingerprint !== fp) {
+        return { ok: false, code: 'NOT_SAME', reason: '这个文件和原来那本内容不一致，像是另一本书——请用「选择电子书」添加' };
+      }
+      const ext = readingEpub.extOf(p);
+      const next = readingMod.relinkBook(s, key, {
+        filePath: p, fileExt: ext, fileSize: st.size, fingerprint: fp, format: ext.toUpperCase()
+      });
+      readingStore.write(next);
+      return { ok: true, id: key, filePath: p, fingerprint: fp || b.fingerprint || '', changedSize: st.size !== b.fileSize };
     },
     // 封面：优先用书里自带的那张图；没有才让渲染层回落到首字 / 渐变色。
     // 老书在旧版解析下可能没抽出封面（500KB 上限 / 只认 meta），这里按需补抽一次并落盘，
@@ -999,8 +1081,9 @@ function bootCore() {
       const todayStr = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
       const s = readingStore.read();
       const b = s.books.filter(function (x) { return x.id === bookId; })[0];
-      const theme = b ? null : themeBooksFlat().filter(function (x) { return x.bookId === bookId; })[0];
-      if (!b && !theme) return { ok: false, reason: '书架上找不到这本书', today: todayStr };
+      // P0-1：不再回落到 md_growth 旧书单。旧条目本来就没有 filePath，
+      // 回落到那里只会开出一个「没有文件」的阅读窗；不如直说该先迁移。
+      if (!b) return { ok: false, reason: '书架上找不到这本书（学习成长里的旧书单请先导入图书馆）', today: todayStr };
       // V2.14：主题书已在 books 表里（themeId 非空），和休闲书走同一套 filePath 链路；
       // mode 由 themeId 决定，笔记落库时自动带 themeId 归到该主题下。
       const book = b ? {
@@ -1077,8 +1160,9 @@ function bootCore() {
       return { ok: true, done: after ? after.done : target, total: after ? after.total : b.total, status: after ? after.status : b.status };
     },
     'reading.read': function () { return readingStore.read(); },
+    // P0-1：不再把 md_growth 的旧书单透传进来（board() 也只有一个参数了）
     'reading.board': function () {
-      const b = readingMod.board(readingStore.read(), themeBooksFlat());
+      const b = readingMod.board(readingStore.read());
       // 文件失效 / 大小是派生值，不落库：每次读 board 现算，文件移走立刻标灰。
       // V3.13：主题分组改由领域层派生（与书架同一口径：进度 / 状态 / 笔记数都齐），
       // 这里只补文件侧的两个派生值，三处（全部 / 书架 / 主题行）一视同仁。
@@ -1099,9 +1183,131 @@ function bootCore() {
       return b;
     },
     'reading.notes': function (opts) { return readingMod.notesQuery(readingStore.read(), opts || {}); },
-    // 主题阅读书单：**只读派生自 md_growth 的 themes[].books**（不复制、不落第二份）。
-    // 注意：reading.addBook 带 themeId 时写的是 md_reading.books，不会被这里列出（见 R-24 已知双源）。
-    'reading.themeBooks': function () { return themeBooksFlat(); },
+    // 旧书单迁移核对（P0-1）：只读比对，告诉用户「学习成长里那 N 本还有几本没进图书馆」。
+    // 旧书单本身不再进任何视图——它只剩这一个用途和一个迁移入口（reading.importGrowthThemes）。
+    'reading.growthAudit': function () {
+      return readingMod.growthAudit(readingStore.read(), themeBooksFlat());
+    },
+    // 书库体检（P0-4）：结构断链 + 指纹重复 + 同名异路径，只报告不自动改数据。
+    // 文件在不在要读盘，所以「有没有关联文件」这一项由主进程补，不塞进领域层。
+    'reading.audit': function () {
+      const s = readingStore.read();
+      const report = readingMod.audit(s);
+      const missing = [];
+      let noFp = 0;
+      s.books.forEach(function (b) {
+        if (!b.filePath) return;
+        if (!fs.existsSync(b.filePath)) missing.push({ id: b.id, title: b.title, filePath: b.filePath });
+        // 「这本有没有身份」也是派生值：老书在加指纹之前就登记了，得让用户看见还剩几本没指纹
+        if (!b.fingerprint) noFp += 1;
+      });
+      report.missingFiles = missing;
+      report.counts.missingFiles = missing.length;
+      report.counts.booksNoFingerprint = noFp;
+      return report;
+    },
+    // 一键修复：只清「指向不存在的东西」的那一个字段，不删任何书 / 笔记。
+    // 返回的 changes 是撤销凭据，界面点「撤销本次修复」就把它原样传回 restore。
+    'reading.repairDangling': function () {
+      const out = readingMod.repairDangling(readingStore.read());
+      if (out.fixed) readingStore.write(out.state);
+      return { fixed: out.fixed, changes: out.changes };
+    },
+    'reading.restoreDangling': function (changes) {
+      const next = readingMod.restoreDangling(readingStore.read(), changes || []);
+      readingStore.write(next);
+      return { restored: Array.isArray(changes) ? changes.length : 0 };
+    },
+    // 检索合流（P1-1）：把书库摊成可检索行，按关键词分组回给主界面。
+    // 与 diary 检索共用一套匹配口径（同一个 query.js），两处结果不会一个会搜一个不会。
+    'search.library': function (kw, mode) {
+      const rows = readingMod.searchIndex(readingStore.read());
+      const hits = String(mode) === 'pinyin'
+        ? searchMod.indexPinyin(rows, String(kw || ''))
+        : searchMod.indexSearch(rows, String(kw || ''));
+      const out = { books: [], notes: [], themes: [], total: hits.length };
+      hits.forEach(function (r) {
+        if (r.type === 'book') out.books.push(r);
+        else if (r.type === 'theme') out.themes.push(r);
+        else if (out.notes.length < 50) out.notes.push(r);
+        else out.notesMore = (out.notesMore || 0) + 1;
+      });
+      return out;
+    },
+    // 反向关联（P1-2）：只读派生。一本书 / 一条笔记后来被谁用到——日记里哪几行、生成了哪几条任务。
+    // 零落库：每次都现算，改了日记右栏立刻跟着变。
+    'reading.refs': function (bookId, noteId) {
+      const s = readingStore.read();
+      const bid = String(bookId || '');
+      const nid = String(noteId || '');
+      const notes = nid
+        ? s.notes.filter(function (n) { return n.id === nid; })
+        : s.notes.filter(function (n) { return bid && n.bookId === bid; });
+      const noteIds = {};
+      notes.forEach(function (n) { noteIds[n.id] = true; });
+      const book = bid ? s.books.filter(function (b) { return b.id === bid; })[0] : null;
+      const title = book ? book.title : (notes[0] ? notes[0].bookTitle : '');
+      const res = diary.all();
+      const diaryRows = [];
+      ((res && res.data) || []).forEach(function (r) {
+        const cells = (r && r.cells) || {};
+        Object.keys(cells).forEach(function (cell) {
+          const text = typeof cells[cell] === 'string' ? cells[cell] : '';
+          if (!text) return;
+          const lines = text.split('\n');
+          for (let i = 0; i < lines.length; i += 1) {
+            const line = lines[i];
+            const ids = readingMod.refIdsIn(line);
+            const byMark = ids.some(function (id) { return noteIds[id]; });
+            // 没有标记的老回写行（加标记之前写的）只能按书名认：这一条是给老数据留的桥
+            const byTitle = !nid && title && line.indexOf('《' + title + '》') >= 0 && line.indexOf('【读书·') >= 0;
+            if (!byMark && !byTitle) continue;
+            diaryRows.push({
+              date: r.date, cell: cell,
+              text: readingMod.stripRefMarks(line).slice(0, 200),
+              noteId: ids.filter(function (id) { return noteIds[id]; })[0] || ''
+            });
+            if (diaryRows.length >= 30) return;
+          }
+        });
+      });
+      const tasks = ((gtdStore.read() || {}).tasks || []).filter(function (t) {
+        const src = String((t && t.source) || '');
+        return src.indexOf('rd:') === 0 && noteIds[src.slice(3)];
+      }).map(function (t) {
+        return { id: t.id, title: t.title, status: t.status, doneAt: t.doneAt || 0 };
+      });
+      return {
+        bookId: bid, noteId: nid, title: title,
+        noteCount: notes.length,
+        theme: book && book.themeId ? (s.themes.filter(function (t) { return t.id === book.themeId; })[0] || null) : null,
+        diary: diaryRows, tasks: tasks
+      };
+    },
+    // #行动 落地（P1-3）：照 fl: 闪念→收件箱那条幂等先例，前缀换 rd:。
+    // 重复点不叠加（按 source 判重），删笔记时连带清掉未完成的那条。
+    'reading.pushAction': function (noteId) {
+      const id = String(noteId || '');
+      const s = readingStore.read();
+      const n = s.notes.filter(function (x) { return x.id === id; })[0];
+      if (!n) return { ok: false, reason: '找不到这条笔记' };
+      const source = ('rd:' + id).slice(0, 32);
+      const cur = gtdStore.read();
+      const exists = (cur.tasks || []).filter(function (t) { return t && t.source === source; })[0];
+      if (exists) return { ok: true, duplicated: true, taskId: exists.id, status: exists.status };
+      const title = String(n.text || n.quote || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+        || ('读《' + (n.bookTitle || '这本书') + '》');
+      gtdStore.mutate(function (st) {
+        return gtd.addTask(st, {
+          title: title, status: 'inbox', source: source,
+          note: ('《' + (n.bookTitle || '') + '》' + (n.page > 0 ? ' p.' + n.page : '')).slice(0, 120)
+        });
+      });
+      const after = (gtdStore.read().tasks || []).filter(function (t) { return t && t.source === source; })[0];
+      return { ok: true, duplicated: false, taskId: after ? after.id : '' };
+    },
+    // 再曝光（P1-4）：最近一周摘了几条、哪些在读的书 30 天没碰。只读，点行进图书馆。
+    'reading.resurface': function (at) { return readingMod.resurface(readingStore.read(), Number(at) || 0); },
     'reading.addBook': function (patch) {
       return readingStore.mutate(function (s) { return readingMod.addBook(s, patch || {}); });
     },
@@ -1252,7 +1458,24 @@ function bootCore() {
       return readingStore.mutate(function (s) { return readingMod.updateNote(s, id, patch || {}); });
     },
     'reading.removeNote': function (id) {
-      return readingStore.mutate(function (s) { return readingMod.removeNote(s, id); });
+      const key = String(id || '');
+      const out = readingStore.mutate(function (s) { return readingMod.removeNote(s, key); });
+      // P1-3：笔记删了，它生成的任务不能留在收件箱里变成孤儿。
+      // 只清「未完成」的那条：已完成的是既成事实（你确实做过），不该因为删笔记就消失。
+      try {
+        const source = ('rd:' + key).slice(0, 32);
+        const hit = ((gtdStore.read() || {}).tasks || []).filter(function (t) {
+          return t && t.source === source && t.status !== 'done';
+        });
+        if (hit.length) {
+          gtdStore.mutate(function (st) {
+            let next = st;
+            hit.forEach(function (t) { next = gtd.removeTask(next, t.id); });
+            return next;
+          });
+        }
+      } catch (_) { /* 清理失败不影响删笔记本身 */ }
+      return out;
     },
     'reading.markPushed': function (id, cell, at) {
       return readingStore.mutate(function (s) { return readingMod.markPushed(s, id, cell, at || 0); });
@@ -1347,7 +1570,86 @@ function bootCore() {
     },
     'reading.diaryLine': function (note) { return readingMod.noteToDiaryLine(note || {}); },
     'reading.exportMd': function (bookId) {
-      return readingMod.exportMarkdown(readingStore.read(), themeBooksFlat(), bookId || '');
+      return readingMod.exportMarkdown(readingStore.read(), bookId || '');
+    },
+    // ---- P2-1 虚拟书架：多值标签（规则集合在 board().shelves 里派生，不落库）----
+    'reading.setBookTags': function (id, tags) {
+      return readingStore.mutate(function (s) { return readingMod.setBookTags(s, id, tags); });
+    },
+    'reading.addBookTag': function (id, tag) {
+      return readingStore.mutate(function (s) { return readingMod.addBookTag(s, id, tag); });
+    },
+    'reading.removeBookTag': function (id, tag) {
+      return readingStore.mutate(function (s) { return readingMod.removeBookTag(s, id, tag); });
+    },
+    // ---- P2-2 书目清单：CSV / JSON / OPDS，只含元数据与路径 ----
+    // 返回文本由渲染层走 v1/file:save 落盘——不另开一条写文件的路，和导出笔记/导出日记同一条。
+    'reading.exportList': function (format) {
+      return readingMod.exportList(readingStore.read(), format || 'csv');
+    },
+    // ---- P2-4 书库根目录 ----
+    // 选目录走主进程 dialog：渲染层拿不到绝对路径，也不该拿。
+    'reading.pickRoot': function () {
+      // E2E 无法点击原生模态框：PROBE 下直接当作「用户取消」，不阻塞自动化
+      if (PROBE) return { ok: false, canceled: true };
+      const picked = dialog.showOpenDialogSync(mainWindow, {
+        title: '选择书库根目录（电子书都放在这个目录下）',
+        properties: ['openDirectory']
+      });
+      if (!picked || !picked.length) return { ok: false, canceled: true };
+      return { ok: true, path: picked[0] };
+    },
+    'reading.addRoot': function (patch) {
+      const p = patch || {};
+      const dir = String(p.path || '');
+      if (!dir) return { ok: false, reason: '没有选择目录' };
+      try {
+        if (!fs.statSync(dir).isDirectory()) return { ok: false, reason: '选中的不是目录' };
+      } catch (_) { return { ok: false, reason: '这个目录不存在：' + dir }; }
+      const before = readingStore.read().roots.length;
+      const next = readingStore.mutate(function (s) { return readingMod.addRoot(s, { path: dir, label: p.label }); });
+      if (next.roots.length === before) return { ok: false, reason: '这个目录已经登记过，或已达到 ' + readingMod.MAX_ROOTS + ' 个上限' };
+      const hit = next.roots.filter(function (r) { return r.path === dir; })[0];
+      // 登记后顺手报一句「有多少本书挂到了这个根下」——这是用户唯一能验证「有没有生效」的数字
+      const linked = next.books.filter(function (b) { return hit && b.rootId === hit.id; }).length;
+      return { ok: true, rootId: hit ? hit.id : '', linked: linked };
+    },
+    // 换盘 / 改目录：只改一条根，所有挂在其下的书按 relPath 重算路径。
+    // 校验在落库之前做：目录不存在就不改（否则整库路径会一起指到空气里，且很难回滚）。
+    'reading.relocateRoot': function (id, newPath) {
+      const key = String(id || '');
+      const dir = String(newPath || '').replace(/[\\/]+$/, '');
+      const st = readingStore.read();
+      const root = (st.roots || []).filter(function (r) { return r.id === key; })[0];
+      if (!root) return { ok: false, reason: '这个书库根已经不在了' };
+      if (!dir) return { ok: false, reason: '没有选择目录' };
+      try {
+        if (!fs.statSync(dir).isDirectory()) return { ok: false, reason: '选中的不是目录' };
+      } catch (_) { return { ok: false, reason: '这个目录不存在：' + dir }; }
+      const next = readingStore.mutate(function (s) { return readingMod.relocateRoot(s, key, dir); });
+      const books = next.books.filter(function (b) { return b.rootId === key; });
+      const missing = books.filter(function (b) { return !b.filePath || !fs.existsSync(b.filePath); }).length;
+      return { ok: true, moved: books.length, missing: missing };
+    },
+    'reading.updateRoot': function (id, patch) {
+      return readingStore.mutate(function (s) { return readingMod.updateRoot(s, id, patch || {}); });
+    },
+    'reading.removeRoot': function (id) {
+      return readingStore.mutate(function (s) { return readingMod.removeRoot(s, String(id || '')); });
+    },
+    // 只读：某个根下现在有多少本、多少本找不到文件（换机后第一眼要看的就是这两个数）
+    'reading.roots': function () {
+      const s = readingStore.read();
+      return (s.roots || []).map(function (r) {
+        const books = s.books.filter(function (b) { return b.rootId === r.id; });
+        let missing = 0;
+        books.forEach(function (b) { if (!b.filePath || !fs.existsSync(b.filePath)) missing += 1; });
+        return {
+          id: r.id, label: r.label, path: r.path, createdAt: r.createdAt,
+          books: books.length, missing: missing,
+          exists: (function () { try { return fs.statSync(r.path).isDirectory(); } catch (_) { return false; } })()
+        };
+      });
     },
 
     // ---- 家庭账本（md_finance）：预算信封 + 条件→动作规则 + CSV 导入 ----
@@ -1711,6 +2013,39 @@ function bootCore() {
 
     // ---- 自由记录（md_freewrite）：闪念 / 长文 / 胶囊只读派生 ----
     'free.board': function () { return freeStore.read(); },
+    // 九格第 9 格只读派生：某一天的闪念 + 长文 + 胶囊（只给条数，不给封存正文）。
+    // 三合一是唯一写入口，九格这一格只回答「今天在这里记了什么」，
+    // 所以不把 cells.free 混进来——那是日记正文，由渲染层自己从 record 读。
+    'free.day': function (date) {
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? String(date) : isoDayNow();
+      const s = freeStore.read();
+      const flashes = (Array.isArray(s.flashes) ? s.flashes : []).filter(function (f) {
+        return String(f.date || isoDayOf(f.createdAt)) === day;
+      });
+      const docs = (Array.isArray(s.docs) ? s.docs : []).filter(function (d) {
+        return isoDayOf(d.updatedAt || d.createdAt) === day;
+      }).map(function (d) {
+        return {
+          id: d.id, title: d.title,
+          chars: String(d.body || '').length,
+          updatedAt: Number(d.updatedAt) || 0
+        };
+      });
+      let capsules = 0;
+      try {
+        const res = diary.listCapsules();
+        const list = Array.isArray(res && res.data) ? res.data : [];
+        capsules = list.filter(function (c) {
+          return String((c && c.writtenAt) || '').slice(0, 10) === day;
+        }).length;
+      } catch (e) { capsules = 0; }
+      return {
+        date: day,
+        flashes: flashes.slice(0, 20),
+        docs: docs.slice(0, 20),
+        counts: { flash: flashes.length, doc: docs.length, capsule: capsules }
+      };
+    },
     // 胶囊信息收录：只派生元信息。封存中的信连正文都不往渲染层送，
     // 避免「界面不显示但 IPC 里已经有了」的假保密（沿用 CapsuleContext 老口径）。
     'free.capsuleIndex': function () {
@@ -1741,6 +2076,18 @@ function bootCore() {
       if (!added.length) return { item: null, synced: false, reason: 'EMPTY_OR_FULL' };
       const ok = syncFlash(added[0]);
       return { item: freeMod.findFlash(freeStore.read(), added[0].id), synced: ok };
+    },
+    // 只留原文的闪念：速记的「自由记录」去处、九格第 9 格的一句话、任务转发。
+    // 与 flashAdd 的唯一差别是不生成收件箱任务——这些是当日记号，不是待办。
+    'free.noteAdd': function (text, date) {
+      const before = {};
+      freeStore.read().flashes.forEach(function (f) { before[f.id] = true; });
+      const state = freeStore.mutate(function (s) {
+        return freeMod.addNote(s, { text: text, date: date });
+      });
+      const added = state.flashes.filter(function (f) { return !before[f.id]; });
+      if (!added.length) return { item: null, synced: false, reason: 'EMPTY_OR_FULL' };
+      return { item: freeMod.findFlash(freeStore.read(), added[0].id), synced: false };
     },
     'free.flashRetry': function (id) {
       const f = freeMod.findFlash(freeStore.read(), id);
@@ -1784,6 +2131,45 @@ function bootCore() {
     'free.prefs': function (patch) {
       freeStore.mutate(function (s) { return freeMod.setPrefs(s, patch || {}); });
       return freeStore.read().prefs;
+    },
+
+    // ---- 家庭亲子（md_family）：成员档案 / 亲子时刻 / 成长足迹 ----
+    // 写路由只回原始状态，派生（本周陪伴 / 覆盖几人 / 距上次几天）统一走 family.board，
+    // 与关系经营「派生值读时算」同一口径——界面每次写完重取一次，不在这里各算一份。
+    'family.meta': function () { return familyMod.meta(); },
+    'family.board': function (today) { return familyMod.board(familyStore.read(), today); },
+    'family.addMember': function (patch) {
+      familyStore.mutate(function (s) { return familyMod.addMember(s, patch || {}); });
+      return familyStore.read();
+    },
+    'family.updateMember': function (id, patch) {
+      familyStore.mutate(function (s) { return familyMod.updateMember(s, id, patch || {}); });
+      return familyStore.read();
+    },
+    // 删成员只删档案，历史时刻保留（归属人显示为空，但那天发生过什么不会被抹掉）
+    'family.removeMember': function (id) {
+      familyStore.mutate(function (s) { return familyMod.removeMember(s, id); });
+      return familyStore.read();
+    },
+    'family.addMoment': function (patch) {
+      familyStore.mutate(function (s) { return familyMod.addMoment(s, patch || {}); });
+      return familyStore.read();
+    },
+    'family.removeMoment': function (id) {
+      familyStore.mutate(function (s) { return familyMod.removeMoment(s, id); });
+      return familyStore.read();
+    },
+    'family.addMilestone': function (patch) {
+      familyStore.mutate(function (s) { return familyMod.addMilestone(s, patch || {}); });
+      return familyStore.read();
+    },
+    'family.removeMilestone': function (id) {
+      familyStore.mutate(function (s) { return familyMod.removeMilestone(s, id); });
+      return familyStore.read();
+    },
+    'family.prefs': function (patch) {
+      familyStore.mutate(function (s) { return familyMod.setPrefs(s, patch || {}); });
+      return familyStore.read().prefs;
     },
     // 写作法体检：本地纯函数，只给定位与计数，不给改写文本、不联网、不落库。
     'writing.check': function (text) { return writingCheck.analyze(text); },
@@ -1854,6 +2240,9 @@ function bootCore() {
       // 自由记录：闪念 / 长文 / 偏好全量带走。胶囊不在这里——它随日记备份走，不复制。
       obj.freewrite = freeStore.read();
       obj.freewriteVersion = 1;
+      // 家庭亲子：成员 / 时刻 / 足迹三段全量带走，换机后不用重录生日与学校
+      obj.family = familyStore.read();
+      obj.familyVersion = 1;
       // 本机时间源：规则 + 日聚合。**不含任何窗口标题**（契约里就没有这个字段）
       obj.worktime = worktimeStore.read();
       obj.worktimeVersion = 1;
@@ -1942,6 +2331,7 @@ function bootCore() {
       ['reading', readingStore, readingMod],
       ['finance', financeStore, financeMod],
       ['freewrite', freeStore, freeMod],
+      ['family', familyStore, familyMod],
       ['worktime', worktimeStore, worktimeMod]
     ];
     V2_SECTIONS.forEach(function (entry) {
@@ -1956,6 +2346,10 @@ function bootCore() {
           const next = merged && merged.state ? merged.state : merged;
           store.write(next);
           report[key + 'Imported'] = merged && typeof merged.added === 'number' ? merged.added : 0;
+          // P0-3：导入不校验引用，就会把「指向不存在的书」的笔记一起搬进来，
+          // 表现为「笔记都在、按书筛却一条都没有」。这里把体检结论一并回给界面，
+          // 但不删任何一条——脏数据要不要清，是用户点一次「修复断链」的事。
+          if (merged && merged.report) report[key + 'Report'] = merged.report;
         } else {
           // recur 没有 mergeSection：只把对侧本机没有的分钟日志补进来，
           // 重复任务是派生数据，不跨机合并（否则会造出两份真相）。
@@ -2184,9 +2578,9 @@ function bootCore() {
     }
     const s = readingStore.read();
     const b = s.books.filter(function (x) { return x.id === bookId; })[0];
-    const theme = b ? null : themeBooksFlat().filter(function (x) { return x.bookId === bookId; })[0];
-    if (!b && !theme) return { ok: false, reason: '书架上找不到这本书' };
-    const title = b ? b.title : theme.title;
+    // P0-1：旧 growth 书单不再能开阅读窗（它本来就没有 filePath，开出来也是空白窗）
+    if (!b) return { ok: false, reason: '书架上找不到这本书（旧书单请先在图书馆里导入）' };
+    const title = b.title;
     const win = new BrowserWindow({
       width: 1360,
       height: 880,

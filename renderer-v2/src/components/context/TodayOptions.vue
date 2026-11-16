@@ -9,10 +9,12 @@ import TodayExtras from '../TodayExtras.vue';
 import ModulePanels from '../ModulePanels.vue';
 import type { DiaryRecord } from '../../types';
 
-defineProps<{ record: DiaryRecord }>();
+defineProps<{ record: DiaryRecord; tick?: number }>();
 const emit = defineEmits<{
   (e: 'save', record: DiaryRecord): void;
   (e: 'notify', text: string): void;
+  // 透传：这一卡里「不留正文、只写别的表」的动作（如一键留一句落自由记录）也要让外壳刷新
+  (e: 'changed'): void;
 }>();
 
 const tab = ref<'base' | 'quick'>('base');
@@ -42,8 +44,10 @@ const tab = ref<'base' | 'quick'>('base');
       v-if="tab === 'base'"
       flat
       :record="record"
+      :tick="tick"
       @save="emit('save', $event)"
       @notify="emit('notify', $event)"
+      @changed="emit('changed')"
     />
     <ModulePanels
       v-else

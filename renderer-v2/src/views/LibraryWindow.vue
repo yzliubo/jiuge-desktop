@@ -15,24 +15,39 @@ import type { DiaryRecord } from '../types';
 import { emptyRecord } from '../types';
 import { callDomain } from '../composables/useDomain';
 import { useTheme } from '../composables/useTheme';
-import { listDiaries, onDataChanged, openReader } from '../bridge';
+import { listDiaries, onDataChanged, openReader, pickBookFiles, saveExport } from '../bridge';
 import ReadingView from './ReadingView.vue';
 
 interface BookRow {
   id: string; title: string; author: string; format: string; fileExt: string;
   fileSizeText: string; pct: number; progressText: string; statusLabel: string;
   noteCount: number; status: string; themeId: string; filePath: string;
-  coverColor: string; favorite: boolean; group: string;
+  coverColor: string; favorite: boolean; group: string; fileMissing?: boolean;
+  tags?: string[]; rootId?: string; relPath?: string;
 }
 interface ThemeGroup { themeId: string; themeTitle: string; note: string; rows: BookRow[] }
+// P2-1 虚拟书架：规则集合。只有 id 列表，书本身还是 books 里那一份。
+interface ShelfRow { key: string; kind: string; label: string; count: number; ids: string[] }
+// P2-4 书库根：一本都不复制，只是「这些书都在这棵树下」的声明
+interface RootRow { id: string; label: string; path: string; books: number; missing: number; exists: boolean }
 interface BoardData {
   books: BookRow[]; leisureBooks?: BookRow[]; themeGroups: ThemeGroup[];
   groups: Array<{ name: string; count: number }>; favoriteCount: number;
+  shelves?: ShelfRow[];
   recent: Array<{ id: string; bookTitle: string; quote: string; text: string; createdAt: number }>;
   stats: { books: number; themeBooks?: number; notes: number; highlights: number; ideas: number; pushed: number; thisMonth: number; tagCount: number };
 }
-type ScopeKind = 'leisure' | 'theme' | 'notes';
-interface Scope { kind: ScopeKind; group?: string; themeId?: string }
+// P1-2 反向关联卡：这本书后来被谁用到（日记里的回写行 / 由它生成的任务）。
+// 全部由主进程现算，read-only，一次点击取一次；不落库、不缓存。
+interface RefRow { date: string; cell: string; text: string; noteId: string }
+interface RefTask { id: string; title: string; status: string }
+interface Refs {
+  bookId: string; title: string; noteCount: number;
+  theme: { id: string; title: string } | null;
+  diary: RefRow[]; tasks: RefTask[];
+}
+type ScopeKind = 'leisure' | 'theme' | 'notes' | 'shelf';
+interface Scope { kind: ScopeKind; group?: string; themeId?: string; shelfKey?: string }
 
 const props = defineProps<{ today: string }>();
 
@@ -53,6 +68,7 @@ const dataTick = ref(0);
 const thead = ref('');               // 中栏顶部一句反馈，和主窗的 notify 同一形态
 const showLeisure = ref(true);
 const showTheme = ref(true);
+const showShelf = ref(true);
 const openTheme = ref<Record<string, boolean>>({});
 
 const navW = ref(252);
@@ -73,12 +89,31 @@ const themeBookCount = computed(() => themeGroups.value.reduce((n, g) => n + g.r
 const groups = computed(() => board.value?.groups || []);
 const ungrouped = computed(() => leisureBooks.value.filter((b) => !b.group).length);
 const favoriteCount = computed(() => board.value?.favoriteCount || 0);
+// P2-1：虚拟书架（规则集合 + 标签集合）。规则由主进程派生，这里只负责画和筛。
+const shelves = computed<ShelfRow[]>(() => board.value?.shelves || []);
+const ruleShelves = computed(() => shelves.value.filter((s) => s.kind === 'rule'));
+const tagShelves = computed(() => shelves.value.filter((s) => s.kind === 'tag'));
+const roots = ref<RootRow[]>([]);
+const allBooks = computed<BookRow[]>(() => {
+  const bd = board.value;
+  if (!bd) return [];
+  const books = bd.books || leisureBooks.value;
+  return books;
+});
 
 // 「未分组」在库里不是一个名字而是一个空字符串：用一组独立常量把这个区别固定在两处
 const UNGROUPED = '\u0000none';
 const scopeBooks = computed<BookRow[]>(() => {
   const s = scope.value;
   if (s.kind === 'notes') return [];
+  // P2-1 虚拟书架：按规则集合给的 id 反查 books 里那一份，不复制记录
+  if (s.kind === 'shelf') {
+    const hit = shelves.value.filter((x) => x.key === s.shelfKey)[0];
+    if (!hit) return [];
+    const byId: Record<string, BookRow> = {};
+    allBooks.value.forEach((b) => { byId[b.id] = b; });
+    return hit.ids.map((id) => byId[id]).filter((b): b is BookRow => !!b);
+  }
   if (s.kind === 'theme') {
     if (!s.themeId) return themeGroups.value.reduce<BookRow[]>((a, g) => a.concat(g.rows), []);
     const hit = themeGroups.value.filter((g) => g.themeId === s.themeId)[0];
@@ -93,6 +128,10 @@ const scopeBooks = computed<BookRow[]>(() => {
 const scopeLabel = computed(() => {
   const s = scope.value;
   if (s.kind === 'notes') return '读书笔记';
+  if (s.kind === 'shelf') {
+    const hit = shelves.value.filter((x) => x.key === s.shelfKey)[0];
+    return '虚拟书架：' + (hit ? hit.label : '已失效');
+  }
   if (s.kind === 'theme') {
     if (!s.themeId) return '主题阅读 · 全部主题';
     const hit = themeGroups.value.filter((g) => g.themeId === s.themeId)[0];
@@ -127,13 +166,37 @@ const picked = computed<BookRow | null>(() => {
 const recentNotes = computed(() => (board.value?.recent || []).slice(0, 6));
 
 const pickedCover = ref('');
+const pickedRefs = ref<Refs | null>(null);
+const relinking = ref(false);
 watch(pickedId, async (id) => {
   pickedCover.value = '';
+  pickedRefs.value = null;
   if (!id) return;
   // 封面只问主进程要 data URL：书内封面或豆瓣套用的那张，哪张先有就用哪张。
   // 取不到就退回渐变占位（同一本书在中栏看到的也是同一套色）。
   try { pickedCover.value = (await callDomain<string>('reading.cover', '', id)) || ''; } catch { pickedCover.value = ''; }
+  // P1-2：「它后来去了哪」——日记里哪几行是它回写的、生成了哪几条任务。
+  // 纯只读派生：改完日记回到这里点一下就能看见变化，因为它每次现算。
+  try { pickedRefs.value = await callDomain<Refs | null>('reading.refs', null, id, ''); } catch { pickedRefs.value = null; }
 });
+
+// P0-2：重新关联。旧做法是「移出 → 重新添加」，那会造新 bookId，
+// 笔记 / 章节 / 书签 / 按书筛选全静默失联。这里只换路径，id 不动。
+async function relinkPicked(): Promise<void> {
+  const b = picked.value;
+  if (!b || relinking.value) return;
+  relinking.value = true;
+  try {
+    const pickedFile = await pickBookFiles();
+    if (!pickedFile || pickedFile.canceled || !pickedFile.paths.length) return;
+    const r = await callDomain<{ ok: boolean; reason?: string } | null>('reading.relinkBook', null, b.id, pickedFile.paths[0]);
+    if (!r || !r.ok) { say((r && r.reason) || '重新关联失败'); return; }
+    await load();
+    say('已重新关联：书的 id 没变，' + (b.noteCount || 0) + ' 条笔记还在');
+  } finally {
+    relinking.value = false;
+  }
+}
 
 // 与书架占位封面同一套派生（书名哈希 → 同色系渐变）：不抽封面图，也不让右栏出现一块白板。
 // 一样是 84%→68% 的浅色渐变，所以文字必须走白字 + 阴影，和 .rd-card-initial 一致。
@@ -145,9 +208,92 @@ function coverHue(b: BookRow): string {
 
 function say(text: string): void { thead.value = text; }
 
+// ---- P2-1：书的标签（多值，与「分组」并存）----
+// 加标签不是「多一个字段」而是「多一摞书架」：board().shelves 里的 tag:xxx 立刻多一条。
+const tagInput = ref('');
+async function addTag(): Promise<void> {
+  const b = picked.value;
+  const t = tagInput.value.trim().replace(/^#+/, '');
+  if (!b || !t) return;
+  if ((b.tags || []).length >= 8) { say('一本书最多 8 个标签'); return; }
+  tagInput.value = '';
+  await callDomain<unknown>('reading.addBookTag', null, b.id, t);
+  await load();
+  say('已给《' + b.title + '》加上 #' + t + '，左栏多了一摞同名书架');
+}
+async function dropTag(t: string): Promise<void> {
+  const b = picked.value;
+  if (!b) return;
+  await callDomain<unknown>('reading.removeBookTag', null, b.id, t);
+  await load();
+}
+
+// ---- P2-2：书目清单导出（CSV / JSON / OPDS）----
+// 三种格式共用主进程现算的一张行表，落盘仍走 v1/file:save 这一条通道。
+const exporting = ref('');
+async function exportList(format: 'csv' | 'json' | 'opds'): Promise<void> {
+  if (exporting.value) return;
+  exporting.value = format;
+  try {
+    const out = await callDomain<{ text: string; ext: string; rows: number } | null>('reading.exportList', null, format);
+    if (!out) { say('导出失败'); return; }
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const receipt = await saveExport('九格书目-' + stamp + '.' + out.ext, out.text);
+    say(receipt && receipt.path
+      ? '已导出 ' + out.rows + ' 本书目：' + receipt.path
+      : '已取消导出');
+  } finally { exporting.value = ''; }
+}
+
+// ---- P2-4：书库根目录 ----
+// 「整库换机零手工」= 在这条列表上改一次路径，所有挂在其下的书跟着走。
+const rootBusy = ref('');
+async function loadRoots(): Promise<void> {
+  try { roots.value = await callDomain<RootRow[]>('reading.roots', []) || []; } catch { roots.value = []; }
+}
+async function addRootDir(): Promise<void> {
+  if (rootBusy.value) return;
+  rootBusy.value = 'add';
+  try {
+    const pickedDir = await callDomain<{ ok: boolean; path?: string; canceled?: boolean } | null>('reading.pickRoot', null);
+    if (!pickedDir || !pickedDir.ok || !pickedDir.path) return;
+    const r = await callDomain<{ ok: boolean; reason?: string; linked?: number } | null>(
+      'reading.addRoot', null, { path: pickedDir.path }
+    );
+    if (!r || !r.ok) { say((r && r.reason) || '登记书库根失败'); return; }
+    await loadRoots(); await load();
+    say('已登记书库根，' + (r.linked || 0) + ' 本书自动挂到它下面');
+  } finally { rootBusy.value = ''; }
+}
+async function relocateRootDir(r: RootRow): Promise<void> {
+  if (rootBusy.value) return;
+  rootBusy.value = r.id;
+  try {
+    const pickedDir = await callDomain<{ ok: boolean; path?: string } | null>('reading.pickRoot', null);
+    if (!pickedDir || !pickedDir.ok || !pickedDir.path) return;
+    const out = await callDomain<{ ok: boolean; reason?: string; moved?: number; missing?: number } | null>(
+      'reading.relocateRoot', null, r.id, pickedDir.path
+    );
+    if (!out || !out.ok) { say((out && out.reason) || '换目录失败'); return; }
+    await loadRoots(); await load();
+    say('书库根已指向新目录，' + (out.moved || 0) + ' 本书路径一起改完'
+      + (out.missing ? '；其中 ' + out.missing + ' 本在新目录里没找到' : ''));
+  } finally { rootBusy.value = ''; }
+}
+async function dropRoot(r: RootRow): Promise<void> {
+  if (rootBusy.value) return;
+  rootBusy.value = r.id;
+  try {
+    await callDomain<unknown>('reading.removeRoot', null, r.id);
+    await loadRoots(); await load();
+    say('已解除书库根「' + (r.label || r.path) + '」：书一本没删，只是不再跟着它搬');
+  } finally { rootBusy.value = ''; }
+}
+
 async function load(): Promise<void> {
   board.value = await callDomain<BoardData | null>('reading.board', null);
   dataTick.value += 1;
+  void loadRoots();
   // 中栏写笔记要拿「今天的日记」当底座：拿不到就退回空档，别拿 null 去写
   try {
     const res = await listDiaries({ pageSize: 500 });
@@ -169,6 +315,15 @@ function pickTheme(themeId: string): void {
 function pickNotes(): void {
   pickedId.value = '';
   scope.value = { kind: 'notes' };
+}
+// P2-1：点虚拟书架的一个集合 = 换一个范围。规则在主进程派生，这里只认 key。
+function pickShelf(key: string): void {
+  pickedId.value = '';
+  scope.value = { kind: 'shelf', shelfKey: key };
+}
+function isShelfScope(key: string): boolean {
+  const s = scope.value;
+  return s.kind === 'shelf' && s.shelfKey === key;
 }
 function toggleTheme(themeId: string): void {
   openTheme.value = { ...openTheme.value, [themeId]: !openTheme.value[themeId] };
@@ -342,6 +497,44 @@ onBeforeUnmount(() => { window.removeEventListener('library:refresh', onRefresh)
           </div>
         </div>
 
+        <!-- P2-1 虚拟书架：规则集合。不是文件夹，是「按规则筛出来的一摞」，
+             同一本书可以同时出现在「在读」和某个标签里——这正是它和分组的区别。 -->
+        <div class="lib-node" role="none">
+          <button
+            class="lib-row lib-root"
+            role="treeitem" :aria-expanded="showShelf"
+            @click="showShelf = true"
+          >
+            <span class="lib-caret" @click.stop="showShelf = !showShelf">{{ showShelf ? '▾' : '▸' }}</span>
+            <span class="lib-ico"><i class="lib-folder lib-folder-rule"></i></span>
+            <span class="lib-name">虚拟书架</span>
+            <span class="lib-count">{{ allBooks.length }}</span>
+          </button>
+          <div v-if="showShelf" class="lib-kids" role="group">
+            <button
+              v-for="s in ruleShelves" :key="s.key" class="lib-row lib-leaf"
+              :class="{ 'lib-row-on': isShelfScope(s.key), 'lib-row-dim': !s.count }"
+              role="treeitem" @click="pickShelf(s.key)"
+            >
+              <span class="lib-caret lib-caret-none" aria-hidden="true"></span>
+              <span class="lib-ico"><i class="lib-folder-open"></i></span>
+              <span class="lib-name">{{ s.label }}</span>
+              <span class="lib-count">{{ s.count }}</span>
+            </button>
+            <p v-if="tagShelves.length" class="lib-sub-head">按标签</p>
+            <button
+              v-for="s in tagShelves" :key="s.key" class="lib-row lib-leaf"
+              :class="{ 'lib-row-on': isShelfScope(s.key) }" role="treeitem" @click="pickShelf(s.key)"
+            >
+              <span class="lib-caret lib-caret-none" aria-hidden="true"></span>
+              <span class="lib-ico"><i class="lib-folder-open"></i></span>
+              <span class="lib-name">{{ s.label }}</span>
+              <span class="lib-count">{{ s.count }}</span>
+            </button>
+            <p v-if="!tagShelves.length" class="lib-empty">右栏给书加标签，这里就会多一摞</p>
+          </div>
+        </div>
+
         <!-- 读书笔记 -->
         <button
           class="lib-row lib-root lib-row-single" :class="{ 'lib-row-on': scope.kind === 'notes' }"
@@ -352,6 +545,39 @@ onBeforeUnmount(() => { window.removeEventListener('library:refresh', onRefresh)
           <span class="lib-name">读书笔记</span>
           <span class="lib-count">{{ board?.stats.notes || 0 }}</span>
         </button>
+      </div>
+
+      <!-- P2-4 书库根：一条声明管一片目录。换机器只改这一行，60 本书的路径一起改。
+           只列「有书挂着的根」和「已经找不到的根」，空根不占位置。 -->
+      <div class="lib-roots" aria-label="书库根目录">
+        <div class="lib-roots-head">
+          <h2>书库根</h2>
+          <button class="lib-mini" :disabled="!!rootBusy" @click="addRootDir">+ 登记目录</button>
+        </div>
+        <p v-if="!roots.length" class="lib-hint">
+          电子书放在固定的目录下？登记一次，以后整库搬机器只改这里一条路径。
+        </p>
+        <div v-for="r in roots" :key="r.id" class="lib-root-row">
+          <div class="lib-root-main">
+            <b :title="r.path">{{ r.label || r.path }}</b>
+            <span class="lib-root-meta">
+              {{ r.books }} 本<template v-if="r.missing"> · {{ r.missing }} 本找不到</template>
+              <template v-if="!r.exists"> · 目录不在</template>
+            </span>
+          </div>
+          <div class="lib-root-acts">
+            <button class="lib-mini" :disabled="!!rootBusy" @click="relocateRootDir(r)">换目录</button>
+            <button class="lib-mini" :disabled="!!rootBusy" @click="dropRoot(r)">解除</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- P2-2 书目清单：三种格式共用一张行表，落盘仍走唯一那条另存为 -->
+      <div class="lib-export" aria-label="导出书目清单">
+        <span class="lib-export-label">书目清单</span>
+        <button class="lib-mini" :disabled="!!exporting" @click="exportList('csv')">CSV</button>
+        <button class="lib-mini" :disabled="!!exporting" @click="exportList('json')">JSON</button>
+        <button class="lib-mini" :disabled="!!exporting" @click="exportList('opds')">OPDS</button>
       </div>
 
       <p class="lib-foot">点文件夹筛这一摞书；点书名看右栏，双击直接翻开。书架只认本机电子书。</p>
@@ -397,10 +623,60 @@ onBeforeUnmount(() => { window.removeEventListener('library:refresh', onRefresh)
         <div class="lib-kv"><span>笔记</span><b>{{ picked.noteCount }} 条</b></div>
         <p v-if="picked.filePath" class="lib-path" :title="picked.filePath">{{ picked.filePath }}</p>
         <div class="lib-detail-acts">
-          <button class="lib-mini lib-mini-main" :disabled="!picked.filePath" @click="openBook(picked)">翻开读</button>
+          <button class="lib-mini lib-mini-main" :disabled="!picked.filePath || picked.fileMissing" @click="openBook(picked)">翻开读</button>
+          <!-- P0-2：文件被移走时，这里换路径而不是「移出再添加」 -->
+          <button v-if="picked.fileMissing" class="lib-mini" :disabled="relinking" @click="relinkPicked">重新关联</button>
           <button class="lib-mini" @click="pickedId = ''">收起</button>
         </div>
-        <p v-if="!picked.filePath" class="lib-hint">这本没有电子书，只有笔记。</p>
+        <p v-if="picked.fileMissing" class="lib-hint">原文件不在这个位置了。点「重新关联」选它的新位置——书的 id 不变，笔记与书签都跟着回来。</p>
+        <p v-else-if="!picked.filePath" class="lib-hint">这本没有电子书，只有笔记。</p>
+
+        <!-- P2-1 标签：与「分组」并存。分组决定「放哪一摞」，标签决定「还能从哪些入口找到它」。 -->
+        <div class="lib-section lib-tags">
+          <h3>标签</h3>
+          <div class="lib-tag-row">
+            <span v-for="t in (picked.tags || [])" :key="t" class="lib-tag">
+              #{{ t }}
+              <button class="lib-tag-x" :aria-label="'去掉标签 ' + t" @click="dropTag(t)">×</button>
+            </span>
+            <span v-if="!(picked.tags || []).length" class="lib-hint">还没有标签。</span>
+          </div>
+          <div class="lib-tag-add">
+            <input
+              v-model="tagInput" class="lib-tag-input" type="text" maxlength="24"
+              placeholder="加个标签，回车" aria-label="给这本书加标签"
+              @keydown.enter.prevent="addTag"
+            />
+            <button class="lib-mini" :disabled="!tagInput.trim()" @click="addTag">加</button>
+          </div>
+          <p class="lib-hint">加完左栏「虚拟书架」下会多一摞同名书架，点它就能筛出同一标签的所有书。</p>
+        </div>
+
+        <!-- P2-4 书在哪：相对路径是「跟着书库根走」的那半边，换机器靠它 -->
+        <div v-if="picked.relPath" class="lib-kv lib-kv-rel">
+          <span>书库内位置</span><b :title="picked.relPath">{{ picked.relPath }}</b>
+        </div>
+
+        <!-- P1-2 反向关联卡：零落库、纯只读派生。
+             这一块回答的是「我读过的那句话，后来到底用上了没有」。 -->
+        <div v-if="pickedRefs" class="lib-section lib-refs">
+          <h3>它后来去了哪</h3>
+          <p class="lib-hint">
+            {{ pickedRefs.noteCount }} 条笔记
+            · 日记里回写 {{ pickedRefs.diary.length }} 次
+            · 生成 {{ pickedRefs.tasks.length }} 条任务<template v-if="pickedRefs.theme"> · 属于主题「{{ pickedRefs.theme.title }}」</template>
+          </p>
+          <div v-for="d in pickedRefs.diary.slice(0, 4)" :key="d.date + d.cell" class="lib-ref-row">
+            <span class="lib-ref-date">{{ d.date }}</span>
+            <span class="lib-ref-text">{{ d.text }}</span>
+          </div>
+          <p v-if="!pickedRefs.diary.length" class="lib-hint">还没有回写进九格。在阅读窗里点「→ 九格」会追加一行，这里就能看见。</p>
+          <div v-if="pickedRefs.tasks.length" class="lib-ref-tasks">
+            <span v-for="t in pickedRefs.tasks.slice(0, 4)" :key="t.id" class="lib-ref-task" :data-done="t.status === 'done' ? '1' : '0'">
+              {{ t.title }}<span v-if="t.status === 'done'"> · 已完成</span>
+            </span>
+          </div>
+        </div>
       </template>
 
       <template v-else>
@@ -523,6 +799,47 @@ onBeforeUnmount(() => { window.removeEventListener('library:refresh', onRefresh)
 .lib-empty { margin: 2px 0 4px 34px; font-size: var(--text-xs); color: var(--surface-muted); }
 .lib-foot { margin: 0; font-size: var(--text-xs); line-height: 1.6; color: var(--surface-muted); border-top: 0.5px solid var(--surface-border); padding-top: var(--space-2); }
 
+/* P2-1 虚拟书架：规则集合不是文件夹，用虚一点的分隔和淡色区分 */
+.lib-sub-head {
+  margin: 6px 0 2px; font-size: var(--text-xs); color: var(--surface-muted);
+  letter-spacing: 0.04em;
+}
+.lib-folder-rule { opacity: 0.72; }
+.lib-row-dim { opacity: 0.55; }
+
+/* P2-4 书库根 / P2-2 书目清单：左栏底部两块，都与「整库」有关 */
+.lib-roots { border-top: 0.5px solid var(--surface-border); padding-top: var(--space-2); display: flex; flex-direction: column; gap: 4px; }
+.lib-roots-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.lib-roots-head h2 { margin: 0; font-size: var(--text-xs); color: var(--surface-muted); font-weight: 600; letter-spacing: 0.04em; }
+.lib-root-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.lib-root-main { display: flex; flex-direction: column; min-width: 0; }
+.lib-root-main b {
+  font-size: var(--text-xs); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lib-root-meta { font-size: var(--text-xs); color: var(--surface-muted); }
+.lib-root-acts { display: flex; gap: 4px; flex: 0 0 auto; }
+.lib-export { display: flex; align-items: center; gap: 4px; border-top: 0.5px solid var(--surface-border); padding-top: var(--space-2); }
+.lib-export-label { font-size: var(--text-xs); color: var(--surface-muted); margin-right: auto; }
+
+/* 右栏标签 */
+.lib-tags .lib-tag-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--space-2); }
+.lib-tag {
+  display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 6px;
+  border-radius: var(--radius-sm); font-size: var(--text-xs);
+  background: var(--palette-soft); color: var(--palette-primary);
+}
+.lib-tag-x {
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font-size: var(--text-xs); line-height: 1; padding: 0 2px;
+}
+.lib-tag-add { display: flex; gap: 4px; }
+.lib-tag-input {
+  flex: 1 1 auto; min-width: 0; padding: 3px 6px; font-size: var(--text-xs);
+  border: 0.5px solid var(--surface-border); border-radius: var(--radius-sm);
+  background: var(--surface-bg); color: var(--surface-text);
+}
+.lib-kv-rel b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .lib-notice {
   margin: 0 0 var(--space-2); padding: 5px 9px; border-radius: var(--radius-md);
   background: var(--palette-soft); color: var(--palette-primary); font-size: var(--text-xs);
@@ -570,6 +887,15 @@ onBeforeUnmount(() => { window.removeEventListener('library:refresh', onRefresh)
   overflow: hidden; line-height: 1.55;
 }
 .lib-note-side { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--surface-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* P1-2 反向关联卡：一行一条「哪天的哪一格写过它」，300px 里压成两行 */
+.lib-refs { border-top: 0.5px solid var(--surface-border); padding-top: var(--space-2); }
+.lib-ref-row { display: block; margin-top: 4px; padding: 4px 6px; border-radius: var(--radius-sm); background: var(--surface-raised); border: 0.5px solid var(--surface-border); }
+.lib-ref-date { display: block; font-size: var(--text-xs); color: var(--palette-primary); font-variant-numeric: tabular-nums; }
+.lib-ref-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--text-sm); line-height: 1.5; }
+.lib-ref-tasks { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.lib-ref-task { font-size: var(--text-xs); color: var(--surface-muted); border-left: 2px solid var(--palette-border); padding-left: 6px; }
+.lib-ref-task[data-done="1"] { text-decoration: line-through; opacity: 0.7; }
 @media (max-width: 1024px) {
   .lib-split { display: none; }
   .lib-left { width: 180px; }

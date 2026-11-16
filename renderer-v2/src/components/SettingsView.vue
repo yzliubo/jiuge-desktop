@@ -19,7 +19,8 @@ const { locale, choice, options: localeOptions, setLocale } = useI18n();
 const TEMPLATES = [
   { id: 'standard', name: '标准·九格' },
   { id: 'goal', name: '目标导向' },
-  { id: 'emotion', name: '情绪觉察' },
+  // id 仍是 emotion：这是用户已存模板选择的数据键，改名会让老设置失效；只换显示名
+  { id: 'emotion', name: '家庭亲子' },
   { id: 'simple', name: '极简' }
 ];
 const MODULES = [

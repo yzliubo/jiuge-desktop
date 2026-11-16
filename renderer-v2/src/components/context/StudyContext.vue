@@ -84,6 +84,9 @@ interface ShelfBook {
   themeId: string; group: string;
 }
 interface ShelfBoard { books: ShelfBook[] }
+// P0-1：旧主题书单的迁移核对结果（来自 reading.growthAudit）。
+// 旧数据留在 md_growth 里不动，这里只回答一句「还有几本没进图书馆」。
+interface GrowthAudit { legacyBooks: number; migratedBooks: number; pendingBooks: number }
 interface NowBook {
   key: string; id: string; title: string; author: string;
   pct: number; progressText: string; meta: string;
@@ -117,6 +120,8 @@ const readingBoard = ref<ShelfBoard | null>(null);
 // V3.9：书里让我去做的事（阅读笔记打了 #行动）
 const actionNotes = ref<ActionNote[]>([]);
 const actionTotal = ref(0);
+// P0-1：旧书单还欠几本没迁进图书馆（0 就不显示这句话）
+const legacyPending = ref(0);
 const loading = ref(true);
 const msg = ref('');
 let msgTimer: ReturnType<typeof setTimeout> | null = null;
@@ -141,9 +146,10 @@ const theme = computed<ThemeRow | null>(function () {
 });
 
 // ---------- V3.6：目前在读 / 主题学习（只读联动 + 快捷访问） ----------
-// 两份数据、一个视图：书架在读书来自 md_reading，主题书单在读书来自 md_growth。
-// 同一本书可能两边都在（主题书单的书也会进书架），按书名去重后以书架那条为准，
-// 因为只有它带 id / filePath，能真的「继续读」。
+// P0-1（2026-11-16）：原先这里是「两份数据一个视图」——书架来自 md_reading，
+// 主题书单来自 md_growth，再按书名去重、以书架那条为准。那是**在视图层给双源打补丁**：
+// 同一主题在成长页和图书馆页可能给出不同进度，导出的书名兜底还来自旧库。
+// 现在书单只有 md_reading 一个来源（books[].themeId），这里不再合并、不再去重。
 function shortDate(ts: number): string {
   if (!ts) return '';
   const d = new Date(ts);
@@ -154,11 +160,9 @@ function shortDate(ts: number): string {
 
 const allNowBooks = computed<NowBook[]>(function () {
   const out: NowBook[] = [];
-  const seen: Record<string, boolean> = {};
   const shelf = readingBoard.value ? readingBoard.value.books : [];
   shelf.forEach(function (b) {
     if (b.status !== 'reading') return;
-    seen[b.title.trim()] = true;
     const last = b.lastReadAt ? '最近读过 ' + shortDate(b.lastReadAt) : '书架 · 在读';
     const file = b.fileMissing ? ' · 原文件已移走'
       : (b.filePath ? ' · 已关联文件' : ' · 未关联文件');
@@ -166,19 +170,6 @@ const allNowBooks = computed<NowBook[]>(function () {
       key: 'shelf-' + b.id, id: b.id, title: b.title, author: b.author,
       pct: b.pct, progressText: b.progressText, meta: last + file,
       canOpen: !!(b.filePath && !b.fileMissing), sortAt: b.lastReadAt || 0
-    });
-  });
-  const themes = board.value ? board.value.themes : [];
-  themes.forEach(function (t) {
-    t.books.forEach(function (b) {
-      if (b.status !== 'reading' || seen[b.title.trim()]) return;
-      seen[b.title.trim()] = true;
-      out.push({
-        key: 'theme-' + t.id + '-' + b.id, id: b.id, title: b.title, author: b.author,
-        pct: b.pct, progressText: b.progressText,
-        meta: '主题书单 · ' + t.title + ' · 未关联文件',
-        canOpen: false, sortAt: 0
-      });
     });
   });
   return out.sort(function (a, b) { return (b.sortAt - a.sortAt) || (b.pct - a.pct); });
@@ -260,23 +251,23 @@ async function load(): Promise<void> {
   loading.value = true;
   // V3.6：右栏同时读「学习库」与「图书馆」两份派生数据，并发一次取回，不多开通道
   // V3.9：第三路取「笔记里打了 #行动 的那些」，仍是已有路由 + 已有标签，零新增字段
-  const [b, rb, an] = await Promise.all([
+  // P0-1：第四路取「旧书单迁没迁完」的核对结果——旧书单不再参与展示，但欠账要能被看见
+  const [b, rb, an, ga] = await Promise.all([
     callDomain<Board | null>('growth.board', null, localDate()),
     callDomain<ShelfBoard | null>('reading.board', null),
-    callDomain<NoteBoard | null>('reading.notes', null, { tag: '行动' })
+    callDomain<NoteBoard | null>('reading.notes', null, { tag: '行动' }),
+    callDomain<GrowthAudit | null>('reading.growthAudit', null)
   ]);
   board.value = b;
   readingBoard.value = rb;
   actionNotes.value = an ? asArray<ActionNote>(an.items).slice(0, 3) : [];
   actionTotal.value = an ? an.total : 0;
+  legacyPending.value = ga ? ga.pendingBooks : 0;
   loading.value = false;
   const found = exam.value || skill.value || theme.value;
   if (props.itemId && !found) emit('select-item', '');
   // 只换条目时整份回填；同一条重取数据不动草稿，免得把正在敲的字冲掉
   if (syncedId.value !== props.itemId) syncDraft();
-  if (!bookSel.value && theme.value && theme.value.books.length) {
-    bookSel.value = theme.value.books[0].id;
-  }
 }
 
 async function afterChange(text: string): Promise<void> {
@@ -423,11 +414,9 @@ async function saveNextUp(): Promise<void> {
 }
 
 // ---------- 阅读 ----------
-const bookSel = ref('');
-const currentBook = computed<BookRow | null>(function () {
-  if (!theme.value || !bookSel.value) return null;
-  return theme.value.books.filter(function (b) { return b.id === bookSel.value; })[0] || null;
-});
+// P0-1（2026-11-16）：这里原来有整套 md_growth 书单编辑（加书 / 翻页 / 标读完 / 摘录 / 删书），
+// 也就是「同一份书单的第二份真相」。图书馆才是书单的唯一写入方；
+// 学习成长保留旧条目的只读展示（历史），要继续维护请去图书馆。
 async function saveTheme(): Promise<void> {
   if (!theme.value) return;
   if (!dTitle.value.trim()) { say('主题名不能空着'); return; }
@@ -435,57 +424,6 @@ async function saveTheme(): Promise<void> {
     title: dTitle.value.trim(), note: dNote.value.trim()
   });
   await afterChange('主题信息已保存');
-}
-
-const newBook = ref('');
-const newBookAuthor = ref('');
-const newBookPages = ref('');
-async function addBook(): Promise<void> {
-  if (!theme.value) return;
-  const title = newBook.value.trim();
-  if (!title) return;
-  await callDomain('growth.addBook', null, theme.value.id, {
-    title: title, author: newBookAuthor.value.trim(), total: Number(newBookPages.value) || 300
-  });
-  newBook.value = '';
-  newBookAuthor.value = '';
-  newBookPages.value = '';
-  await afterChange('已加一本书');
-}
-async function bookStep(b: BookRow, delta: number): Promise<void> {
-  if (!theme.value) return;
-  await callDomain('growth.advanceBook', null, theme.value.id, b.id, delta);
-  await afterChange('《' + b.title + '》' + (delta > 0 ? '+' : '') + delta + ' ' + b.unit);
-}
-async function bookStatus(b: BookRow, status: string): Promise<void> {
-  if (!theme.value) return;
-  await callDomain('growth.setBookStatus', null, theme.value.id, b.id, status);
-  await afterChange('已标为「' + (status === 'done' ? '读完' : (status === 'reading' ? '在读' : '待读')) + '」');
-}
-async function bookRemove(b: BookRow): Promise<void> {
-  if (!theme.value) return;
-  await callDomain('growth.removeBook', null, theme.value.id, b.id);
-  if (bookSel.value === b.id) bookSel.value = '';
-  await afterChange('已删《' + b.title + '》');
-}
-
-const newQuote = ref('');
-const newQuotePage = ref('');
-async function addQuote(): Promise<void> {
-  if (!theme.value || !currentBook.value) return;
-  const text = newQuote.value.trim();
-  if (!text) return;
-  await callDomain('growth.addQuote', null, theme.value.id, currentBook.value.id, {
-    text: text, page: Number(newQuotePage.value) || 0
-  });
-  newQuote.value = '';
-  newQuotePage.value = '';
-  await afterChange('已存一条摘录');
-}
-async function removeQuote(q: Quote): Promise<void> {
-  if (!theme.value || !currentBook.value) return;
-  await callDomain('growth.removeQuote', null, theme.value.id, currentBook.value.id, q.id);
-  await afterChange('已删摘录');
 }
 
 // ---------- 删除（整条） ----------
@@ -724,52 +662,28 @@ watch(() => props.itemId, function () { syncDraft(); });
         <textarea id="gc-tnote" v-model="dNote" class="gc-in gc-area" rows="2" maxlength="200"
           placeholder="一句话说清主题，选书才不会散" aria-label="主题说明"></textarea>
 
-        <span class="gc-label">书单</span>
+        <span class="gc-label">书单（历史 · 只读）</span>
         <div class="gc-list">
-          <div
-            v-for="b in theme.books"
-            :key="b.id"
-            class="gc-item gc-book"
-            :class="{ 'gc-book-on': bookSel === b.id }"
-          >
-            <button class="gc-book-title" @click="bookSel = b.id">
+          <div v-for="b in theme.books" :key="b.id" class="gc-item gc-book">
+            <span class="gc-book-title">
               {{ b.title }}<span class="gc-item-side">· {{ b.statusLabel }}</span>
-            </button>
+            </span>
             <span class="gc-item-side">{{ b.progressText }}</span>
-            <button class="gc-mini" @click="bookStep(b, 10)">+10</button>
-            <button class="gc-mini" @click="bookStatus(b, b.status === 'done' ? 'reading' : 'done')">
-              {{ b.status === 'done' ? '重读' : '读完' }}
-            </button>
-            <button class="gc-x" aria-label="删除书" @click="bookRemove(b)">×</button>
           </div>
-          <p v-if="!theme.books.length" class="ctx-muted">还没有书。一个主题三到五本最合适，太多就变成愿望清单。</p>
+          <p v-if="!theme.books.length" class="ctx-muted">这个主题下还没有书。</p>
         </div>
-        <div class="gc-add">
-          <input v-model="newBook" class="gc-in" maxlength="50" placeholder="书名" aria-label="书名" />
-          <input v-model="newBookAuthor" class="gc-in gc-num" maxlength="24" placeholder="作者" aria-label="作者" />
-          <input v-model="newBookPages" class="gc-in gc-num" type="number" min="1" placeholder="页数" aria-label="页数" />
-          <button class="gc-btn" @click="addBook">加书</button>
-        </div>
-
-        <template v-if="currentBook">
-          <span class="gc-label">摘录 ·《{{ currentBook.title }}》</span>
-          <div class="gc-list">
-            <div v-for="q in currentBook.quotes" :key="q.id" class="gc-quote">
-              <span class="gc-quote-text">{{ q.text }}</span>
-              <span v-if="q.page" class="gc-item-side">p.{{ q.page }}</span>
-              <button class="gc-x" aria-label="删除摘录" @click="removeQuote(q)">×</button>
-            </div>
-            <p v-if="!currentBook.quotes.length" class="ctx-muted">还没有摘录。读到想划线的那句，抄进来——比标「读完」有用。</p>
-          </div>
-          <div class="gc-add">
-            <input v-model="newQuote" class="gc-in" maxlength="200" placeholder="抄一句"
-              aria-label="摘录内容" @keydown.enter.prevent="addQuote" />
-            <input v-model="newQuotePage" class="gc-in gc-num" type="number" min="0" placeholder="页" aria-label="页码" />
-            <button class="gc-btn" @click="addQuote">存摘录</button>
-          </div>
-        </template>
+        <!-- P0-1：书单只有一个写入方（图书馆）。这里保留旧条目只为「历史可查」，
+             不再提供加书 / 翻页 / 标读完 / 摘录——那些按钮正是双源的来源。 -->
+        <p class="ctx-muted">
+          书单已改由图书馆维护：在图书馆建主题、把电子书拖进去，进度与笔记都在那边。
+          学习成长里这份只作历史保留，不再写入。
+        </p>
+        <p v-if="legacyPending" class="ctx-muted">
+          还有 {{ legacyPending }} 本旧书单没进图书馆，在图书馆点一次「导入旧书单」就迁过去了（旧数据保留）。
+        </p>
 
         <div class="gc-actions">
+          <button class="gc-btn" @click="emit('navigate', 'reading')">去图书馆维护书单</button>
           <button class="gc-btn gc-primary" @click="saveTheme">保存主题信息</button>
           <button class="gc-btn gc-del" @click="removeCurrent">删除</button>
         </div>
@@ -826,6 +740,10 @@ watch(() => props.itemId, function () { syncDraft(); });
           还没有主题。在中栏「主题阅读」里建一个，书单进度会同步到这里。
         </p>
         <p v-if="themeMore" class="ctx-muted">还有 {{ themeMore }} 个主题，在中栏看全部。</p>
+        <!-- P0-1：旧书单的欠账在这里露一行——不迁也不拦着用，但别装作不存在 -->
+        <p v-if="legacyPending" class="ctx-muted">
+          学习成长里还有 {{ legacyPending }} 本旧书单没进图书馆；在图书馆点一次「导入旧书单」即可（旧数据保留）。
+        </p>
       </div>
     </section>
 
@@ -954,12 +872,6 @@ watch(() => props.itemId, function () { syncDraft(); });
   flex: 1 1 100%; min-width: 0; text-align: left; border: 0; background: transparent;
   font-size: var(--text-xs); padding: 0; color: var(--surface-text);
 }
-.gc-quote {
-  display: flex; align-items: baseline; gap: 6px; padding: 4px 6px;
-  border-left: 2px solid var(--palette-border); background: var(--surface-panel);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: var(--text-xs); line-height: 1.6;
-}
-.gc-quote-text { flex: 1; min-width: 0; }
 .gc-ready { margin: 4px 0 0; font-size: var(--text-xs); color: var(--palette-primary); }
 .gc-alert-on { border-color: var(--palette-primary); background: var(--palette-soft); }
 /* V3.6：在读书 / 主题学习两卡。300px 右栏里每行压到 3 层：标题+百分比 / 进度条 / 状态与去处 */

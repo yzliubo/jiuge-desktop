@@ -4,8 +4,13 @@
 // ---- 三张表各自是什么 ----
 // books    : 休闲娱乐 + 主题阅读共用本表。themeId 为空 = 休闲书；非空 = 归属该主题，
 //            因此主题书同样有 filePath，能用同一个阅读窗口、章节、进度、三阶九问与笔记落库。
-// themes    : 主题（学习单元）本身。V2.14 权威源由 md_growth 迁到 md_reading；
-//            md_growth 里的旧书单仅作「一次性导入」来源，导入后原样保留、不再写回。
+// themes    : 主题（学习单元）本身。
+//            【P0-1 单一事实源，2026-11-16】主题与主题书单**只有** md_reading 这一份权威数据：
+//            themes[] 是主题表，books[].themeId 是书与主题的唯一关联。
+//            md_growth 里的旧主题书单不再被任何视图透传，只作一次性迁移来源
+//            （importGrowthThemes，幂等）与只读历史；迁没迁完用 growthAudit 核对。
+//            注意 board() 已没有第二个参数——曾经那个 themeBooks 形参就是把旧书单
+//            塞进图书馆视图的那条路，同一份书单因此有三份说法。
 // notes    : 两类阅读产生的全部笔记汇总，是「读书笔记」数据库的本体。每条冗余存
 //            bookTitle，使书被删掉之后笔记仍然可读；orphan 只是派生判断，不落库。
 // chapters : 本地章节大纲（不是 AI 思维导图），挂在休闲书上，两层树。
@@ -29,6 +34,17 @@ const MAX_TAGS = 8;
 // 这样「重命名 / 删除分组」只是一次批量改字段，不用给 state 添一张表、也不用改 rebuild 的所有调用点。
 const MAX_GROUPS = 20;
 const GROUP_MAX = 24;
+// P2-1 虚拟书架：书上直接挂多值标签（≤8），与 group 并存。
+// group 是「这一摞放哪」，tags 是「它身上有哪些钩子」——同一本书只能在一个分组，
+// 却可以同时是「污水处理」「待精读」。规则集合（shelves）完全由这两个字段派生，不另建表。
+const MAX_SHELVES = 12;
+const SHELF_KEY_MAX = 40;
+// P2-4 书库根目录：整库换机的唯一开关。
+// books 里存 rootId + relPath，filePath 仍是「本机绝对路径」（所有既有消费方不用改），
+// 换机器只要改 root.path，一次把所有书的 filePath 重新拼出来。
+const MAX_ROOTS = 6;
+const ROOT_LABEL_MAX = 24;
+const REL_PATH_MAX = 500;
 
 const TITLE_MAX = 60;
 const THEME_TITLE_MAX = 60;
@@ -54,6 +70,13 @@ const COLOR_MAX = 24;
 const PATH_MAX = 1000;
 const EXT_MAX = 8;
 const FORMAT_MAX = 12;
+// 书籍指纹：文件大小 + 首 64KB 的 SHA-256（十六进制 64 位）。由主进程算、领域层只存。
+// 它是书在「改了名 / 换了盘」之后还能被认出来的那一半身份——另一半是永不改变的 bookId。
+const FP_MAX = 64;
+const FP_RE = /^[0-9a-f]{64}$/;
+// 回写行的可反查标记：〔rd:<noteId>〕。纯文本、跟在行尾，冻结 utils 的 search/cleanLen 照旧可用。
+// 之所以放行尾而不是行首：行首的「【读书·休闲娱乐】」是既有检索与分组认的前缀，不能让位。
+const REF_MARK_RE = /〔rd:([A-Za-z0-9_-]{1,80})〕/g;
 // 本地电子书：只登记路径，不把文件内容搬进库（沿用 md_attach 的链接型口径）
 const FILE_EXTS = ['epub', 'pdf', 'txt', 'md', 'mobi', 'azw3'];
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -180,7 +203,7 @@ function dateOf(ts) {
 
 // ---------- 空态 ----------
 function empty() {
-    return { version: 1, books: [], chapters: [], notes: [], bookmarks: [], themes: [], updatedAt: 0 };
+    return { version: 1, books: [], chapters: [], notes: [], bookmarks: [], themes: [], roots: [], updatedAt: 0 };
 }
 
 // ---------- 实体 normalize：未知字段一律不保留 ----------
@@ -206,6 +229,8 @@ function normBook(b, seen, fallbackId) {
         filePath: clip(o.filePath, PATH_MAX),
         fileExt: clean(o.fileExt, EXT_MAX).toLowerCase(),
         fileSize: num(o.fileSize, 0, MAX_FILE_BYTES, 0),
+        // 内容指纹：只认 64 位小写十六进制，脏值一律丢掉（宁可没有身份，也不留半截指纹）
+        fingerprint: FP_RE.test(str(o.fingerprint)) ? str(o.fingerprint) : '',
         format: clean(o.format, FORMAT_MAX),
         coverId: clean(o.coverId, ID_MAX),
         source: str(o.source) === 'file' ? 'file' : 'manual',
@@ -219,8 +244,59 @@ function normBook(b, seen, fallbackId) {
         lastReadAt: num(o.lastReadAt, 0, TS_MAX, 0),
         // 书架分组与收藏：空串 = 未分组；收藏只是个布尔视图，不另建「收藏夹」表
         group: clean(o.group, GROUP_MAX),
+        // 多值标签（P2-1）：与 group 并存的钩子，规则集合靠它派生；一本书最多 8 个
+        tags: normTags(o.tags),
+        // 书库根（P2-4）：rootId + relPath 是可搬家的那半边，filePath 是本机解析结果
+        rootId: clean(o.rootId, ID_MAX),
+        relPath: relPathOf(o.relPath),
         favorite: o.favorite === true
     };
+}
+
+// 书库根：一条记录 = 一个「书都放在这个目录下」的声明。
+// 只存路径与名字，不扫盘、不建索引——扫盘是主进程的事，领域层永远只算字符串。
+function normRoot(r, seen, fallbackId) {
+    const o = isObj(r) ? r : {};
+    const p = clip(o.path, PATH_MAX);
+    if (!p) return null;
+    return {
+        id: uniqueId(clean(o.id, ID_MAX) || fallbackId, seen),
+        label: clean(o.label, ROOT_LABEL_MAX),
+        path: p,
+        createdAt: num(o.createdAt, 0, TS_MAX, 0)
+    };
+}
+
+// ---------- 路径：根 + 相对路径（P2-4）----------
+// 全部是纯字符串运算，不碰 fs：领域层不认识盘符，只认识「分隔符」。
+// 相对路径**统一存正斜杠**，这样备份拿到另一套系统上也读得懂；
+// 拼回绝对路径时才换成本机习惯的分隔符（看根路径自己用的是什么）。
+function normSlashes(p) { return str(p).replace(/\\/g, '/'); }
+function sepOf(p) { return str(p).indexOf('\\') >= 0 ? '\\' : '/'; }
+// 相对路径的规范形：正斜杠、无前导斜杠、无空段、无 . 段。存进去的是这个形，
+// 拼回去的也只会是这个形——否则「同一个文件两种相对路径」会让指纹判重之外的判重全失效。
+function relPathOf(v) {
+    const raw = normSlashes(clip(v, REL_PATH_MAX));
+    const segs = raw.split('/').filter(function (x) { return !!x && x !== '.'; });
+    return segs.slice(0, 64).join('/');
+}
+function joinRoot(rootPath, relPath) {
+    const base = str(rootPath).replace(/[\\/]+$/, '');
+    const rel = relPathOf(relPath);
+    if (!base) return '';
+    if (!rel) return base;
+    const sep = sepOf(rootPath);
+    return base + sep + rel.split('/').join(sep);
+}
+// book 落在 root 下时返回相对路径（保留原大小写），否则返回空串。
+// 比较用忽略大小写的正斜杠形式：Windows 的大小写不敏感不该让同一本书认不出来。
+function underRoot(filePath, rootPath) {
+    const f = normSlashes(filePath);
+    const r = normSlashes(rootPath).replace(/\/+$/, '');
+    if (!r || !f) return '';
+    const pre = r + '/';
+    if (f.slice(0, pre.length).toLowerCase() !== pre.toLowerCase()) return '';
+    return f.slice(pre.length);
 }
 
 // 主题：一个学习单元；书靠 books[].themeId 归属，笔记靠 notes.themeId 归属
@@ -248,6 +324,11 @@ function normChapter(c, seen, fallbackId) {
         title: title,
         parentId: clean(o.parentId, ID_MAX),
         order: num(o.order, 0, 9999, 0),
+        // P2-3 两套目录的统一锚点：「ch-<书内节序>」。
+        // chapters[] 是**我自己的大纲**（可以跳着读、可以只列要精读的几章、可以两层）；
+        // 书自带的 NCX/nav 是**出版方的结构**（只读、由 epub.js 解析）。
+        // 两者不合并成一张表，靠这个锚点对齐：填了锚点的自填章节，点一下就能跳到书里那一节。
+        anchor: normChapterAnchor(o.anchor),
         createdAt: num(o.createdAt, 0, TS_MAX, 0)
     };
 }
@@ -326,6 +407,20 @@ function normBookmark(m, seen, fallbackId) {
     };
 }
 
+// 章节锚点：与阅读窗同一个写法 `ch-<书内节序>`（reader.js 里 chapterId 也是这个形）。
+// 与书签的 "章序:比例" 不同——那是「位置」，这只是「哪一节」，所以不带小数。
+function normChapterAnchor(v) {
+    const s = str(v).trim();
+    const m = /^ch-(\d{1,4})$/.exec(s);
+    if (!m) return '';
+    return 'ch-' + String(Math.trunc(Number(m[1])));
+}
+function chapterSeq(anchor) {
+    const s = str(anchor);
+    const m = /^ch-(\d{1,4})$/.exec(s);
+    return m ? Number(m[1]) : -1;
+}
+
 // 两层树：父本身也是子层时，把当前节点抬为顶层，绝不出现第三层
 function clampDepth(chapters) {
     const byId = {};
@@ -352,7 +447,29 @@ function normalize(raw) {
         }).filter(function (x) { return !!x; });
     }
     const themes = take(src.themes, normTheme, MAX_THEMES, 'th');
+    const roots = take(src.roots, normRoot, MAX_ROOTS, 'rt');
     const books = take(src.books, normBook, MAX_BOOKS, 'bk');
+    // P2-4 路径解析：normalize 是唯一一处把「根 + 相对路径」换成绝对路径的地方。
+    // ① 有 rootId + relPath → 现拼（换机只改 root.path，所有书跟着走）
+    // ② 只有绝对路径 → 若落在某个已声明根下，就地补 rootId/relPath（老库零手工纳入）
+    const rootById = {};
+    roots.forEach(function (r) { rootById[r.id] = r; });
+    books.forEach(function (b) {
+        const root = b.rootId ? rootById[b.rootId] : null;
+        if (root && b.relPath) {
+            b.filePath = joinRoot(root.path, b.relPath);
+            return;
+        }
+        if (b.rootId || !b.filePath) return;
+        for (let i = 0; i < roots.length; i += 1) {
+            const rel = underRoot(b.filePath, roots[i].path);
+            if (rel) {
+                b.rootId = roots[i].id;
+                b.relPath = rel;
+                return;
+            }
+        }
+    });
     const chapters = clampDepth(take(src.chapters, normChapter, MAX_CHAPTERS, 'ch'));
     const notes = take(src.notes, normNote, MAX_NOTES, 'nt');
     // 书签：同一本书同一位置只留一条（重复点「加书签」不该叠出一串）
@@ -372,15 +489,17 @@ function normalize(raw) {
         chapters: chapters,
         notes: notes,
         bookmarks: bookmarks,
+        roots: roots,
         updatedAt: num(src.updatedAt, 0, TS_MAX, 0)
     };
 }
 
-// 写操作统一出口：所有列表都重新过一遍 normalize，保证状态始终规范
-function rebuild(books, chapters, notes, updatedAt, bookmarks, themes) {
+// 写操作统一出口：所有列表都重新过一遍 normalize，保证状态始终规范。
+// roots 必须跟着一起传：漏传一次，整库的根目录声明就没了（golden 里有逐函数守卫）。
+function rebuild(books, chapters, notes, updatedAt, bookmarks, themes, roots) {
     return normalize({
         version: 1, themes: themes || [], books: books, chapters: chapters, notes: notes,
-        bookmarks: bookmarks || [], updatedAt: updatedAt
+        bookmarks: bookmarks || [], roots: roots || [], updatedAt: updatedAt
     });
 }
 
@@ -412,6 +531,43 @@ function bookByPath(state, p) {
 }
 function hasPath(state, p) { return !!bookByPath(state, p); }
 
+// 按内容指纹找同一本书：文件被改名或搬走之后，路径断了，指纹还在。
+// 只认合法指纹，空串一律不匹配——否则所有「没算过指纹」的老书会互相认成同一本。
+function bookByFingerprint(state, fp) {
+    const s = normalize(state);
+    const key = str(fp).toLowerCase();
+    if (!FP_RE.test(key)) return null;
+    return s.books.filter(function (b) { return b.fingerprint === key; })[0] || null;
+}
+function hasFingerprint(state, fp) { return !!bookByFingerprint(state, fp); }
+
+// 重新关联：只换 filePath（顺带刷新大小/扩展名/指纹），**bookId 一个字都不动**。
+// 这是「关联会突然断」的正解——笔记、章节、书签、按书筛选全都挂在 bookId 上，
+// 只要 id 不变，换盘换目录等于什么都没发生。
+// 校验（文件存在 / 扩展名 / 指纹是否仍是同一本）需要读盘，由主进程做完再传进来；
+// 这里只守住纯函数边界：不存在的书不动、空路径不写、指纹非法不落。
+function relinkBook(state, id, patch) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const p = isObj(patch) ? patch : {};
+    const nextPath = clip(p.filePath, PATH_MAX);
+    if (!nextPath) return s;
+    const fp = str(p.fingerprint).toLowerCase();
+    const books = s.books.map(function (b) {
+        if (b.id !== key) return b;
+        return Object.assign({}, b, {
+            filePath: nextPath,
+            fileExt: clean(p.fileExt, EXT_MAX).toLowerCase().replace(/^\.+/, '') || b.fileExt,
+            // 大小不明时保留旧值：宁可标一个可能过期的大小，也不把「100MB 上限」判断弄丢
+            fileSize: num(p.fileSize, 0, MAX_FILE_BYTES, b.fileSize) || b.fileSize,
+            fingerprint: FP_RE.test(fp) ? fp : b.fingerprint,
+            format: clean(p.format, FORMAT_MAX) || b.format || clean(p.fileExt, EXT_MAX).toUpperCase()
+        });
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
+}
+
 function addBook(state, patch) {
     const s = normalize(state);
     if (s.books.length >= MAX_BOOKS) return s;
@@ -437,6 +593,7 @@ function addBook(state, patch) {
         filePath: p.filePath,
         fileExt: p.fileExt,
         fileSize: p.fileSize,
+        fingerprint: p.fingerprint,
         format: p.format,
         coverId: p.coverId,
         source: p.source,
@@ -448,7 +605,7 @@ function addBook(state, patch) {
         favorite: p.favorite,
         createdAt: at
     };
-    return rebuild(s.books.concat([raw]), s.chapters, s.notes, at, s.bookmarks, s.themes);
+    return rebuild(s.books.concat([raw]), s.chapters, s.notes, at, s.bookmarks, s.themes, s.roots);
 }
 
 function updateBook(state, id, patch) {
@@ -459,7 +616,7 @@ function updateBook(state, id, patch) {
     const books = s.books.map(function (b) {
         return b.id === key ? Object.assign({}, b, p, { id: key }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 只删书和它的章节；笔记一条不动（orphan 由 notesQuery 派生）
@@ -470,7 +627,7 @@ function removeBook(state, id) {
     const books = s.books.filter(function (b) { return b.id !== key; });
     if (books.length === s.books.length) return s;
     const chapters = s.chapters.filter(function (c) { return c.bookId !== key; });
-    return rebuild(books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 function advanceBook(state, id, delta, date) {
@@ -498,7 +655,7 @@ function advanceBook(state, id, delta, date) {
         return Object.assign({}, b, { done: done, status: status, finishedAt: finishedAt });
     });
     if (!hit) return s;
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 function setBookStatus(state, id, status, date) {
@@ -520,7 +677,7 @@ function setBookStatus(state, id, status, date) {
         }
         return next;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 拖动排序：ids 是按新顺序排好的书 id。
@@ -548,7 +705,7 @@ function reorderBooks(state, ids) {
         maxOrder += 1;
         return Object.assign({}, b, { order: maxOrder });
     });
-    return rebuild(head.concat(rest), s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(head.concat(rest), s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 再读一遍：只重置进度与「读完」状态，书签 / 标注 / 章节 / 笔记一条不动。
@@ -564,7 +721,7 @@ function rereadBook(state, id, at) {
             done: 0, status: 'reading', finishedAt: '', startedAt: b.startedAt || '', lastReadAt: ts
         });
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 最近在读打点：翻开阅读窗 / 同步进度时调用。只改时间，不碰进度与状态。
@@ -576,7 +733,119 @@ function touchBook(state, id, at) {
     const books = s.books.map(function (b) {
         return b.id === key ? Object.assign({}, b, { lastReadAt: ts }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
+}
+
+// ---------- 多值标签（P2-1）----------
+// group 是「放哪一摞」，tags 是「身上有哪些钩子」。一本书只能在一个分组里，
+// 但可以同时是「污水处理」「待精读」「有电子书」。规则集合（board().shelves）全部由它派生，
+// 因此「加一个标签」= 改一个字段，不新增表、不复制书籍记录。
+function setBookTags(state, id, tags) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.books.some(function (b) { return b.id === key; })) return s;
+    const next = normTags(tags);
+    const books = s.books.map(function (b) {
+        return b.id === key ? Object.assign({}, b, { tags: next }) : b;
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
+}
+// 单条增删：满了不再加（返回原 state），删不存在的标签也不动——
+// 界面上的「+ / ×」各点一次就是一次明确的意图，不需要再猜。
+function addBookTag(state, id, tag) {
+    const s = normalize(state);
+    const b = s.books.filter(function (x) { return x.id === str(id); })[0];
+    if (!b) return s;
+    const t = normTagOne(tag);
+    if (!t || b.tags.length >= MAX_TAGS || b.tags.indexOf(t) >= 0) return s;
+    return setBookTags(s, b.id, b.tags.concat([t]));
+}
+function removeBookTag(state, id, tag) {
+    const s = normalize(state);
+    const b = s.books.filter(function (x) { return x.id === str(id); })[0];
+    if (!b) return s;
+    const t = normTagOne(tag);
+    if (!t || b.tags.indexOf(t) < 0) return s;
+    return setBookTags(s, b.id, b.tags.filter(function (x) { return x !== t; }));
+}
+
+// ---------- 书库根目录（P2-4）----------
+// 一条根记录只做一件事：声明「我的书都在这棵树下」。
+// 书身上存 rootId + relPath，filePath 由 normalize 现拼——换机器只要改 root.path，
+// 60 本书的路径一次全对，不用逐本「重新关联」。
+function rootsOf(state) { return normalize(state).roots.slice(); }
+
+function addRoot(state, patch) {
+    const s = normalize(state);
+    if (s.roots.length >= MAX_ROOTS) return s;
+    const p = isObj(patch) ? patch : {};
+    const path = clip(p.path, PATH_MAX).replace(/[\\/]+$/, '');
+    if (!path) return s;
+    const key = normSlashes(path).toLowerCase();
+    if (s.roots.some(function (r) { return normSlashes(r.path).toLowerCase() === key; })) return s;
+    const raw = {
+        id: str(p.id) || newId('rt'),
+        label: p.label,
+        path: path,
+        createdAt: tsOf(p.createdAt) || Date.now()
+    };
+    // 走 rebuild 而不是 push：normalize 的 ② 步会顺手把落在该根下的老书补上 rootId/relPath
+    return rebuild(s.books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots.concat([raw]));
+}
+
+// 改根路径 = 整库搬家。所有挂在它下面的书按 relPath 重算 filePath（不读盘、不校验存在性，
+// 校验是主进程的事）。改 label 走同一条路，只是没有书需要重算。
+function relocateRoot(state, id, newPath) {
+    const s = normalize(state);
+    const key = str(id);
+    const root = s.roots.filter(function (r) { return r.id === key; })[0];
+    if (!root) return s;
+    const path = clip(newPath, PATH_MAX).replace(/[\\/]+$/, '');
+    if (!path) return s;
+    const roots = s.roots.map(function (r) {
+        return r.id === key ? Object.assign({}, r, { path: path }) : r;
+    });
+    const books = s.books.map(function (b) {
+        if (b.rootId !== key || !b.relPath) return b;
+        return Object.assign({}, b, { filePath: joinRoot(path, b.relPath) });
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, roots);
+}
+
+function updateRoot(state, id, patch) {
+    const s = normalize(state);
+    const key = str(id);
+    const root = s.roots.filter(function (r) { return r.id === key; })[0];
+    if (!root) return s;
+    const p = isObj(patch) ? patch : {};
+    const path = str(p.path) ? str(p.path) : root.path;
+    const next = relocateRoot(s, key, path);
+    if (!str(p.label)) return next;
+    const roots = next.roots.map(function (r) {
+        return r.id === key ? Object.assign({}, r, { label: clean(p.label, ROOT_LABEL_MAX) }) : r;
+    });
+    return rebuild(next.books, next.chapters, next.notes, next.updatedAt, next.bookmarks, next.themes, roots);
+}
+
+// 删根只解绑，不删书、也不清 filePath：书还在原地，只是不再跟着某个根搬。
+// 反过来的「删根顺带删书」是最容易让人丢数据的设计，坚决不做。
+function removeRoot(state, id) {
+    const s = normalize(state);
+    const key = str(id);
+    if (!key || !s.roots.some(function (r) { return r.id === key; })) return s;
+    const roots = s.roots.filter(function (r) { return r.id !== key; });
+    const books = s.books.map(function (b) {
+        if (b.rootId !== key) return b;
+        return Object.assign({}, b, { rootId: '', relPath: '' });
+    });
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, roots);
+}
+
+// 给主进程用：本书此刻应该去哪个绝对路径读。根被删/被改名时以 filePath 为准。
+function resolveBookPath(state, id) {
+    const s = normalize(state);
+    const b = s.books.filter(function (x) { return x.id === str(id); })[0];
+    return b ? b.filePath : '';
 }
 
 // ---------- 书架分组 / 收藏（V3.5）----------
@@ -603,7 +872,7 @@ function setBookGroup(state, id, group) {
     const books = s.books.map(function (b) {
         return b.id === key ? Object.assign({}, b, { group: name }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 function setBookFavorite(state, id, on) {
@@ -614,7 +883,7 @@ function setBookFavorite(state, id, on) {
     const books = s.books.map(function (b) {
         return b.id === key ? Object.assign({}, b, { favorite: yes }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 重命名 / 合并 / 清空：目标名已存在就是合并，目标为空就是清空（等于 removeGroup）。
@@ -629,7 +898,7 @@ function renameGroup(state, from, to) {
     const books = s.books.map(function (x) {
         return x.group === a ? Object.assign({}, x, { group: b }) : x;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 function removeGroup(state, name) { return renameGroup(state, name, ''); }
@@ -647,7 +916,7 @@ function addTheme(state, patch) {
         createdAt: at,
         updatedAt: at
     };
-    return rebuild(s.books, s.chapters, s.notes, at, s.bookmarks, s.themes.concat([raw]));
+    return rebuild(s.books, s.chapters, s.notes, at, s.bookmarks, s.themes.concat([raw]), s.roots);
 }
 
 function updateTheme(state, id, patch) {
@@ -659,7 +928,7 @@ function updateTheme(state, id, patch) {
     const themes = s.themes.map(function (t) {
         return t.id === key ? Object.assign({}, t, p, { id: key, updatedAt: at }) : t;
     });
-    return rebuild(s.books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes);
+    return rebuild(s.books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes, s.roots);
 }
 
 // 删主题不删书：书解绑回休闲书架，笔记一条不动（orphan 由 notesQuery 派生）
@@ -671,7 +940,7 @@ function removeTheme(state, id) {
     const books = s.books.map(function (b) {
         return b.themeId === key ? Object.assign({}, b, { themeId: '' }) : b;
     });
-    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes);
+    return rebuild(books, s.chapters, s.notes, s.updatedAt, s.bookmarks, themes, s.roots);
 }
 
 // 一次性把 md_growth 的旧主题书单 + 摘录迁进来。旧数据不删、可反复调用（按确定性 id 去重）。
@@ -752,7 +1021,7 @@ function importGrowthThemes(state, growth) {
         });
     });
     if (addedThemes || addedBooks || addedNotes || relinked) {
-        return rebuild(books, s.chapters, notes, now, s.bookmarks, themes);
+        return rebuild(books, s.chapters, notes, now, s.bookmarks, themes, s.roots);
     }
     return s;
 }
@@ -770,9 +1039,10 @@ function addChapter(state, bookId, patch) {
         title: p.title,
         parentId: clampParent(s.chapters, str(p.parentId), id),
         order: p.order,
+        anchor: p.anchor,
         createdAt: at
     };
-    return rebuild(s.books, s.chapters.concat([raw]), s.notes, at, s.bookmarks, s.themes);
+    return rebuild(s.books, s.chapters.concat([raw]), s.notes, at, s.bookmarks, s.themes, s.roots);
 }
 
 function updateChapter(state, id, patch) {
@@ -787,7 +1057,7 @@ function updateChapter(state, id, patch) {
         if (p.parentId !== undefined) next.parentId = clampParent(others, str(p.parentId), key);
         return next;
     });
-    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 删父章节时子章节上抬为顶层，绝不级联删
@@ -798,7 +1068,7 @@ function removeChapter(state, id) {
     const chapters = s.chapters
         .filter(function (c) { return c.id !== key; })
         .map(function (c) { return c.parentId === key ? Object.assign({}, c, { parentId: '' }) : c; });
-    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(s.books, chapters, s.notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // ---------- 笔记 ----------
@@ -827,7 +1097,7 @@ function addNote(state, patch) {
         pushedCell: p.pushedCell,
         sourceQuoteId: p.sourceQuoteId
     };
-    return rebuild(s.books, s.chapters, s.notes.concat([raw]), at, s.bookmarks, s.themes);
+    return rebuild(s.books, s.chapters, s.notes.concat([raw]), at, s.bookmarks, s.themes, s.roots);
 }
 
 function updateNote(state, id, patch) {
@@ -838,7 +1108,7 @@ function updateNote(state, id, patch) {
     const notes = s.notes.map(function (n) {
         return n.id === key ? Object.assign({}, n, p, { id: key }) : n;
     });
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 function removeNote(state, id) {
@@ -847,7 +1117,7 @@ function removeNote(state, id) {
     if (!key) return s;
     const notes = s.notes.filter(function (n) { return n.id !== key; });
     if (notes.length === s.notes.length) return s;
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // 只写 pushedAt / pushedCell；已回写过的重复调用保持原值不覆盖
@@ -864,7 +1134,7 @@ function markPushed(state, id, cell, at) {
         return Object.assign({}, n, { pushedAt: ts, pushedCell: c });
     });
     if (!hit) return s;
-    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes);
+    return rebuild(s.books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
 }
 
 // ---------- 看板 ----------
@@ -888,7 +1158,7 @@ function addBookmark(state, patch) {
         label: p.label,
         createdAt: tsOf(p.createdAt) || Date.now()
     };
-    return rebuild(s.books, s.chapters, s.notes, raw.createdAt, s.bookmarks.concat([raw]), s.themes);
+    return rebuild(s.books, s.chapters, s.notes, raw.createdAt, s.bookmarks.concat([raw]), s.themes, s.roots);
 }
 
 function removeBookmark(state, id) {
@@ -896,7 +1166,7 @@ function removeBookmark(state, id) {
     const key = str(id);
     if (!key) return s;
     return rebuild(s.books, s.chapters, s.notes, s.updatedAt,
-        s.bookmarks.filter(function (m) { return m.id !== key; }), s.themes);
+        s.bookmarks.filter(function (m) { return m.id !== key; }), s.themes, s.roots);
 }
 
 function bookmarksOf(state, bookId) {
@@ -923,9 +1193,12 @@ function decorateRow(b, noteCount) {
     });
 }
 
-function board(state, themeBooks) {
+// P0-1（2026-11-16）：主题书单只剩一个来源——md_reading.books 里 themeId 非空的记录。
+// 旧签名 board(state, themeBooks) 的第二参已删：它当年是把 md_growth 的旧书单原样透传给视图，
+// 结果同一份书单在「学习成长」「图书馆左栏」「导出汇总」三处各有各的说法。
+// 旧数据仍在 md_growth 里（只读历史），要进图书馆得走 importGrowthThemes 一次性迁移。
+function board(state) {
     const s = normalize(state);
-    const tb = Array.isArray(themeBooks) ? themeBooks : []; // 原样带上，不复制进 state
     const notes = s.notes;
     const tagCount = {};
     const noteCountByBook = {};
@@ -1015,10 +1288,41 @@ function board(state, themeBooks) {
     const groups = Object.keys(gCount).map(function (name) {
         return { name: name, count: gCount[name] };
     }).sort(function (a, b) { return b.count - a.count || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)); });
+    // P2-1 虚拟书架：规则集合。**只出 id 列表**（引用），不复制任何书籍记录——
+    // 于是改一本书的状态，所有书架同一刻跟着变，不存在「书架里还存着旧副本」这种鬼。
+    // 规则固定成六条 + 标签集合，不做用户自定义规则（那需要一张真表，本轮零新键的底线）。
+    const nowMs = now.getTime();
+    const RECENT_MS = 30 * 86400000;
+    const shelfDefs = [
+        { key: 'reading', label: '在读', test: function (b) { return b.status === 'reading'; } },
+        { key: 'todo', label: '待读', test: function (b) { return b.status === 'todo'; } },
+        { key: 'done', label: '读完', test: function (b) { return b.status === 'done'; } },
+        { key: 'noted', label: '有笔记', test: function (b) { return (noteCountByBook[b.id] || 0) > 0; } },
+        { key: 'nofile', label: '只有笔记', test: function (b) { return !b.filePath; } },
+        { key: 'recent', label: '最近读过', test: function (b) { return b.lastReadAt > 0 && nowMs - b.lastReadAt <= RECENT_MS; } }
+    ];
+    const shelves = [];
+    shelfDefs.forEach(function (d) {
+        const ids = ordered.filter(d.test).map(function (b) { return b.id; });
+        shelves.push({ key: d.key, kind: 'rule', label: d.label, count: ids.length, ids: ids });
+    });
+    // 标签集合：每个标签就是一摞（与 group 并存，一本书可以出现在多摞里）
+    const byTagIds = {};
+    ordered.forEach(function (b) {
+        b.tags.forEach(function (t) { (byTagIds[t] || (byTagIds[t] = [])).push(b.id); });
+    });
+    Object.keys(byTagIds)
+        .sort(function (a, b) { return byTagIds[b].length - byTagIds[a].length || (a < b ? -1 : (a > b ? 1 : 0)); })
+        .slice(0, MAX_SHELVES)
+        .forEach(function (t) {
+            shelves.push({ key: 'tag:' + t, kind: 'tag', label: '#' + t, count: byTagIds[t].length, ids: byTagIds[t] });
+        });
     return {
         stats: stats, books: books, leisureBooks: leisureBooks, themeGroups: themeGroups,
-        themes: s.themes, themeBooks: tb,
-        groups: groups, favoriteCount: favoriteCount, recent: recent, tagTop: tagTop
+        themes: s.themes,
+        groups: groups, favoriteCount: favoriteCount, recent: recent, tagTop: tagTop,
+        shelves: shelves.slice(0, MAX_SHELVES + 6),
+        roots: s.roots
     };
 }
 
@@ -1028,6 +1332,8 @@ function notesQuery(state, opts) {
     const o = isObj(opts) ? opts : {};
     const bookIds = {};
     s.books.forEach(function (b) { bookIds[b.id] = true; });
+    const themeIds = {};
+    s.themes.forEach(function (t) { themeIds[t.id] = true; });
     const modeStr = str(o.mode);
     const fMode = (modeStr === 'leisure' || modeStr === 'theme') ? modeStr : '';
     const fType = (o.type === 'highlight' || o.type === 'note' || o.type === 'idea' || o.type === 'link') ? o.type : '';
@@ -1055,7 +1361,9 @@ function notesQuery(state, opts) {
             typeLabel: NOTE_TYPE_LABEL[n.type] || '',
             modeLabel: MODE_LABEL[n.mode] || '',
             pushed: n.pushedAt > 0,
-            orphan: n.mode === 'leisure' && !bookIds[n.bookId]
+            // orphan 只说「引用的东西不在了」，不按 mode 分。原先只查 leisure 书，
+            // 主题书的笔记在书被删之后照样显示正常，等于把断链藏起来了。
+            orphan: (!!n.bookId && !bookIds[n.bookId]) || (!!n.themeId && !themeIds[n.themeId])
         });
     });
 
@@ -1103,12 +1411,37 @@ function noteToDiaryLine(note) {
     if (quote) line += ' 「' + quote + '」→ ' + text;
     else line += ' ' + text;
     line = line.replace(/\s+/g, ' ').trim();
-    if (line.length > 300) line = line.slice(0, 300) + '…';
+    if (line.length > 280) line = line.slice(0, 280) + '…';
+    // 可反查标记放最后：正文截断也不会把它截掉，人读时是一小段方括号，
+    // 机器读时它就是「这一行从哪条笔记来的」唯一凭据（反查见 refIdsIn）。
+    const id = clean(n.id, ID_MAX);
+    if (id) line += ' 〔rd:' + id + '〕';
     return line;
 }
 
+// 从任意正文里取出所有 rd: 引用（回写行 → 笔记的唯一反向通道）。
+// 纯函数、不改文本，冻结 utils 不需要认识这个标记。
+function refIdsIn(text) {
+    const s = str(text);
+    const out = [];
+    const seen = {};
+    let m;
+    REF_MARK_RE.lastIndex = 0;
+    while ((m = REF_MARK_RE.exec(s)) !== null) {
+        const id = m[1];
+        if (id && !seen[id]) { seen[id] = true; out.push(id); }
+    }
+    return out;
+}
+// 去掉标记之后的「人读文本」：右栏做摘要、导出正文时用，不破坏原文。
+function stripRefMarks(text) {
+    return str(text).replace(REF_MARK_RE, '').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
 // ---------- 导出 Markdown ----------
-function exportMarkdown(state, themeBooks, bookId) {
+// P0-1：书名的兜底只从 s.books 取。原先第三个来源是 md_growth 的旧书单，
+// 一份汇总里的书名可能来自一份早就没人维护的旧数据——这正是「三份表示」里最难查的那份。
+function exportMarkdown(state, bookId) {
     const s = normalize(state);
     // bookId 非空时只导出这一本（对齐 mybook「标注统一导出」的按书口径）；
     // 空则导出全库汇总。两条路共用同一套排版，不维护第二份格式。
@@ -1120,11 +1453,6 @@ function exportMarkdown(state, themeBooks, bookId) {
         lines.push(only ? '这本书还没有笔记' : '还没有笔记');
         return lines.join('\n') + '\n';
     }
-    const tb = Array.isArray(themeBooks) ? themeBooks : [];
-    const themeTitleByBook = {};
-    tb.forEach(function (r) {
-        if (isObj(r) && r.bookId && !themeTitleByBook[r.bookId]) themeTitleByBook[r.bookId] = str(r.title);
-    });
     const bookTitleById = {};
     s.books.forEach(function (b) { bookTitleById[b.id] = b.title; });
 
@@ -1145,7 +1473,7 @@ function exportMarkdown(state, themeBooks, bookId) {
         const groups = [];
         const byKey = {};
         inMode.forEach(function (n) {
-            const title = n.bookTitle || bookTitleById[n.bookId] || themeTitleByBook[n.bookId] || n.bookId || '未分类';
+            const title = n.bookTitle || bookTitleById[n.bookId] || n.bookId || '未分类';
             if (!byKey[title]) { byKey[title] = { title: title, notes: [] }; groups.push(byKey[title]); }
             byKey[title].notes.push(n);
         });
@@ -1171,12 +1499,162 @@ function exportMarkdown(state, themeBooks, bookId) {
     return lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '') + '\n';
 }
 
-// ---------- 按 id 并集合并：只补不改，幂等 ----------
+// ---------- 书目清单导出（P2-2）----------
+// 只导**元数据 + 路径**：书名 / 作者 / 状态 / 进度 / 主题 / 分组 / 标签 / 根 / 相对路径 / 笔记数。
+// 正文一个字都不带——库里本来就没有正文，也不该在这条路上把书的内容拆出来。
+// 三种形态共用一张行表，所以三种格式的书目永远一致（不会有「CSV 里有、OPDS 里没有」）。
+function listRows(s) {
+    const themeById = {};
+    s.themes.forEach(function (t) { themeById[t.id] = t.title; });
+    const rootById = {};
+    s.roots.forEach(function (r) { rootById[r.id] = r; });
+    const noteCount = {};
+    s.notes.forEach(function (n) { noteCount[n.bookId] = (noteCount[n.bookId] || 0) + 1; });
+    return s.books.slice().sort(function (a, b) {
+        return (a.order - b.order) || (a.createdAt - b.createdAt);
+    }).map(function (b) {
+        const root = rootById[b.rootId];
+        return {
+            id: b.id,
+            title: b.title,
+            author: b.author,
+            status: b.status,
+            statusLabel: BOOK_STATUS_LABEL[b.status] || '待读',
+            progress: b.done + '/' + b.total + ' ' + b.unit,
+            pct: pctOf(b.done, b.total),
+            theme: b.themeId ? (themeById[b.themeId] || '') : '',
+            group: b.group,
+            tags: b.tags.slice(),
+            fileExt: b.fileExt,
+            fileSize: b.fileSize,
+            root: root ? (root.label || root.path) : '',
+            relPath: b.relPath,
+            filePath: b.filePath,
+            noteCount: noteCount[b.id] || 0,
+            createdAt: b.createdAt,
+            finishedAt: b.finishedAt,
+            lastReadAt: b.lastReadAt
+        };
+    });
+}
+
+function csvCell(v) {
+    const s = str(v).replace(/[\r\n]+/g, ' ');
+    return '"' + s.replace(/"/g, '""') + '"';
+}
+function xmlEsc(v) {
+    return str(v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+function isoOf(ms) {
+    const n = num(ms, 0, TS_MAX, 0);
+    if (!n) return '';
+    const d = new Date(n);
+    return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+// format: 'csv' | 'json' | 'opds'，其余一律按 csv（不猜、不抛）。
+// 返回 { format, mime, ext, text, rows } —— 落盘由主进程走唯一那条 file:save。
+function exportList(state, format) {
+    const s = normalize(state);
+    const f0 = str(format).toLowerCase();
+    const f = (f0 === 'json' || f0 === 'opds') ? f0 : 'csv';
+    const rows = listRows(s);
+    if (f === 'json') {
+        return {
+            format: f, mime: 'application/json', ext: 'json', rows: rows.length,
+            text: JSON.stringify({
+                schema: 'jiuge.books/v1',
+                count: rows.length,
+                // 说明写进文件本身：拿到这份清单的人要知道它没有正文
+                note: '只含书目元数据与路径，不含书籍正文',
+                books: rows
+            }, null, 2) + '\n'
+        };
+    }
+    if (f === 'opds') {
+        const head = '<?xml version="1.0" encoding="utf-8"?>\n'
+            + '<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/terms/" '
+            + 'xmlns:opds="http://opds-spec.org/2010/catalog">\n'
+            + '  <id>urn:jiuge:books</id>\n'
+            + '  <title>九格 · 书目</title>\n'
+            + '  <updated>' + (isoOf(s.updatedAt) || '1970-01-01T00:00:00.000Z') + '</updated>\n'
+            + '  <author><name>九格</name></author>\n';
+        const body = rows.map(function (r) {
+            const cats = r.tags.map(function (t) { return '    <category term="' + xmlEsc(t) + '"/>\n'; }).join('');
+            const type = r.fileExt === 'pdf' ? 'application/pdf'
+                : (r.fileExt === 'epub' ? 'application/epub+zip' : 'text/plain');
+            // 没有文件的书只出条目、不出 acquisition 链接：给一个打不开的链接等于骗阅读器
+            const link = r.filePath
+                ? '    <link rel="http://opds-spec.org/acquisition" href="file:///'
+                  + xmlEsc(normSlashes(r.filePath).replace(/^\/+/, '')) + '" type="' + type + '"/>\n'
+                : '';
+            return '  <entry>\n'
+                + '    <id>urn:jiuge:book:' + xmlEsc(r.id) + '</id>\n'
+                + '    <title>' + xmlEsc(r.title) + '</title>\n'
+                + '    <updated>' + (isoOf(r.lastReadAt || r.createdAt) || '1970-01-01T00:00:00.000Z') + '</updated>\n'
+                + (r.author ? '    <author><name>' + xmlEsc(r.author) + '</name></author>\n' : '')
+                + '    <dc:format>' + xmlEsc(r.fileExt ? r.fileExt.toUpperCase() : '无电子书') + '</dc:format>\n'
+                + '    <dc:extent>' + xmlEsc(r.progress) + '</dc:extent>\n'
+                + cats + link
+                + '  </entry>\n';
+        }).join('');
+        return {
+            format: f, mime: 'application/atom+xml;profile=opds-catalog', ext: 'xml', rows: rows.length,
+            text: head + body + '</feed>\n'
+        };
+    }
+    const cols = ['title', 'author', 'statusLabel', 'progress', 'pct', 'theme', 'group', 'tags',
+        'fileExt', 'fileSize', 'root', 'relPath', 'filePath', 'noteCount',
+        'createdAt', 'finishedAt', 'lastReadAt'];
+    const header = cols.map(csvCell).join(',');
+    const lines = rows.map(function (r) {
+        return cols.map(function (c) {
+            return csvCell(c === 'tags' ? r.tags.join(' ') : (c === 'pct' ? r.pct + '%' : r[c]));
+        }).join(',');
+    });
+    // UTF-8 BOM：Excel 打开中文 CSV 不加 BOM 会整列乱码，这是唯一一个「格式细节比纯文本更重要」的地方
+    return {
+        format: f, mime: 'text/csv;charset=utf-8', ext: 'csv', rows: rows.length,
+        text: '\ufeff' + header + '\n' + lines.join('\n') + '\n'
+    };
+}
+
+// ---------- 引用完整性：断链体检 ----------
+// 只判结构，不碰磁盘——「文件还在不在」由主进程补（它才有 fs）。
+// 判定口径只有一句：**有引用、但被引用的东西不在了**。空引用不算断链
+// （随手记一条没有出处的想法是合法的），否则每条手写笔记都会被标成病。
+function refIndex(s) {
+    const idx = { books: {}, themes: {}, chapters: {}, roots: {} };
+    s.books.forEach(function (b) { idx.books[b.id] = b; });
+    s.themes.forEach(function (t) { idx.themes[t.id] = t; });
+    s.chapters.forEach(function (c) { idx.chapters[c.id] = c; });
+    s.roots.forEach(function (r) { idx.roots[r.id] = r; });
+    return idx;
+}
+
+function danglingOf(s) {
+    const idx = refIndex(s);
+    const notes = s.notes.filter(function (n) {
+        return (!!n.bookId && !idx.books[n.bookId]) || (!!n.themeId && !idx.themes[n.themeId]);
+    });
+    const chapters = s.chapters.filter(function (c) { return !!c.bookId && !idx.books[c.bookId]; });
+    const bookmarks = s.bookmarks.filter(function (m) { return !idx.books[m.bookId]; });
+    const books = s.books.filter(function (b) { return !!b.themeId && !idx.themes[b.themeId]; });
+    // P2-4：根被删了但书还挂着它的 id。这类不算急病（filePath 还在，书照样能打开），
+    // 但必须在体检里看得见——否则「这书应该跟着根走」这件事会静默失效。
+    const roots = s.books.filter(function (b) { return !!b.rootId && !idx.roots[b.rootId]; });
+    return { notes: notes, chapters: chapters, bookmarks: bookmarks, books: books, roots: roots };
+}
+
+// 只补不删：导入时绝不动用户已有的笔记，只如实报告「这批数据里有多少条引用落空」，
+// 让人自己决定是回滚备份还是做一次修复。
 function mergeSection(state, section) {
     const s = normalize(state);
     const incoming = normalize(section);
     let added = 0;
-    ['themes', 'books', 'chapters', 'notes', 'bookmarks'].forEach(function (key) {
+    ['themes', 'books', 'chapters', 'notes', 'bookmarks', 'roots'].forEach(function (key) {
         const seen = {};
         s[key].forEach(function (r) { seen[r.id] = true; });
         incoming[key].forEach(function (r) {
@@ -1186,7 +1664,234 @@ function mergeSection(state, section) {
             added += 1;
         });
     });
-    return { state: normalize(s), added: added };
+    const next = normalize(s);
+    const d = danglingOf(next);
+    const report = {
+        danglingNotes: d.notes.length,
+        danglingChapters: d.chapters.length,
+        danglingBookmarks: d.bookmarks.length,
+        danglingBooks: d.books.length,
+        danglingRoots: d.roots.length,
+        clean: !(d.notes.length || d.chapters.length || d.bookmarks.length || d.books.length || d.roots.length),
+        // 只带 id 与书名/摘句，够界面列出「哪几条落空了」，不复制整条笔记
+        samples: d.notes.slice(0, 20).map(function (n) {
+            return { id: n.id, bookId: n.bookId, themeId: n.themeId, bookTitle: n.bookTitle, text: (n.quote || n.text || '').slice(0, 40) };
+        })
+    };
+    return { state: next, added: added, report: report };
+}
+
+// 书库体检（P0-4）。对标 calibre 的 check_library：**只报告，不自动改数据**。
+// 五项：断链 / 指纹重复 / 同名异路径 / 主题书无主题 / 没有出处的笔记。
+// counts 用于界面上的四个数字，detail 用于展开看是哪几条。
+function audit(state) {
+    const s = normalize(state);
+    const d = danglingOf(s);
+    const byFp = {};
+    s.books.forEach(function (b) {
+        if (!b.fingerprint) return;
+        (byFp[b.fingerprint] || (byFp[b.fingerprint] = [])).push({ id: b.id, title: b.title, filePath: b.filePath });
+    });
+    const dupFingerprints = Object.keys(byFp).filter(function (k) { return byFp[k].length > 1; })
+        .map(function (k) { return { fingerprint: k, books: byFp[k] }; });
+    // 同名异路径：同名不算病，「同名但指向两个不同文件」才是——后者多半是同一本被登记了两遍
+    const byTitle = {};
+    s.books.forEach(function (b) {
+        const k = b.title;
+        (byTitle[k] || (byTitle[k] = [])).push({ id: b.id, filePath: b.filePath, fingerprint: b.fingerprint });
+    });
+    const dupTitles = Object.keys(byTitle).filter(function (k) {
+        const rows = byTitle[k];
+        if (rows.length < 2) return false;
+        const paths = {};
+        let n = 0;
+        rows.forEach(function (r) {
+            const p = String(r.filePath || '').toLowerCase();
+            if (!p || paths[p]) return;
+            paths[p] = true;
+            n += 1;
+        });
+        return n > 1 || (rows.length > 1 && n === 0);
+    }).map(function (k) { return { title: k, books: byTitle[k] }; });
+    return {
+        counts: {
+            books: s.books.length,
+            notes: s.notes.length,
+            themes: s.themes.length,
+            danglingNotes: d.notes.length,
+            danglingChapters: d.chapters.length,
+            danglingBookmarks: d.bookmarks.length,
+            danglingBooks: d.books.length,
+            danglingRoots: d.roots.length,
+            dupFingerprints: dupFingerprints.length,
+            dupTitles: dupTitles.length,
+            notesNoSource: s.notes.filter(function (n) { return !n.bookId && !n.themeId; }).length
+        },
+        dangling: {
+            notes: d.notes.slice(0, 50).map(function (n) { return { id: n.id, bookId: n.bookId, themeId: n.themeId, bookTitle: n.bookTitle }; }),
+            chapters: d.chapters.slice(0, 50).map(function (c) { return { id: c.id, bookId: c.bookId, title: c.title }; }),
+            bookmarks: d.bookmarks.slice(0, 50).map(function (m) { return { id: m.id, bookId: m.bookId, label: m.label }; }),
+            books: d.books.slice(0, 50).map(function (b) { return { id: b.id, themeId: b.themeId, title: b.title }; }),
+            roots: d.roots.slice(0, 50).map(function (b) { return { id: b.id, rootId: b.rootId, title: b.title }; })
+        },
+        dupFingerprints: dupFingerprints.slice(0, 20),
+        dupTitles: dupTitles.slice(0, 20)
+    };
+}
+
+// 修断链：只清「指向不存在的东西」的那一个字段，书/笔记本身一条不删。
+// 返回 changes 供 restoreDangling 逆操作——撤销不靠再存一份快照，靠这份改动清单本身。
+// 撤销只在本次会话有效；关窗即失效，这是有意的（不新增数据键）。
+function repairDangling(state) {
+    const s = normalize(state);
+    const idx = refIndex(s);
+    const changes = [];
+    const notes = s.notes.map(function (n) {
+        let next = n;
+        if (n.bookId && !idx.books[n.bookId]) {
+            changes.push({ coll: 'notes', id: n.id, field: 'bookId', from: n.bookId });
+            next = Object.assign({}, next, { bookId: '' });
+        }
+        if (n.themeId && !idx.themes[n.themeId]) {
+            changes.push({ coll: 'notes', id: n.id, field: 'themeId', from: n.themeId });
+            next = Object.assign({}, next, { themeId: '' });
+        }
+        return next;
+    });
+    const books = s.books.map(function (b) {
+        if (b.themeId && !idx.themes[b.themeId]) {
+            changes.push({ coll: 'books', id: b.id, field: 'themeId', from: b.themeId });
+            return Object.assign({}, b, { themeId: '' });
+        }
+        return b;
+    });
+    if (!changes.length) return { state: s, changes: [], fixed: 0 };
+    return { state: rebuild(books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes, s.roots), changes: changes, fixed: changes.length };
+}
+
+function restoreDangling(state, changes) {
+    const s = normalize(state);
+    const list = Array.isArray(changes) ? changes : [];
+    if (!list.length) return s;
+    const byColl = { notes: {}, books: {} };
+    list.forEach(function (c) {
+        if (!isObj(c) || !byColl[c.coll] || !str(c.id) || !str(c.field)) return;
+        (byColl[c.coll][c.id] || (byColl[c.coll][c.id] = {}))[c.field] = str(c.from);
+    });
+    const notes = s.notes.map(function (n) {
+        const patch = byColl.notes[n.id];
+        return patch ? Object.assign({}, n, patch) : n;
+    });
+    const books = s.books.map(function (b) {
+        const patch = byColl.books[b.id];
+        return patch ? Object.assign({}, b, patch) : b;
+    });
+    return rebuild(books, s.chapters, notes, s.updatedAt, s.bookmarks, s.themes, s.roots);
+}
+
+// ---------- 检索索引（P1-1）----------
+// 纯派生：把五张表摊成一张可检索的行表，主界面与图书馆共用同一批关键词。
+// 正文不进来（正文在书里，不在库里），索引的是「元数据 + 摘录 + 想法 + 标签」——
+// 与 Zotero Quick Search 的口径一致：metadata + tags + 你写下的文字。
+function searchIndex(state) {
+    const s = normalize(state);
+    const rows = [];
+    s.books.forEach(function (b) {
+        rows.push({
+            type: 'book', id: b.id, title: b.title,
+            text: [b.author, b.format, b.note, b.group].join(' ').trim(),
+            tags: b.tags.slice(), bookId: b.id, bookTitle: b.title, themeId: b.themeId,
+            createdAt: b.createdAt, status: b.status, pct: pctOf(b.done, b.total),
+            progressText: b.done + '/' + b.total + ' ' + b.unit, hasFile: !!b.filePath
+        });
+    });
+    s.themes.forEach(function (t) {
+        rows.push({
+            type: 'theme', id: t.id, title: t.title, text: t.note || '', tags: [],
+            bookId: '', bookTitle: '', themeId: t.id, createdAt: t.createdAt
+        });
+    });
+    s.notes.forEach(function (n) {
+        rows.push({
+            type: 'note', id: n.id, title: n.bookTitle || '',
+            text: [n.quote, n.text].join(' ').trim(), tags: n.tags,
+            bookId: n.bookId, bookTitle: n.bookTitle, themeId: n.themeId,
+            createdAt: n.createdAt, noteType: n.type, mode: n.mode,
+            typeLabel: NOTE_TYPE_LABEL[n.type] || '', modeLabel: MODE_LABEL[n.mode] || ''
+        });
+    });
+    return rows;
+}
+
+// ---------- 阅读再曝光（P1-4）----------
+// Readwise 的 Daily Review 落地版：不要求用户主动想起书，让书自己回来找你。
+// at 由调用方传（毫秒），与 board.stats.thisMonth 一样是唯一允许读时钟的地方之外的口径。
+function resurface(state, at) {
+    const s = normalize(state);
+    const now = tsOf(at) || Date.now();
+    const WEEK = 7 * 86400000;
+    const MONTH = 30 * 86400000;
+    const recent = s.notes.filter(function (n) { return n.createdAt > 0 && now - n.createdAt <= WEEK; })
+        .sort(byCreatedDesc);
+    const reading = s.books.filter(function (b) { return b.status === 'reading'; });
+    const stale = reading.filter(function (b) { return !b.lastReadAt || now - b.lastReadAt > MONTH; })
+        .map(function (b) {
+            return {
+                id: b.id, title: b.title, pct: pctOf(b.done, b.total),
+                progressText: b.done + '/' + b.total + ' ' + b.unit,
+                lastReadAt: b.lastReadAt,
+                days: b.lastReadAt > 0 ? Math.floor((now - b.lastReadAt) / 86400000) : -1
+            };
+        })
+        .sort(function (a, b) {
+            // 从没翻过的排最前（days = -1）：登记了却一次没打开，比「读到一半放下」更需要被推一把；
+            // 其余按「越久没读越靠前」，同样久的先露进度浅的那本（离重新上手更近）。
+            const an = a.days < 0 ? 1 : 0;
+            const bn = b.days < 0 ? 1 : 0;
+            if (an !== bn) return bn - an;
+            if (a.days !== b.days) return b.days - a.days;
+            return a.pct - b.pct;
+        });
+    return {
+        recent: recent.slice(0, 5).map(function (n) {
+            return { id: n.id, bookId: n.bookId, bookTitle: n.bookTitle, quote: n.quote, text: n.text, createdAt: n.createdAt };
+        }),
+        recentCount: recent.length,
+        readingCount: reading.length,
+        stale: stale.slice(0, 3),
+        staleCount: stale.length
+    };
+}
+
+// ---------- 旧书单迁移核对（P0-1 的收尾）----------
+// md_growth 的旧主题书单不再参与任何展示，但「迁没迁完」必须能被查。
+// legacyBooks 由主进程用 themeBooksFlat() 从 md_growth 只读派生后传进来——
+// 领域层不直接读别的键，这样「旧数据只在一个地方派生」这件事仍然成立。
+// 只读比对，不写任何一边；要迁就走 importGrowthThemes（幂等）。
+function growthAudit(state, legacyBooks) {
+    const s = normalize(state);
+    const bookIds = {};
+    s.books.forEach(function (b) { bookIds[b.id] = true; });
+    const rows = [];
+    (Array.isArray(legacyBooks) ? legacyBooks : []).forEach(function (r) {
+        if (!isObj(r)) return;
+        const migratedId = 'gthbk-' + str(r.themeId) + '-' + str(r.bookId);
+        rows.push({
+            themeId: 'gth-' + str(r.themeId), themeTitle: str(r.themeTitle),
+            legacyBookId: str(r.bookId), title: str(r.title),
+            migrated: !!bookIds[migratedId], migratesTo: migratedId
+        });
+    });
+    const pending = rows.filter(function (r) { return !r.migrated; });
+    const themeSeen = {};
+    rows.forEach(function (r) { themeSeen[r.themeId] = true; });
+    return {
+        legacyBooks: rows.length,
+        migratedBooks: rows.length - pending.length,
+        pendingBooks: pending.length,
+        pending: pending.slice(0, 50),
+        legacyThemes: Object.keys(themeSeen).length
+    };
 }
 
 module.exports = {
@@ -1240,8 +1945,42 @@ module.exports = {
     board: board,
     notesQuery: notesQuery,
     noteToDiaryLine: noteToDiaryLine,
+    refIdsIn: refIdsIn,
+    stripRefMarks: stripRefMarks,
     exportMarkdown: exportMarkdown,
     mergeSection: mergeSection,
+    // P0-2 书籍身份：指纹判重 + 重新关联（id 不变）
+    bookByFingerprint: bookByFingerprint,
+    hasFingerprint: hasFingerprint,
+    relinkBook: relinkBook,
+    // P2-1 虚拟书架：多值标签（规则集合由 board().shelves 派生）
+    MAX_SHELVES: MAX_SHELVES,
+    setBookTags: setBookTags,
+    addBookTag: addBookTag,
+    removeBookTag: removeBookTag,
+    // P2-2 书目清单：CSV / JSON / OPDS 共用一张行表
+    listRows: listRows,
+    exportList: exportList,
+    // P2-3 两套目录的锚点：ch-<书内节序>
+    chapterSeq: chapterSeq,
+    // P2-4 书库根目录：根 + 相对路径，整库换机只改一条
+    MAX_ROOTS: MAX_ROOTS,
+    rootsOf: rootsOf,
+    addRoot: addRoot,
+    updateRoot: updateRoot,
+    relocateRoot: relocateRoot,
+    removeRoot: removeRoot,
+    resolveBookPath: resolveBookPath,
+    joinRoot: joinRoot,
+    underRoot: underRoot,
+    // P0-4 书库体检：只报告 + 可逆修复
+    audit: audit,
+    repairDangling: repairDangling,
+    restoreDangling: restoreDangling,
+    // P1-1 检索合流 / P1-4 再曝光 / P0-1 迁移核对
+    searchIndex: searchIndex,
+    resurface: resurface,
+    growthAudit: growthAudit,
     bookByPath: bookByPath,
     hasPath: hasPath
 };

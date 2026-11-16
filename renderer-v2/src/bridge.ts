@@ -198,6 +198,10 @@ function createMemoryBridge(): PreloadBridge {
             'free.capsuleIndex': [],
             'free.flashAdd': { item: null, synced: false },
             'free.flashRetry': { item: null, synced: false },
+            'free.noteAdd': { item: null, synced: false },
+            'free.day': { date: '', flashes: [], docs: [], counts: { flash: 0, doc: 0, capsule: 0 } },
+            // 九格「事项」：mock 通道下没有回写引用
+            'gtd.refs': [],
             'free.flashSyncPending': { total: 0, synced: 0 },
             'free.flashRemove': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
             'free.docAdd': { flashes: [], docs: [], prefs: { lastTab: 'capsule', method: 'hemingway', checkOn: false } },
@@ -252,13 +256,30 @@ function createMemoryBridge(): PreloadBridge {
             'reading.meta': { modes: ['leisure', 'theme'], noteTypes: ['highlight', 'note', 'idea', 'link'], prompts: [] },
             'reading.board': {
               stats: { books: 0, notes: 0, highlights: 0, ideas: 0, pushed: 0, leisureNotes: 0, themeNotes: 0, tagCount: 0, thisMonth: 0 },
-              books: [], themeBooks: [], themeGroups: [], recent: [], tagTop: []
+              books: [], themeGroups: [], recent: [], tagTop: []
             },
             'reading.notes': { items: [], total: 0, byTag: [], byBook: [], byType: [], byMonth: [] },
             'reading.read': { chapters: [], themes: [] },
-            'reading.themeBooks': [],
             'reading.themes': [],
             'reading.exportMd': '# 读书笔记\n\n还没有笔记\n',
+            // P0/P1 新通道：dev 模式给空态，界面能渲染、不给假数据
+            'reading.growthAudit': { legacyBooks: 0, migratedBooks: 0, pendingBooks: 0, pending: [], legacyThemes: 0 },
+            'reading.audit': {
+              counts: { books: 0, notes: 0, themes: 0, danglingNotes: 0, danglingChapters: 0, danglingBookmarks: 0, danglingBooks: 0, dupFingerprints: 0, dupTitles: 0, notesNoSource: 0, missingFiles: 0, booksNoFingerprint: 0 },
+              dangling: { notes: [], chapters: [], bookmarks: [], books: [] }, missingFiles: [], dupFingerprints: [], dupTitles: []
+            },
+            'reading.repairDangling': { fixed: 0, changes: [] },
+            'reading.restoreDangling': { restored: 0 },
+            'reading.refs': { bookId: '', title: '', noteCount: 0, theme: null, diary: [], tasks: [] },
+            'reading.pushAction': { ok: false, reason: '开发模式（内存桥）没有任务库' },
+            'reading.resurface': { recent: [], recentCount: 0, readingCount: 0, stale: [], staleCount: 0 },
+            // P2：虚拟书架 / 书目清单 / 书库根目录（dev 模式一律空态，不造假日历数据）
+            'reading.exportList': { format: 'csv', mime: 'text/csv;charset=utf-8', ext: 'csv', rows: 0, text: '\ufeff"title"\n' },
+            'reading.pickRoot': { ok: false, canceled: true },
+            'reading.addRoot': { ok: false, reason: '开发模式（内存桥）没有真实目录' },
+            'reading.relocateRoot': { ok: false, reason: '开发模式（内存桥）没有真实目录' },
+            'reading.roots': [],
+            'search.library': { books: [], notes: [], themes: [], total: 0 },
             // 家庭账本：dev 模式（无 Electron）给一份能看的空态，金额一律整数分
             'finance.meta': {
               kinds: ['expense', 'income', 'transfer'],

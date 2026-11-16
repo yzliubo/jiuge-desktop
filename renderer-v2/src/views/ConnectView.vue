@@ -4,7 +4,7 @@
 // 主进程 domain 返回形态有两种（裸值 / { data, error } 包裹），本文件用本地 unwrap 统一解包；
 // import 被约定限制为三条，因此不复用 useDomain，容错逻辑写在文件内。
 import { ref, computed, onMounted } from 'vue';
-import { domainCall } from '../bridge';
+import { domainCall, openReader, openLibrary } from '../bridge';
 import { localDate, GRID_LABELS } from '../types';
 
 // ---- 文件内类型，不导出 ----
@@ -12,6 +12,15 @@ interface SearchHit {
   date: string;
   cells: Record<string, string>;
 }
+// P1-1 检索合流：书库命中行与日记命中行并排显示。
+// 两边的形状不同（日记是「一天一条」，书库是「一条一个对象」），所以在视图层拉平成同一种行。
+interface LibRow {
+  type: string; id: string; title: string; text: string;
+  bookId: string; bookTitle: string; themeId: string;
+  typeLabel?: string; modeLabel?: string;
+  pct?: number; progressText?: string; status?: string;
+}
+interface LibHits { books: LibRow[]; notes: LibRow[]; themes: LibRow[]; total: number; notesMore?: number }
 interface InnerLink {
   date: string;
   cell: string;
@@ -84,6 +93,8 @@ const LINK_TYPES: Array<{ type: string; label: string; hint: string }> = [
   { type: 'date', label: '日期', hint: '[[2026-11-07]] 点一行跳到那一天' },
   { type: 'person', label: '人物', hint: '[[@老王]] 点一行打开「关系经营」格' },
   { type: 'capsule', label: '胶囊', hint: '[[cap:xxx]] 只读展示，给提示、不跳转' },
+  // P0-3：阅读回写行尾的〔rd:xxx〕也是内链的一种——从日记点回图书馆那条笔记
+  { type: 'reading', label: '读书回写', hint: '〔rd:xxx〕点一行打开图书馆找那条笔记' },
   { type: 'note', label: '便签', hint: '只读展示，不跳转' },
   { type: 'other', label: '其它', hint: '只读展示，不跳转' }
 ];
@@ -97,6 +108,9 @@ const busy = ref(false);
 const keyword = ref('');
 const mode = ref<SearchMode>('include');
 const searchHits = ref<SearchHit[]>([]);
+// P1-1：书库命中（书 / 主题 / 笔记）。与日记命中并行取，各摆一块，不混成一条列表——
+// 点日记行是「跳到那一天」，点书行是「打开那本书」，两种动作不能长一个样。
+const libHits = ref<LibHits | null>(null);
 const searched = ref(false);
 const loadingSearch = ref(false);
 const errSearch = ref('');
@@ -320,18 +334,43 @@ async function runSearch(): Promise<void> {
   loadingSearch.value = true;
   searched.value = true;
   try {
-    const raw = mode.value === 'pinyin'
-      ? await domainCall<SearchHit[]>('search.pinyin', kw)
-      : await domainCall<SearchHit[]>('search.or', kw);
+    const py = mode.value === 'pinyin';
+    // P1-1：日记与书库并行取，同一个关键词、同一套匹配口径（query.js 里同一组函数）。
+    // 书库那条走 search.library，返回形状与日记不同，所以在下面分组显示而不是硬拼成一个数组。
+    const [raw, libRaw] = await Promise.all([
+      py ? domainCall<SearchHit[]>('search.pinyin', kw) : domainCall<SearchHit[]>('search.or', kw),
+      domainCall<LibHits | null>('search.library', kw, py ? 'pinyin' : '')
+    ]);
     const hits = unwrap<SearchHit[]>(raw, []);
     searchHits.value = Array.isArray(hits) ? hits : [];
-    if (!searchHits.value.length) say('没有找到匹配的记录，换个关键词或模式试试。');
+    libHits.value = unwrap<LibHits | null>(libRaw, null);
+    if (!searchHits.value.length && !(libHits.value && libHits.value.total)) {
+      say('没有找到匹配的记录，换个关键词或模式试试。');
+    }
   } catch (e) {
     errSearch.value = '搜索失败：' + msgOf(e);
     searchHits.value = [];
+    libHits.value = null;
   } finally {
     loadingSearch.value = false;
   }
+}
+// 书库命中拉平成行：书 → 主题 → 笔记，各自内部按原顺序（书在前，因为是「更粗的命中」）
+const libRows = computed<LibRow[]>(function () {
+  const h = libHits.value;
+  if (!h) return [];
+  return (h.books || []).concat(h.themes || []).concat(h.notes || []);
+});
+async function openLibRow(r: LibRow): Promise<void> {
+  // 笔记优先开它所属的那本书（能跳到原句才有意义）；没有书就开图书馆，不假装能跳
+  const bookId = r.type === 'note' ? r.bookId : (r.type === 'book' ? r.id : '');
+  if (bookId) {
+    const res = await openReader(bookId);
+    if (res && res.ok) { say('已打开《' + (r.bookTitle || r.title) + '》'); return; }
+    say((res && res.reason) || '这本书打不开，去图书馆看看');
+  }
+  await openLibrary();
+  say('已打开图书馆');
 }
 function goHit(date: string): void {
   emit('go-date', date);
@@ -357,6 +396,11 @@ function onLinkClick(l: InnerLink): void {
   } else if (l.type === 'person') {
     emit('go-cell', 'relation');
     say('已打开「关系经营」格');
+  } else if (l.type === 'reading') {
+    // P0-3 反查：这一行是阅读笔记回写到日记的（行尾带〔rd:id〕）。
+    // 点它就去图书馆的「读书笔记」里找那条——这是从日记回到原书的唯一入口。
+    void openLibrary();
+    say('已打开图书馆：这条是读书笔记回写来的，去「读书笔记」里找它');
   } else if (l.type === 'capsule') {
     say('胶囊内链 [[cap:xxx]] 只读展示，本视图不跳转、不编辑正文');
   } else {
@@ -610,7 +654,25 @@ onMounted(async () => {
             <button class="con-link-btn" @click.stop="goHit(h.date)">打开这一天 →</button>
           </div>
         </div>
-        <p v-else class="con-empty">
+        <!-- P1-1：书库命中。同一关键词在书库里的结果（书名 / 作者 / 摘录 / 标签），
+             与上面的日记命中并列，各带各的动作——点书开书，点笔记开原书。 -->
+        <div v-if="libRows.length" class="con-lib">
+          <p class="con-lib-head">
+            图书馆命中 {{ libRows.length }} 条
+            <span class="con-lib-hint">书名 / 作者 / 摘录 / 笔记标签</span>
+          </p>
+          <div v-for="r in libRows" :key="r.type + r.id" class="con-hit con-hit-lib" @click="openLibRow(r)">
+            <span class="con-hit-date">{{ r.type === 'book' ? '书' : (r.type === 'theme' ? '主题' : (r.typeLabel || '笔记')) }}</span>
+            <span class="con-hit-excerpt">
+              <template v-if="r.type === 'note'">《{{ r.bookTitle || '未记书名' }}》{{ r.text }}</template>
+              <template v-else>{{ r.title }}<template v-if="r.text"> · {{ r.text }}</template></template>
+            </span>
+            <button class="con-link-btn" @click.stop="openLibRow(r)">
+              {{ r.type === 'book' ? '去图书馆 →' : (r.type === 'theme' ? '看这个主题 →' : '打开原书 →') }}
+            </button>
+          </div>
+        </div>
+        <p v-if="!searchHits.length && !libRows.length" class="con-empty">
           {{ searched ? '没有找到匹配的记录，换个关键词或模式试试。' : '输入关键词后点「搜索」，命中会列在这里；点一行跳到那一天。' }}
         </p>
       </section>
@@ -902,6 +964,12 @@ onMounted(async () => {
   flex: 0 0 auto; border: 0; background: transparent;
   color: var(--con-accent); cursor: pointer; font-size: var(--text-sm);
 }
+/* P1-1 书库命中：与日记命中分开成块，块头写清「这是图书馆里的」 */
+.con-lib { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-3); }
+.con-lib-head { margin: 0; font-size: var(--text-sm); color: var(--con-muted); }
+.con-lib-hint { margin-left: 6px; font-size: var(--text-xs); color: var(--con-muted); }
+.con-hit-lib { border-style: dashed; }
+.con-hit-lib .con-hit-excerpt { white-space: normal; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .con-group {
   display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
   border: 1px solid var(--con-border); border-radius: var(--con-radius); background: var(--con-panel);

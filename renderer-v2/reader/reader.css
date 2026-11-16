@@ -143,6 +143,15 @@ button { cursor: pointer; }
 .rr-toc-item:hover { background: var(--panel-2); }
 .rr-toc-item[data-level="2"] { padding-left: 22px; color: var(--muted); font-size: 11px; }
 .rr-toc-item.rr-toc-on { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+/* P2-3 我的大纲：与书自带目录分成两段，中间一条细线。
+   两份表不合并，靠 ch-<节序> 对齐；样式上也必须能一眼看出「这是我列的」。 */
+.rr-toc-mine-head {
+  font-size: 11px; letter-spacing: 0.06em; color: var(--muted);
+  margin: 12px 0 4px; padding-bottom: 3px; border-bottom: 1px dashed var(--border);
+}
+.rr-toc-mine-head:first-child { margin-top: 2px; }
+.rr-toc-item.rr-toc-mine { color: var(--primary); }
+.rr-toc-item.rr-toc-mine .rr-toc-name { font-weight: 500; }
 .rr-toc-tip { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 16px; }
 
 /* 中栏 */

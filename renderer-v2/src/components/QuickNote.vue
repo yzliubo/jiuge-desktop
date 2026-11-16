@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 速记浮窗：一句话写完，选去处。
-// 四个去处各有语义：自由格=当日记、收件箱=当待办、胶囊=封起来、参考资料=先存着。
+// 四个去处各有语义：自由记录=当日记号、收件箱=当待办、胶囊=封起来、参考资料=先存着。
+// 2026-11-16 起「自由记录 / 参考资料」都落 md_freewrite 的只留原文条目（不进收件箱），
+// 九格第 9 格与三合一读同一份数据，不再往 cells.free 里拼一行。
 // 记住上次选择，所以「回车即存」依然成立——分流不牺牲速度。
 import { computed, onMounted, ref } from 'vue';
 import { useDialogFocus } from '../composables/useDialogFocus';
@@ -31,10 +33,10 @@ onMounted(() => {
 });
 
 const TARGETS = [
-  { key: 'free', label: '自由格', hint: '写进今天「自由」格，当日记' },
+  { key: 'free', label: '自由记录', hint: '记进今天的自由记录，九格第 9 格同步显示' },
   { key: 'gtd', label: '收件箱', hint: '当成一件待办，稍后厘清' },
   { key: 'capsule', label: '胶囊', hint: '封起来，到期才打开' },
-  { key: 'ref', label: '参考资料', hint: '标 #资料 存进自由格' }
+  { key: 'ref', label: '参考资料', hint: '标 #资料 存进自由记录' }
 ];
 
 function lastTarget(): string {
@@ -59,7 +61,7 @@ const openAt = ref(plusDays(30));
 const canSave = computed(() => text.value.trim().length > 0);
 const targetLabel = computed(() => {
   const hit = TARGETS.filter(function (t) { return t.key === target.value; })[0];
-  return hit ? hit.label : '自由格';
+  return hit ? hit.label : '自由记录';
 });
 
 function pick(key: string): void {

@@ -18,6 +18,9 @@ let leftTab = 'toc';
 let noteStyleFilter = '';
 let chapterNotes = [];
 let bookmarks = [];
+// P2-3：我的大纲（md_reading.chapters 里 bookId=本书 且带 ch-<节序> 锚点的那些）。
+// 与书自带 TOC 是两张表、两套来源，只靠锚点对齐；这里只读，不改章节本身。
+let myOutline = [];
 let selCache = null;
 let pendingRatio = null;
 let scrollTimer = null;
@@ -63,6 +66,9 @@ const PARA_GAP = { tight: '0', normal: '.55em', loose: '1em' };
 // 阅读时长：只在本机记，按书累计（localStorage，不进 md_reading——它不需要同步也不该占 WAL）。
 // 本次 = 这个窗口打开后累计的秒数；累计 = 这本书历次阅读之和。
 const TIME_KEY = 'jiuge-reader-time:';
+// 2026-11-16：按天记一份，供九格「休闲娱乐」与当天笔记取用（仍只在本机，不进 md_reading 的 WAL）。
+// 键里带日期与书 id，跨天自动归零，不必额外清理；写的是增量累计，读的一方按 5 分钟门槛筛。
+const DAY_TIME_KEY = 'jiuge-reader-day:';
 let sessionStart = Date.now();
 let bookSeconds = 0;
 let timeTimer = null;
@@ -410,6 +416,21 @@ function flushTime() {
   bookSeconds += cur;
   sessionStart = Date.now();
   try { localStorage.setItem(TIME_KEY + BOOK_ID, String(bookSeconds)); } catch (e) {}
+  // 同一段时长再写一份「今天 · 这本书」的账，给休闲娱乐格和当天笔记用。
+  // 书名从 BOOK 取，读的一方不必再开一次书架；主题书也记，但展示侧只筛 mode=leisure。
+  try {
+    const d = new Date();
+    const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const key = DAY_TIME_KEY + day + ':' + BOOK_ID;
+    const old = JSON.parse(localStorage.getItem(key) || '{}');
+    const rec = {
+      bookId: BOOK_ID,
+      title: (BOOK && (BOOK.bookTitle || BOOK.title)) || '',
+      mode: (BOOK && BOOK.themeId) ? 'theme' : 'leisure',
+      seconds: (Number(old.seconds) || 0) + cur
+    };
+    localStorage.setItem(key, JSON.stringify(rec));
+  } catch (e) {}
 }
 
 function loadTime() {
@@ -696,6 +717,28 @@ function toggleTocChildren(idx, hide) {
 function renderToc(toc) {
   if (!tocEl) return;
   clear(tocEl);
+  // P2-3：先摆「我的大纲」。两条目录**不合并成一张表**：
+  //   书自带 TOC = 出版方的结构（只读、全量、顺序固定）；
+  //   我的大纲 = 我自己列的那几章（可跳着列、可两层、可只标要精读的）。
+  // 靠 anchor（ch-<节序>）对齐：点了就跳到书里那一节。
+  if (myOutline.length) {
+    const head = mk('div', 'rr-toc-mine-head', '我的大纲');
+    head.setAttribute('aria-label', '我的大纲（自己列的章节）');
+    tocEl.appendChild(head);
+    myOutline.forEach(function (it) {
+      const div = mk('div', 'rr-toc-item rr-toc-mine');
+      div.setAttribute('data-index', String(it.seq));
+      div.setAttribute('data-level', '1');
+      div.setAttribute('data-mine', '1');
+      div.appendChild(mk('span', 'rr-toc-caret', ''));
+      div.appendChild(mk('span', 'rr-toc-name', it.title || ('第 ' + (it.seq + 1) + ' 节')));
+      div.appendChild(mk('span', 'rr-toc-pct', '第 ' + (it.seq + 1) + ' 节'));
+      tocEl.appendChild(div);
+    });
+    const sep = mk('div', 'rr-toc-mine-head', '书里的目录');
+    sep.setAttribute('aria-label', '书自带目录');
+    tocEl.appendChild(sep);
+  }
   const list = Array.isArray(toc) ? toc : [];
   if (!list.length) {
     for (let i = 0; i < chapterCount; i++) {
@@ -732,6 +775,9 @@ function highlightToc(idx) {
   if (!tocEl) return;
   const items = tocEl.querySelectorAll('.rr-toc-item');
   for (let i = 0; i < items.length; i++) {
+    // 「我的大纲」那几条不参与当前位置高亮：它和书里的目录是两份表，
+    // 同一个节序会在两处各画一次，两个高亮只会让人以为读到了两章
+    if (items[i].getAttribute('data-mine') === '1') continue;
     if (parseInt(items[i].getAttribute('data-index'), 10) === idx) {
       items[i].classList.add('rr-toc-on');
       if (items[i].scrollIntoView) items[i].scrollIntoView({ block: 'nearest' });
@@ -1372,6 +1418,15 @@ function renderNotes(items) {
     }
 
     const foot = mk('div', 'rr-note-foot');
+    // P1-3：打了 #行动 的笔记可以直接进收件箱，不用先回图书馆。
+    // 与闪念→收件箱同一条幂等链路（source = rd:<noteId>），重复点不会叠出两条。
+    if (n.tags && n.tags.indexOf('行动') >= 0) {
+      const ab = mk('button', 'rr-push', '→ 收件箱');
+      ab.type = 'button';
+      ab.title = '这条打了 #行动：放进「工作推进」的收件箱，等厘清';
+      ab.addEventListener('click', function () { safeRun(function () { return pushAction(n); }); });
+      foot.appendChild(ab);
+    }
     if (n.pushedAt || n.pushed) {
       foot.appendChild(mk('span', 'rr-pushed', '已入九格'));
     } else {
@@ -2529,9 +2584,8 @@ async function saveFlash() {
     chapterId: 'ch-' + currentIndex
   };
   await domain('reading.addNote', [patch]);
-  const noteLike = Object.assign({}, patch, { id: 'flash-' + Date.now(), createdAt: Date.now(), pushedAt: 0 });
-  const line = await domain('reading.diaryLine', [noteLike]);
-  const target = await appendLine(cell, line);
+  // P0-3：先落库拿到真实 id，再用它生成回写行。
+  // 原先这里先拼了一个假 id（'flash-' + Date.now()）去生成行，行尾标记会指向一条不存在的笔记。
   const list = await domain('reading.notes', [{ keyword: text }]);
   const items = (list && list.items) || [];
   let found = null;
@@ -2539,6 +2593,8 @@ async function saveFlash() {
     if (items[i].text === text && !items[i].pushedAt) { found = items[i]; break; }
   }
   if (!found && items.length) found = items[0];
+  const line = await domain('reading.diaryLine', [found || patch]);
+  const target = await appendLine(cell, line);
   if (found) await domain('reading.markPushed', [found.id, target, Date.now()]);
   flashText.value = '';
   await refreshNotes();
@@ -2558,6 +2614,13 @@ async function deleteNote(id) {
   await domain('reading.removeNote', [id]);
   await refreshNotes();
   setStatus('已删除这条笔记');
+}
+
+// P1-3：#行动 → 收件箱。主进程按 source 判重，重复点只回一句「已经生成过」。
+async function pushAction(n) {
+  const r = await domain('reading.pushAction', [n.id]);
+  if (!r || !r.ok) { setStatus((r && r.reason) || '没能生成任务'); return; }
+  setStatus(r.duplicated ? '这条已经生成过任务了（不会重复加）' : '已放进「工作推进」的收件箱');
 }
 
 // 顶栏「划选问一句」：把划选原文变成引用，直接开 Q4（这句话在说什么）
@@ -2839,6 +2902,17 @@ function switchLeftTab(tab) {
 async function loadBookmarks() {
   const list = await domain('reading.bookmarks', [BOOK_ID]);
   bookmarks = Array.isArray(list) ? list : [];
+  // P2-3：顺带取「我的大纲」。取不到就当没有（目录照常只显示书自带的），
+  // 不让一次只读失败把整个左栏弄空。
+  try {
+    const raw = await domain('reading.read', []);
+    const chapters = (raw && raw.chapters) || [];
+    myOutline = chapters.filter(function (c) {
+      return c && c.bookId === BOOK_ID && /^ch-\d{1,4}$/.test(String(c.anchor || ''));
+    }).map(function (c) {
+      return { id: c.id, seq: Number(String(c.anchor).slice(3)), title: c.title, level: c.parentId ? 2 : 1 };
+    }).sort(function (a, b) { return a.seq - b.seq; });
+  } catch (_) { myOutline = []; }
   renderBookmarks();
   renderToc(currentToc());
 }

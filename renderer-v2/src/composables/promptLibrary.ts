@@ -278,11 +278,27 @@ export const FIRST_WEEK_EASY: Record<string, string> = {
   health: '今天身上哪一刻最舒服？',
   relation: '今天谁让你想起来就笑一下？',
   future: '明天想给自己安排一件什么轻松事？',
-  emotion: '给今天的心情挑个颜色，随手写。',
+  emotion: '今天陪谁待了一会儿？写一句就够。',
   dream: '今天哪一小会儿，纯粹玩得开心？',
   growth: '今天碰到一个什么新鲜词？',
   free: '留一句今天的风、光或声音。'
 };
+
+// ---------- 家庭亲子层：九格第 6 格（2026-11-16 由情绪觉察重构）----------
+// 这一格不随四套模板换题：不管走「标准 / 目标 / 情绪 / 极简」，
+// 「今天陪了谁、孩子说了什么」都是同一类具体的事，换模板反而把题面搅乱。
+// 与 leisure 同一处理：领域层 diary-store 不改，渲染层本地供题。
+export const FAMILY_PROMPTS: string[] = [
+  '今天陪谁做了什么具体的事？',
+  '孩子说过的哪句话，现在还记得？',
+  '有没有一个瞬间，你觉得自己也在长大？',
+  '今天谁需要被接住，你接到了吗？',
+  '哪件一起做的小事，比计划里的更重要？',
+  '今天有没有说一句「我看见了」？',
+  '睡前那十分钟，你们聊了什么？',
+  '今天家里谁最累，你为他做了什么？'
+];
+export const FAMILY_EASY = '今天陪谁待了一会儿？写一句就够。';
 
 // ---------- 周期层：一期三问，按周期键确定性抽题组 ----------
 // 每组三问按「回看 → 看清 → 往前」排布；表达上不使用评分式、成就盘点式的清单问法。
@@ -350,6 +366,15 @@ function dayKey(date: string): string {
  */
 export function gridPrompt(key: string, template: string, date: string, offset: number, easy: boolean): string {
   if (easy && offset === 0 && FIRST_WEEK_EASY[key]) return FIRST_WEEK_EASY[key];
+  // 第 6 格已是家庭亲子：不管用户选了哪套模板（含旧 id 为 emotion 的那套），
+  // 都不该再拿「这份情绪对目标是提醒还是噪音」这类旧题来问「今天陪了谁」。
+  // 仍按日期 + 换一条偏移轮换，和别的格保持同一种手感。
+  if (key === 'emotion') {
+    const stepFamily = Number(offset) || 0;
+    const n = FAMILY_PROMPTS.length;
+    const i = ((hashOf(dayKey(String(date || '')) + '|' + key) + stepFamily) % n + n) % n;
+    return FAMILY_PROMPTS[i];
+  }
   if (!knownTemplate(template)) return '';
   const list = GRID_LIBRARY[template][key];
   if (!list || !list.length) return '';
@@ -371,6 +396,8 @@ export function reviewTriplet(period: string, periodKey: string, offset: number 
 
 /** 兜底用语：领域层与本地库都取不到时，仍按格位给一句，不退回统一占位语。 */
 export function fallbackFor(key: string): string {
+  // 第 6 格已换成家庭亲子：旧 emotion 模板里的情绪问法一律不作兜底
+  if (key === 'emotion') return FAMILY_PROMPTS[0];
   const list = GRID_LIBRARY.standard[key];
   return list && list.length ? list[0] : '';
 }

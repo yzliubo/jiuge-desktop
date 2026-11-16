@@ -41,6 +41,13 @@ interface GrowthBoard { stats: { examTotal: number; examSoon: number; skillTotal
 const growthStats = ref<GrowthBoard['stats'] | null>(null);
 const overviewPhrases = ref<unknown[]>([]);
 const overviewLoaded = ref(false);
+// 第 6 格已换成家庭亲子：格内正文仍是 cells.emotion，但「心情分布」不再是它的口径，
+// 这里改报本周陪伴与足迹——与家庭亲子页同一份 family.board，不另算一套。
+interface FamBoard {
+  weekStats?: { moments?: number; minutes?: number; covered?: number; members?: number };
+  counts?: { milestones?: number };
+}
+const famStats = ref<FamBoard | null>(null);
 
 const title = computed(() => GRID_LABELS[activeKey.value] || '自由记录');
 const metrics = computed(() => (data.value && Array.isArray(data.value.metrics)) ? data.value.metrics : []);
@@ -80,13 +87,14 @@ async function pick(key: string): Promise<void> {
 }
 
 async function loadOverview(): Promise<void> {
-  const [w, m, wd, ms, gr, ph] = await Promise.all([
+  const [w, m, wd, ms, gr, ph, fb] = await Promise.all([
     callDomain<Record<string, unknown>>('weeklyReview', {}),
     callDomain<{ items?: unknown[]; note?: string }>('moodTrend', { items: [], note: '' }, 30),
     callDomain<unknown>('workDigest', null, 'week', ''),
     callDomain<Record<string, unknown>>('moneySummary', {}, 'month'),
     callDomain<GrowthBoard | null>('growth.board', null, localDate()),
-    callDomain<{ phrases?: unknown[] }>('frequentPhrases', { phrases: [] }, 12)
+    callDomain<{ phrases?: unknown[] }>('frequentPhrases', { phrases: [] }, 12),
+    callDomain<FamBoard | null>('family.board', null, localDate())
   ]);
   weekly.value = w && typeof w === 'object' && !Array.isArray(w) ? w : {};
   moodRows.value = asArray(m);
@@ -95,6 +103,7 @@ async function loadOverview(): Promise<void> {
   moneySummary.value = ms && typeof ms === 'object' && !Array.isArray(ms) ? ms : {};
   growthStats.value = gr && gr.stats ? gr.stats : null;
   overviewPhrases.value = asArray(ph);
+  famStats.value = fb && fb.weekStats ? fb : null;
   overviewLoaded.value = true;
 }
 
@@ -166,14 +175,26 @@ onMounted(async () => {
       </section>
 
       <section class="card">
-        <h2>本格反复出现的字句 / 心情分布</h2>
+        <h2>{{ activeKey === 'emotion' ? '本格反复出现的字句' : '本格反复出现的字句 / 心情分布' }}</h2>
         <div class="chips">
           <span v-for="(p, i) in insightPhrases" :key="i" class="chip" :class="{ 'chip-on': p.days >= 3 }">{{ p.word }} · {{ p.count }} 次 / {{ p.days }} 天</span>
         </div>
         <p v-if="insightPhrases.length === 0" class="empty">还没有跨天重复出现的字句</p>
-        <div v-if="moodMix.length" class="chips mood-row">
+        <!-- 心情分布只在还是「情绪觉察」口径的旧格出现；第 6 格已改报家庭亲子 -->
+        <div v-if="activeKey !== 'emotion' && moodMix.length" class="chips mood-row">
           <span v-for="(m, i) in moodMix" :key="'m' + i" class="chip">{{ m.label }} × {{ m.count }}</span>
         </div>
+      </section>
+
+      <section v-if="activeKey === 'emotion'" class="card">
+        <h2>家庭亲子 · 本周与足迹</h2>
+        <p v-if="famStats && famStats.weekStats" class="line">
+          本周亲子时刻 {{ famStats.weekStats.moments || 0 }} 条 · 陪伴 {{ famStats.weekStats.minutes || 0 }} 分钟 ·
+          覆盖 {{ famStats.weekStats.covered || 0 }} / {{ famStats.weekStats.members || 0 }} 人
+        </p>
+        <p v-else class="empty">还没有家庭亲子记录</p>
+        <p v-if="famStats && famStats.counts" class="line">成长足迹累计 {{ famStats.counts.milestones || 0 }} 条</p>
+        <p class="foot-note">时长是自己填的，不是自动计时；这里只做加法，不评分。</p>
       </section>
 
       <section class="card">

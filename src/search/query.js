@@ -284,10 +284,48 @@ function stripMarkdown(text) {
     .trim();
 }
 
+// ---------- 检索适配层：把「书库索引行」接进同一套匹配口径 ----------
+// 背景（P1-1）：主界面原先只搜日记，书名 / 作者 / 摘录 / 标签在主界面零命中，
+// 用户以为搜的是同一个软件，其实有两个互不相通的搜索框。
+// 这里不新造匹配算法：仍然用上面的 splitTerms + 包含匹配，只是把「记录」换成「索引行」。
+// 索引行由 reading/board.js 的 searchIndex() 派生（type/id/title/text/tags/bookId…），
+// 领域层不认日记、这一层不认书库——两边各让一步，谁也不依赖谁。
+function rowHay(row) {
+  const r = (row && typeof row === 'object') ? row : {};
+  const tags = Array.isArray(r.tags) ? r.tags : [];
+  return [str(r.title), str(r.text), tags.join(' '), str(r.bookTitle)].join('\n').toLowerCase();
+}
+
+function indexSearch(rows, keyword) {
+  const terms = splitTerms(keyword);
+  if (!terms.length) return [];
+  const list = Array.isArray(rows) ? rows : [];
+  return list.filter(function (r) {
+    if (!r || typeof r !== 'object') return false;
+    const hay = rowHay(r);
+    return terms.some(function (t) { return hay.indexOf(t) >= 0; });
+  });
+}
+
+// 拼音首字母版本：能打 'gsp' 找到《给水排水》。
+// 行数上限是 60 本书 + 2000 条笔记，逐行现算首字母在这个量级是十几毫秒级，
+// 所以不另建缓存——缓存键要拼 type+id+文本签名，维护成本高于收益。
+function indexPinyin(rows, keyword) {
+  const key = compact(pinyinInitials(keyword));
+  if (!key) return [];
+  const list = Array.isArray(rows) ? rows : [];
+  return list.filter(function (r) {
+    if (!r || typeof r !== 'object') return false;
+    return compact(pinyinInitials(rowHay(r))).indexOf(key) >= 0;
+  });
+}
+
 module.exports = {
   orSearch: orSearch,
   pinyinInitials: pinyinInitials,
   pinyinMatch: pinyinMatch,
   parseLinks: parseLinks,
   stripMarkdown: stripMarkdown,
+  indexSearch: indexSearch,
+  indexPinyin: indexPinyin,
 };

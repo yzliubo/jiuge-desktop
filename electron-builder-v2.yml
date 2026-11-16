@@ -42,6 +42,8 @@ files:
   # 自由记录（md_freewrite）与写作法体检：主进程 require 了这两个模块，漏配启动即白屏
   - src/free/**/*
   - src/writing/**/*
+  # 家庭亲子（md_family）：九格第 6 格的主功能，主进程 require 了 board，漏配同样启动即白屏
+  - src/family/**/*
   - src/main/main-v2.js
   - src/preload/v2-preload.js
   - renderer-v2/dist/**/*

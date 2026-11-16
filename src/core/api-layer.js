@@ -238,7 +238,7 @@ function createApiLayer(opts) {
     'greetings.compose', 'greetings.periodOf', 'insights.axisOf', 'insights.analyze',
     'gtd.read', 'gtd.statusMeta', 'gtd.add', 'gtd.update', 'gtd.remove',
     'gtd.complete', 'gtd.completeAll', 'gtd.completionInfo', 'gtd.reopen', 'gtd.clarify',
-    'gtd.board', 'gtd.review',
+    'gtd.board', 'gtd.refs', 'gtd.review',
     'gtd.focus', 'gtd.focusCandidates', 'gtd.focusToggle', 'gtd.focusSet', 'gtd.focusClear',
     'gtd.markReviewed', 'gtd.projects', 'gtd.contexts', 'gtd.importLegacy',
     'gtd.projectAdd', 'gtd.projectRename', 'gtd.projectArchive', 'gtd.projectRemove',
@@ -289,7 +289,7 @@ function createApiLayer(opts) {
     'attach.list', 'attach.add', 'attach.remove', 'attach.refresh', 'attach.reconnect',
     // 图书馆 / 读书笔记（md_reading）：与 growth 是「只读引用 + 翻页转发」关系，
     // 白名单里不含任何写 md_growth 书单的 reading.* 函数，防两处写。
-    'reading.meta', 'reading.read', 'reading.board', 'reading.notes', 'reading.themeBooks',
+    'reading.meta', 'reading.read', 'reading.board', 'reading.notes',
     'reading.addFiles', 'reading.cover', 'reading.revealBook',
     // 独立阅读窗口：只读打开 + 按章取正文 + 翻章记进度；不含任何写书单的函数
     'reading.readerOpen', 'reading.readerChapter', 'reading.readerProgress',
@@ -309,6 +309,19 @@ function createApiLayer(opts) {
     // V2.14 主题阅读自建书单：主题表 + 主题书导入 + 一次性迁移旧 growth 书单
     'reading.themes', 'reading.themeAdd', 'reading.themeUpdate', 'reading.themeRemove',
     'reading.importGrowthThemes',
+    // P0/P1（2026-11-16）图书馆数据互通：
+    // 身份（指纹判重 + 重新关联）、体检（只报告 + 可逆修复）、
+    // 反查（回写行的 rd: 标记 → 笔记）、#行动 幂等落收件箱、阅读再曝光、旧书单迁移核对。
+    // 全是同步纯函数 + 已挂载的领域层，没有一条会发网络请求。
+    'reading.relinkBook', 'reading.audit', 'reading.repairDangling', 'reading.restoreDangling',
+    'reading.growthAudit', 'reading.refs', 'reading.pushAction', 'reading.resurface',
+    // P2-1 虚拟书架（多值标签）/ P2-2 书目清单 / P2-4 书库根目录
+    'reading.setBookTags', 'reading.addBookTag', 'reading.removeBookTag',
+    'reading.exportList',
+    'reading.pickRoot', 'reading.addRoot', 'reading.relocateRoot', 'reading.updateRoot',
+    'reading.removeRoot', 'reading.roots',
+    // 检索合流：与 search.or / search.pinyin 同一套匹配口径，只是数据源换成书库索引行
+    'search.library',
     // 本机时间源（md_worktime）：只读订阅 ActivityWatch。
     // 白名单里没有任何「写回 ActivityWatch」的函数——客户端只发 GET，这条在这里也钉死。
     'worktime.read', 'worktime.meta', 'worktime.enable', 'worktime.setHost', 'worktime.setKeepDays',
@@ -341,9 +354,16 @@ function createApiLayer(opts) {
     'finance.setAccountMeta', 'finance.bulkUpdate',
     // 自由记录（md_freewrite）：闪念 / 长文 / 胶囊只读派生；胶囊本身仍走 diary-store 的白名单。
     // 同步到收件箱的动作发生在主进程路由里，渲染层拿不到跨 store 的写权限。
-    'free.board', 'free.capsuleIndex',
+    'free.board', 'free.capsuleIndex', 'free.day',
     'free.flashAdd', 'free.flashRetry', 'free.flashSyncPending', 'free.flashRemove',
+    'free.noteAdd',
     'free.docAdd', 'free.docUpdate', 'free.docRemove', 'free.prefs',
+    // 家庭亲子（md_family）：九格第 6 格的主功能。成员 / 时刻 / 足迹三段，
+    // 派生值（本周陪伴 / 覆盖几人）由 family.board 读时算，渲染层不落任何统计。
+    'family.meta', 'family.board',
+    'family.addMember', 'family.updateMember', 'family.removeMember',
+    'family.addMoment', 'family.removeMoment',
+    'family.addMilestone', 'family.removeMilestone', 'family.prefs',
     // 写作法体检：本地纯函数，只返回定位与计数，不联网、不代写。
     'writing.check', 'writing.cards'
   ];
